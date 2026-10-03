@@ -155,34 +155,37 @@ if [[ $DRY_RUN == 1 ]]; then
 fi
 
 source_parent=$(parent_of "$SOURCE_REPO" "$number")
-if [[ $source_parent != null ]] && jq -e --arg repo "$SOURCE_REPO" '.repository_url == ("https://api.github.com/repos/" + $repo)' <<<"$source_parent" >/dev/null; then
+parent_mirror=null
+if [[ $source_parent != null ]]; then
   parent_number=$(jq -r '.number' <<<"$source_parent")
-  parent_mirror=$(find_mirror "$parent_number")
-  if [[ $parent_mirror == null ]]; then
-    printf 'Warning: source parent #%s has no mirror\n' "$parent_number" >&2
+  if jq -e --arg repo "$SOURCE_REPO" '.repository_url == ("https://api.github.com/repos/" + $repo)' <<<"$source_parent" >/dev/null; then
+    parent_mirror=$(find_mirror "$parent_number")
+    if [[ $parent_mirror == null ]]; then
+      printf 'Warning: source parent #%s has no mirror\n' "$parent_number" >&2
+    fi
   else
-    current_parent=null
-    if [[ $created == 0 ]]; then current_parent=$(parent_of "$MIRROR_REPO" "$mirror_number"); fi
-    if [[ $(jq -r '.id // "none"' <<<"$current_parent") != $(jq -r '.id' <<<"$parent_mirror") ]]; then
-      parent_mirror_number=$(jq -r '.number' <<<"$parent_mirror")
-      payload=$(jq --argjson replace "$([[ $current_parent == null ]] && printf false || printf true)" '{sub_issue_id: .id, replace_parent: $replace}' <<<"$mirror")
-      rest_write POST "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issues" "$payload" >/dev/null
-      [[ $DRY_RUN != 1 ]] || printf 'DRY RUN: link mirror #%s to parent mirror #%s (replace_parent=%s)\n' "$mirror_number" "$parent_mirror_number" "$(jq -r '.replace_parent' <<<"$payload")"
-      changed=1
-    fi
+    printf 'Warning: source parent #%s is outside %s\n' "$parent_number" "$SOURCE_REPO" >&2
   fi
-elif [[ $source_parent == null && $created == 0 ]]; then
-  current_parent=$(parent_of "$MIRROR_REPO" "$mirror_number")
-  if [[ $current_parent != null ]]; then
-    parent_mirror_number=$(jq -r '.number' <<<"$current_parent")
-    payload=$(jq '{sub_issue_id: .id}' <<<"$mirror")
-    if [[ $DRY_RUN == 1 ]]; then
-      rest_write DELETE "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issue" "$payload"
-    else
-      rest_write DELETE "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issue" "$payload" >/dev/null
-    fi
+fi
+current_parent=null
+if [[ $created == 0 ]]; then current_parent=$(parent_of "$MIRROR_REPO" "$mirror_number"); fi
+if [[ $parent_mirror != null ]]; then
+  if [[ $(jq -r '.id // "none"' <<<"$current_parent") != $(jq -r '.id' <<<"$parent_mirror") ]]; then
+    parent_mirror_number=$(jq -r '.number' <<<"$parent_mirror")
+    payload=$(jq --argjson replace "$([[ $current_parent == null ]] && printf false || printf true)" '{sub_issue_id: .id, replace_parent: $replace}' <<<"$mirror")
+    rest_write POST "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issues" "$payload" >/dev/null
+    [[ $DRY_RUN != 1 ]] || printf 'DRY RUN: link mirror #%s to parent mirror #%s (replace_parent=%s)\n' "$mirror_number" "$parent_mirror_number" "$(jq -r '.replace_parent' <<<"$payload")"
     changed=1
   fi
+elif [[ $current_parent != null ]]; then
+  parent_mirror_number=$(jq -r '.number' <<<"$current_parent")
+  payload=$(jq '{sub_issue_id: .id}' <<<"$mirror")
+  if [[ $DRY_RUN == 1 ]]; then
+    rest_write DELETE "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issue" "$payload"
+  else
+    rest_write DELETE "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issue" "$payload" >/dev/null
+  fi
+  changed=1
 fi
 
 work_option=$(jq -r '[.labels[].name] | if index("type: epic") then "d17eec20" elif index("type: feature") then "c357fbb1" elif index("type: story") then "0a88d2b9" elif index("type: task") then "70992acc" else "" end' <<<"$source")

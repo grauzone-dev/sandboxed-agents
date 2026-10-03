@@ -295,10 +295,13 @@ printf '{"total_count":0,"items":[]}\n' > "$FIXTURES/search-parent.json"
 run
 [[ $(cat "$test_dir/error") == *'source parent #5 has no mirror'* ]]
 assert_calls 'all(.[]; .endpoint | endswith("/sub_issues") | not)' 'parent without mirror'
+assert_calls 'all(.[]; .endpoint != "repos/grauzone-dev/planning/issues/42/parent")' 'created unmapped parent skips current parent lookup'
 reset
 printf '{"number":5,"repository_url":"https://api.github.com/repos/other/repo"}\n' > "$FIXTURES/source-parent.json"
 run
 assert_calls 'all(.[]; .endpoint | endswith("/sub_issues") | not)' 'external parent'
+[[ $(cat "$test_dir/error") == *'source parent #5 is outside grauzone-dev/sandboxed-agents'* ]]
+assert_calls 'all(.[]; .endpoint != "repos/grauzone-dev/planning/issues/42/parent")' 'created external parent skips current parent lookup'
 reset
 printf 'null\n' > "$FIXTURES/source-parent.json"
 run
@@ -326,24 +329,34 @@ run
 assert_summary unchanged
 assert_calls 'all(.[]; .method == "GET") and any(.[]; .endpoint == "repos/grauzone-dev/planning/issues/42/parent")' 'both parents absent is unchanged'
 
-reset
-existing
-project_matches
-printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
-printf '{"number":5,"repository_url":"https://api.github.com/repos/other/repo"}\n' > "$FIXTURES/source-parent.json"
-run
-assert_summary unchanged
-assert_calls 'all(.[]; .method != "DELETE")' 'external source parent preserves existing mirror parent'
-
-reset
-existing
-project_matches
-printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
-printf '{"total_count":0,"items":[]}\n' > "$FIXTURES/search-parent.json"
-run
-assert_summary unchanged
-[[ $(cat "$test_dir/error") == *'source parent #5 has no mirror'* ]]
-assert_calls 'all(.[]; .method != "DELETE")' 'parent lacking mirror preserves existing mirror parent'
+for unmapped_parent in external missing-mirror; do
+  reset
+  existing
+  project_matches
+  printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
+  if [[ $unmapped_parent == external ]]; then
+    printf '{"number":5,"repository_url":"https://api.github.com/repos/other/repo"}\n' > "$FIXTURES/source-parent.json"
+    warning='source parent #5 is outside grauzone-dev/sandboxed-agents'
+  else
+    printf '{"total_count":0,"items":[]}\n' > "$FIXTURES/search-parent.json"
+    warning='source parent #5 has no mirror'
+  fi
+  run
+  assert_summary updated
+  [[ $(cat "$test_dir/error") == *"$warning"* ]]
+  assert_calls 'any(.[]; .method == "DELETE" and .endpoint == "repos/grauzone-dev/planning/issues/50/sub_issue" and .payload == {sub_issue_id:420}) and ([.[] | select(.method == "DELETE")] | length == 1)' 'unmapped source parent detaches mirror using database id'
+  : > "$CALLS"
+  DRY_RUN=1 run
+  assert_summary updated
+  assert_calls 'all(.[]; .method == "GET" and .endpoint != "graphql")' 'unmapped parent dry run makes no writes'
+  [[ $(cat "$test_dir/output") == *'DRY RUN: DELETE repos/grauzone-dev/planning/issues/50/sub_issue'*'"sub_issue_id": 420'* ]]
+  printf 'null\n' > "$FIXTURES/mirror-parent.json"
+  : > "$CALLS"
+  run
+  assert_summary unchanged
+  [[ $(cat "$test_dir/error") == *"$warning"* ]]
+  assert_calls 'all(.[]; .method != "DELETE")' 'unmapped source parent and absent mirror parent is unchanged'
+done
 
 reset
 DRY_RUN=1 run

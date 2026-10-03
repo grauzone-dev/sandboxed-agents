@@ -32,6 +32,13 @@ func NewLifecycle(name, group string, action LifecycleAction, force bool, run pr
 
 func (lifecycle *Lifecycle) start(ctx context.Context) error {
 	if !lifecycle.containerRunning {
+		port, err := recordedSSHPort(lifecycle.name, lifecycle.containerLabels)
+		if err != nil {
+			return err
+		}
+		if err := requireSSHPort(port); err != nil {
+			return err
+		}
 		if err := lifecycle.runPodman(ctx, "start", lifecycle.container); err != nil {
 			return err
 		}

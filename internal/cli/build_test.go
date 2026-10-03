@@ -135,14 +135,14 @@ func checkBaseContext(t *testing.T, directory string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(context) != 4 {
+	if len(context) != 5 {
 		t.Fatalf("unexpected context files: %v", context)
 	}
 	for file, required := range map[string][]string{
-		"Containerfile":      {"FROM docker.io/library/debian:bookworm-slim", "COPY manager /usr/local/bin/sandboxed-agents-manager", "sh /tmp/install-base.sh", "sh /tmp/record-versions.sh", "USER root", `ENTRYPOINT ["/usr/local/bin/sandboxed-agents-entrypoint"]`},
+		"Containerfile":      {"FROM docker.io/library/debian:bookworm-slim", "COPY manager /usr/local/bin/sandboxed-agents-manager", "COPY sshd_config /usr/local/etc/sandboxed-agents/sshd_config", "sh /tmp/install-base.sh", "sh /tmp/record-versions.sh", "USER root", `ENTRYPOINT ["/usr/local/bin/sandboxed-agents-entrypoint"]`},
 		"install-base.sh":    {"--no-install-recommends", "openssh-client", "openssh-server", "git", "gh", "tmux", "curl", "jq", "ripgrep", "less", "unzip", "ca-certificates", "coreutils", "util-linux", "node_24.x", "signed-by=/etc/apt/keyrings/nodesource.gpg", "apt-get install -y --no-install-recommends nodejs", "groupadd --gid 1000 agent", "useradd --uid 1000 --gid 1000", "--shell /bin/bash agent", "rm -f /etc/ssh/ssh_host_*"},
 		"record-versions.sh": {"/usr/local/share/sandboxed-agents/versions.tsv", "dpkg-query -W", "${binary:Package}\\t${Version}\\n", "node --version", "npm --version", "sandboxed-agents-manager version"},
-		"entrypoint.sh":      {"mkdir -p /run/sshd", "exec runuser -u agent -- sleep infinity"},
+		"entrypoint.sh":      {"mkdir -p /run/sshd", "/usr/local/bin/sandboxed-agents-manager ssh start", "exec runuser -u agent -- sleep infinity"},
 	} {
 		for _, text := range required {
 			if !strings.Contains(context[file], text) {

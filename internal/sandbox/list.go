@@ -39,6 +39,7 @@ type listRow struct {
 	name       string
 	state      sandboxState
 	workspace  string
+	sshPort    string
 	volumes    []string
 	toolchains string
 }
@@ -138,9 +139,13 @@ func collectListObjects(ctx context.Context, group string, run process.Runner) (
 func renderList(output io.Writer, rows []listRow) error {
 	var buffer bytes.Buffer
 	writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tSTATE\tWORKSPACE\tPORT\tTOOLCHAINS\tAGENTS\tVOLUMES")
+	fmt.Fprintln(writer, "NAME\tSTATE\tWORKSPACE\tSSH PORT\tTOOLCHAINS\tAGENTS\tVOLUMES")
 	for _, row := range rows {
 		workspace, existingVolumes := row.workspace, "-"
+		port := row.sshPort
+		if port == "" {
+			port = "-"
+		}
 		if workspace == "" {
 			workspace = "-"
 		}
@@ -151,7 +156,7 @@ func renderList(output io.Writer, rows []listRow) error {
 		if selection == "" {
 			selection = "-"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t-\t%s\t-\t%s\n", row.name, row.state, workspace, selection, existingVolumes)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t-\t%s\n", row.name, row.state, workspace, port, selection, existingVolumes)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -203,6 +208,7 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 			}
 			result.workspace = record.Config.Labels[WorkspaceKindLabel]
 			result.toolchains = record.Config.Labels[images.ToolchainsLabel]
+			result.sshPort = record.Config.Labels[SSHPortLabel]
 		}
 	}
 	slices.SortFunc(row.volumes, func(a, b volume) int { return strings.Compare(a.name, b.name) })
@@ -229,6 +235,7 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 				result.workspace = record.Config.Labels[WorkspaceKindLabel]
 			}
 			result.toolchains = record.Config.Labels[images.ToolchainsLabel]
+			result.sshPort = record.Config.Labels[SSHPortLabel]
 		}
 		result.state = sandboxUpdateInterrupted
 	}

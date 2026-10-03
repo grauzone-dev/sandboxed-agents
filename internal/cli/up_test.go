@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,17 +15,19 @@ import (
 var sandboxVolumeRoles = []string{"workspace", "home", "ssh"}
 
 func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
+	port := unusedSSHPort(t)
 	fakes := linuxHost(t)
 	fakes.Script("podman",
 		testutil.Response{Stdout: "podman version 5.0.0\n"},
 		testutil.Response{ExitCode: 1},
 		testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1},
 		testutil.Response{ExitCode: 1},
+		testutil.Response{Stdout: "[]"},
 		testutil.Response{},
 		testutil.Response{}, testutil.Response{}, testutil.Response{},
 		testutil.Response{Stdout: "container-id\n"}, testutil.Response{},
 	)
-	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01")
+	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", "--port", strconv.Itoa(port))
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
@@ -35,6 +38,7 @@ func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
 		{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.home"}},
 		{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.ssh"}},
 		{Args: []string{"container", "exists", "sandboxed-agents-backup.default.agent01"}},
+		{Args: []string{"ps", "--all", "--format", "json"}},
 		{Args: []string{"image", "exists", "localhost/sandboxed-agents:base-fixture-assets"}},
 		{Args: []string{"volume", "create", "--label", "io.github.sandboxed-agents.owner=default", "sandboxed-agents.default.agent01.workspace"}},
 		{Args: []string{"volume", "create", "--label", "io.github.sandboxed-agents.owner=default", "sandboxed-agents.default.agent01.home"}},
@@ -44,6 +48,8 @@ func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
 			"--label", "io.github.sandboxed-agents.sandbox-name=agent01",
 			"--label", "io.github.sandboxed-agents.workspace-kind=volume",
 			"--label", "io.github.sandboxed-agents.toolchains=",
+			"--label", "io.github.sandboxed-agents.ssh-port=" + strconv.Itoa(port),
+			"--publish", fmt.Sprintf("127.0.0.1:%d:22", port),
 			"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
 			"--memory=8589934592", "--label", "io.github.sandboxed-agents.memory=8589934592",
 			"--cpus=4", "--label", "io.github.sandboxed-agents.cpus=4",
@@ -161,13 +167,17 @@ func TestUpAdoptsKeptVolumesAndCreatesOnlyMissingOnes(t *testing.T) {
 }
 
 func upObjectResponses(containerOwner *string, running bool, volumes map[string]string, backupOwner *string) []testutil.Response {
-	return append([]testutil.Response{{Stdout: "podman version 5.0.0\n"}}, sandboxObjectResponses(containerOwner, running, volumes, backupOwner)...)
+	responses := append([]testutil.Response{{Stdout: "podman version 5.0.0\n"}}, sandboxObjectResponses(containerOwner, running, volumes, backupOwner)...)
+	if containerOwner == nil {
+		responses = append(responses, testutil.Response{Stdout: "[]"})
+	}
+	return responses
 }
 
 func sandboxObjectResponses(containerOwner *string, running bool, volumes map[string]string, backupOwner *string) []testutil.Response {
 	var responses []testutil.Response
 	container := func(name, owner string) testutil.Response {
-		return testutil.Response{Stdout: fmt.Sprintf(`[{"Name":%q,"Config":{"Labels":{"io.github.sandboxed-agents.owner":%q}},"State":{"Running":%t}}]`, name, owner, running)}
+		return testutil.Response{Stdout: fmt.Sprintf(`[{"Name":%q,"Config":{"Labels":{"io.github.sandboxed-agents.owner":%q,"io.github.sandboxed-agents.ssh-port":"2300"}},"State":{"Running":%t}}]`, name, owner, running)}
 	}
 	if containerOwner == nil {
 		responses = append(responses, testutil.Response{ExitCode: 1})
@@ -342,8 +352,8 @@ func TestUpBuildsOnlyAnAbsentSharedBaseImage(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			calls := fakes.Calls("podman")
-			if !reflect.DeepEqual(calls[6].Args, []string{"image", "exists", tag}) {
-				t.Fatalf("image check=%v", calls[6])
+			if !reflect.DeepEqual(calls[7].Args, []string{"image", "exists", tag}) {
+				t.Fatalf("image check=%v", calls[7])
 			}
 			var builds int
 			for index, call := range calls {
@@ -351,7 +361,7 @@ func TestUpBuildsOnlyAnAbsentSharedBaseImage(t *testing.T) {
 					continue
 				}
 				builds++
-				if !missing || index != 7 {
+				if !missing || index != 8 {
 					t.Fatalf("unexpected build: %v", calls)
 				}
 				directory := call.Args[len(call.Args)-1]
@@ -469,7 +479,7 @@ func TestUpStopsAfterImageAndCreationFailures(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			calls := fakes.Calls("podman")
-			if calls[len(calls)-1].Args[0] != test.last || len(calls) != 6+len(test.responses) {
+			if calls[len(calls)-1].Args[0] != test.last || len(calls) != 7+len(test.responses) {
 				t.Fatalf("calls=%v", calls)
 			}
 			if test.name == "build" {
@@ -498,6 +508,7 @@ func TestUpRefusesObjectsWithoutAnOwnerLabel(t *testing.T) {
 			}
 			for index := range responses {
 				if strings.Contains(responses[index].Stdout, fmt.Sprintf(`"Name":%q`, name)) {
+					responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.owner":"default",`, "")
 					responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.owner":"default"`, "")
 				}
 			}

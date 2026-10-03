@@ -27,7 +27,7 @@ func TestListShowsKeptVolumesAndPreservesSandboxNameSuffixes(t *testing.T) {
 				}
 				fakes.Script("podman", listOneSandboxResponses("default", name, nil, false, owners, nil)...)
 				stdout, stderr, status := runCLI(t, "sandbox-host", "list")
-				want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES " + name + " volumes only " + workspace + " - - - " + strings.Join(names, ",")
+				want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES " + name + " volumes only " + workspace + " - - - " + strings.Join(names, ",")
 				if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != want {
 					t.Fatalf("status=%d stdout=%q stderr=%q want=%q", status, stdout, stderr, want)
 				}
@@ -81,7 +81,7 @@ func TestListShowsAnInterruptedUpdateWhenOnlyItsBackupContainerRemains(t *testin
 	owned := "default"
 	fakes.Script("podman", listOneSandboxResponses("default", "agent.backup", nil, false, nil, &owned)...)
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
-	want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES agent.backup update interrupted volume - - - -"
+	want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES agent.backup update interrupted volume - - - -"
 	if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != want {
 		t.Fatalf("status=%d stdout=%q stderr=%q want=%q", status, stdout, stderr, want)
 	}
@@ -106,7 +106,7 @@ func TestListUsesTheSelectedGroupOnLinuxAndWindows(t *testing.T) {
 			}
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, fixture, "list")
-			want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES agent01 running volume - - - -"
+			want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES agent01 running volume - - - -"
 			if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != want {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -126,7 +126,7 @@ func TestListFindsOwnedContainersAfterTheirPodmanNameChanges(t *testing.T) {
 				listJSONResponse([]map[string]any{{"Name": name, "Config": map[string]any{"Labels": labels}, "State": map[string]bool{"Running": true}}}),
 			)
 			stdout, stderr, status := runCLI(t, "sandbox-host", "list")
-			want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES agent01 running bind - - - -"
+			want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES agent01 running bind - - - -"
 			if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != want {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -159,7 +159,7 @@ func TestListIncludesVolumesOnlyUnderTheCurrentControllerGroupsPodmanNames(t *te
 					t.Errorf("inspected a volume outside the current group's Podman names: %v", call.Args)
 				}
 			}
-			want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES agent01 owner conflict volume - - - sandboxed-agents." + group + ".agent01.home,sandboxed-agents." + group + ".agent01.workspace"
+			want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES agent01 owner conflict volume - - - sandboxed-agents." + group + ".agent01.home,sandboxed-agents." + group + ".agent01.workspace"
 			if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != want {
 				t.Fatalf("status=%d stdout=%q stderr=%q want=%q", status, stdout, stderr, want)
 			}
@@ -172,7 +172,7 @@ func TestListShowsAHeaderWhenNoSandboxesExist(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	fakes.Script("podman", testutil.Response{Stdout: `[]`}, testutil.Response{Stdout: `[]`})
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
-	if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES" {
+	if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 	assertListReadOnly(t, fakes, false)
@@ -314,7 +314,7 @@ func TestListShowsOnlyCurrentControllerGroupWithUnavailableColumns(t *testing.T)
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
-	want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES alpha stopped bind - - - - zeta running volume - - - -"
+	want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES alpha stopped bind - - - - zeta running volume - - - -"
 	if got := strings.Join(strings.Fields(stdout), " "); got != want {
 		t.Fatalf("list=%q want=%q", got, want)
 	}

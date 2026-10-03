@@ -38,7 +38,7 @@ func enableAgentCommand(group *string, run process.Runner, catalog agentcatalog.
 			enable = sandbox.NewEnableAgent(invocation.Args[0], *group, invocation.Args[1], run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
-		Sandbox:           func(*Invocation) error { return enable.CheckSandbox(ctx) },
+		Sandbox:           func(*Invocation) error { return enable.CheckContainer(ctx) },
 		Owner:             func(*Invocation) error { return enable.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return enable.CheckInterruptedUpdate() },
 		Running:           func(*Invocation) error { return enable.CheckRunning() },

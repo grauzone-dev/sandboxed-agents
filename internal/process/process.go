@@ -12,8 +12,10 @@ type Streams struct {
 }
 
 type Request struct {
-	Name    string
-	Args    []string
+	Name string
+	Args []string
+	// Env is the complete environment of the process; nil inherits the caller's environment.
+	Env     []string
 	Streams Streams
 }
 

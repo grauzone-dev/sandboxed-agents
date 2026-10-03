@@ -7,16 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
 
 const fakeStateEnv = "SANDBOXED_AGENTS_FAKE_STATE"
 
+var fakeProgramNames = []string{"podman", "ssh", "getent"}
+
 type Response struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	AbsentEnv []string
 }
 
 type Call struct{ Args []string }
@@ -24,6 +28,7 @@ type Call struct{ Args []string }
 type FakePrograms struct {
 	Podman string
 	SSH    string
+	Getent string
 	t      testing.TB
 	state  string
 }
@@ -40,7 +45,7 @@ func NewFakePrograms(t testing.TB) *FakePrograms {
 		t.Fatal(err)
 	}
 	f := &FakePrograms{t: t, state: dir}
-	for _, name := range []string{"podman", "ssh"} {
+	for _, name := range fakeProgramNames {
 		path := filepath.Join(bin, name)
 		if runtime.GOOS == "windows" {
 			path += ".exe"
@@ -50,8 +55,10 @@ func NewFakePrograms(t testing.TB) *FakePrograms {
 		}
 		if name == "podman" {
 			f.Podman = path
-		} else {
+		} else if name == "ssh" {
 			f.SSH = path
+		} else {
+			f.Getent = path
 		}
 	}
 	t.Setenv(fakeStateEnv, dir)
@@ -99,7 +106,7 @@ func (f *FakePrograms) Calls(name string) []Call {
 
 func (f *FakePrograms) program(name string) {
 	f.t.Helper()
-	if name != "podman" && name != "ssh" {
+	if !slices.Contains(fakeProgramNames, name) {
 		f.t.Fatalf("unknown fake program %q", name)
 	}
 }
@@ -125,7 +132,7 @@ func copyExecutable(source, target string) error {
 func init() {
 	state := os.Getenv(fakeStateEnv)
 	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
-	if state == "" || (name != "podman" && name != "ssh") {
+	if state == "" || !slices.Contains(fakeProgramNames, name) {
 		return
 	}
 	os.Exit(runFake(state, name, os.Args[1:]))
@@ -163,6 +170,12 @@ func runFake(state, name string, args []string) int {
 		return 99
 	}
 	response := responses[0]
+	for _, name := range response.AbsentEnv {
+		if _, present := os.LookupEnv(name); present {
+			fmt.Fprintln(os.Stderr, "unexpected environment variable:", name)
+			return 99
+		}
+	}
 	data, err = json.Marshal(responses[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

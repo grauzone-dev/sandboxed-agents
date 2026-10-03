@@ -49,6 +49,7 @@ func Check(ctx context.Context, host Host) []Result {
 	if host.Platform != "linux" {
 		return []Result{{Name: "Linux host", Remedy: "check currently supports Linux hosts only"}}
 	}
+	host.Username = accountName(ctx, host)
 	has := func(name string) bool { _, err := host.LookPath(name); return err == nil }
 	podmanFound := has("podman")
 	versionSupported := false
@@ -127,13 +128,9 @@ func hasRange(host Host, path string) bool {
 	if err != nil {
 		return false
 	}
-	username := host.Username
-	if username == "" {
-		username = os.Getenv("USER")
-	}
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Split(strings.TrimSpace(line), ":")
-		if len(fields) != 3 || (fields[0] != strconv.Itoa(host.UID) && (username == "" || fields[0] != username)) {
+		if len(fields) != 3 || (fields[0] != strconv.Itoa(host.UID) && (host.Username == "" || fields[0] != host.Username)) {
 			continue
 		}
 		start, startErr := strconv.ParseUint(fields[1], 10, 32)
@@ -143,6 +140,35 @@ func hasRange(host Host, path string) bool {
 		}
 	}
 	return false
+}
+
+func accountName(ctx context.Context, host Host) string {
+	if host.Username != "" {
+		return host.Username
+	}
+	if _, err := host.LookPath("getent"); err != nil {
+		return ""
+	}
+	var stdout, stderr bytes.Buffer
+	env := []string{}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "MALLOC_TRACE=") {
+			env = append(env, entry)
+		}
+	}
+	status, err := host.Run(ctx, process.Request{Name: "getent", Args: []string{"passwd", strconv.Itoa(host.UID)}, Env: env, Streams: process.Streams{Stdout: &stdout, Stderr: &stderr}})
+	if err != nil || status != 0 {
+		return ""
+	}
+	fields := strings.Split(strings.TrimSpace(stdout.String()), ":")
+	if len(fields) != 7 || fields[0] == "" {
+		return ""
+	}
+	uid, err := strconv.Atoi(fields[2])
+	if err != nil || uid != host.UID {
+		return ""
+	}
+	return fields[0]
 }
 
 type cgroupStatus struct {

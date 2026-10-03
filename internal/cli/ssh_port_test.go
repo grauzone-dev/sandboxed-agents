@@ -14,7 +14,6 @@ import (
 func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		t.Run(host.name, func(t *testing.T) {
-			port := firstFreeSSHPort(t)
 			fakes, fixture := resourceLimitHost(t, host.windows)
 			responses := upObjectResponses(nil, false, nil, nil)
 			responses = append(responses, make([]testutil.Response, 6)...)
@@ -24,7 +23,7 @@ func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			create := fakes.Calls("podman")[len(fakes.Calls("podman"))-2].Args
-			assertSSHPublication(t, create, port)
+			assertAllocatedSSHPort(t, create)
 			assertNoSSH(t, fakes)
 		})
 	}
@@ -87,6 +86,25 @@ func assertSSHPublication(t *testing.T, create []string, port int) {
 	}
 }
 
+func assertAllocatedSSHPort(t *testing.T, create []string) int {
+	t.Helper()
+	var labels []string
+	for i, arg := range create {
+		if arg == "--label" && i+1 < len(create) && strings.HasPrefix(create[i+1], "io.github.sandboxed-agents.ssh-port=") {
+			labels = append(labels, strings.TrimPrefix(create[i+1], "io.github.sandboxed-agents.ssh-port="))
+		}
+	}
+	if len(labels) != 1 {
+		t.Fatalf("SSH port labels=%v: %v", labels, create)
+	}
+	port, err := strconv.Atoi(labels[0])
+	if err != nil || port < 2222 || port > 65535 {
+		t.Fatalf("invalid allocated SSH port %q: %v", labels[0], create)
+	}
+	assertSSHPublication(t, create, port)
+	return port
+}
+
 func TestStartAndRestartRefuseAnUnavailableRecordedSSHPort(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		for _, command := range []string{"start", "restart"} {
@@ -135,18 +153,18 @@ func assertSSHReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
 	assertNoSSH(t, fakes)
 }
 
-func firstFreeSSHPort(t *testing.T) int {
+func listenSSHPort(t *testing.T) net.Listener {
 	t.Helper()
 	for port := 2222; port <= 65535; port++ {
 		listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			continue
 		}
-		listener.Close()
-		return port
+		t.Cleanup(func() { listener.Close() })
+		return listener
 	}
 	t.Fatal("no available SSH test port")
-	return 0
+	return nil
 }
 
 func TestListShowsRecordedSSHPortsForRunningAndStoppedSandboxes(t *testing.T) {
@@ -233,25 +251,20 @@ func TestUpSkipsListenersAndRecordedSSHPortsAcrossControllerGroups(t *testing.T)
 	for _, host := range resourceLimitHosts {
 		for _, state := range []string{"running", "exited"} {
 			t.Run(host.name+"/"+state, func(t *testing.T) {
-				busy := firstFreeSSHPort(t)
-				listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", busy))
-				if err != nil {
-					t.Fatal(err)
-				}
+				listener := listenSSHPort(t)
+				busy := listener.Addr().(*net.TCPAddr).Port
 				defer listener.Close()
-				reserved := firstFreeSSHPort(t)
-				probe, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", reserved))
-				if err != nil {
-					t.Fatal(err)
-				}
-				expected := firstFreeSSHPort(t)
-				probe.Close()
+				probe := listenSSHPort(t)
+				reserved := probe.Addr().(*net.TCPAddr).Port
 				fakes, fixture := resourceLimitHost(t, host.windows)
-				inventory := fmt.Sprintf(`[{"Names":["sandboxed-agents.other.agent01"],"Labels":{"io.github.sandboxed-agents.owner":"other","io.github.sandboxed-agents.ssh-port":%q},"State":%q},{"Names":["unrelated-service"],"Labels":{"io.github.sandboxed-agents.ssh-port":%q}}]`, strconv.Itoa(reserved), state, strconv.Itoa(expected))
+				inventory := fmt.Sprintf(`[{"Names":["sandboxed-agents.other.agent01"],"Labels":{"io.github.sandboxed-agents.owner":"other","io.github.sandboxed-agents.ssh-port":%q},"State":%q},{"Names":["unrelated-service"],"Labels":{"io.github.sandboxed-agents.ssh-port":"not-a-port"}}]`, strconv.Itoa(reserved), state)
 				responses := upObjectResponses(nil, false, nil, nil)
 				responses[len(responses)-1] = testutil.Response{Stdout: inventory}
 				responses = append(responses, make([]testutil.Response, 6)...)
 				scriptResourceLimitObjects(t, fakes, host.windows, responses, nil)
+				if err := probe.Close(); err != nil {
+					t.Fatal(err)
+				}
 				stdout, stderr, status := runCLI(t, fixture, "up", "agent01")
 				if status != 0 || stderr != "" {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -260,7 +273,10 @@ func TestUpSkipsListenersAndRecordedSSHPortsAcrossControllerGroups(t *testing.T)
 				if host.windows {
 					calls = windowsOperationCalls(t, calls[7:], "podman-machine-default")
 				}
-				assertSSHPublication(t, calls[len(calls)-2].Args, expected)
+				selected := assertAllocatedSSHPort(t, calls[len(calls)-2].Args)
+				if selected == busy || selected == reserved {
+					t.Fatalf("selected SSH port %d; busy=%d reserved=%d", selected, busy, reserved)
+				}
 				for _, call := range calls {
 					if slices.Contains(call.Args, "sandboxed-agents.other.agent01") || slices.Contains(call.Args, "unrelated-service") {
 						t.Fatalf("allocation changed or inspected unrelated container: %v", call.Args)
@@ -373,13 +389,6 @@ func TestRunningSandboxKeepsItsSSHListenerWhenUpOrStartAlreadyHolds(t *testing.T
 func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		t.Run(host.name, func(t *testing.T) {
-			first := firstFreeSSHPort(t)
-			probe, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", first))
-			if err != nil {
-				t.Fatal(err)
-			}
-			second := firstFreeSSHPort(t)
-			probe.Close()
 			fakes, fixture := resourceLimitHost(t, host.windows)
 			responses := append(upObjectResponses(nil, false, nil, nil), make([]testutil.Response, 6)...)
 			scriptResourceLimitObjects(t, fakes, host.windows, responses, nil)
@@ -388,7 +397,7 @@ func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			calls := fakes.Calls("podman")
-			assertSSHPublication(t, calls[len(calls)-2].Args, first)
+			first := assertAllocatedSSHPort(t, calls[len(calls)-2].Args)
 			responses = upObjectResponses(nil, false, nil, nil)
 			responses[len(responses)-1] = testutil.Response{Stdout: fmt.Sprintf(`[{"Names":["sandboxed-agents.default.agent01"],"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":%q},"State":"exited"}]`, strconv.Itoa(first))}
 			responses = append(responses, make([]testutil.Response, 6)...)
@@ -398,7 +407,10 @@ func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			calls = fakes.Calls("podman")
-			assertSSHPublication(t, calls[len(calls)-2].Args, second)
+			second := assertAllocatedSSHPort(t, calls[len(calls)-2].Args)
+			if second == first {
+				t.Fatalf("second sandbox reused recorded SSH port %d", first)
+			}
 			assertNoSSH(t, fakes)
 		})
 	}

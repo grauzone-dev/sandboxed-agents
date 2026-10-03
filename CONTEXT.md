@@ -46,7 +46,7 @@ The namespace an installed executable manages. The default group is `default`; a
 _Avoid_: Controller, owner path, installation
 
 **Owner**:
-The controller group recorded on a sandbox and its volumes. The executable lists and changes only objects whose owner is its own controller group.
+The controller group recorded on a sandbox and its volumes. The executable changes only objects whose owner is its own controller group. An object under one of its sandbox names with a missing or different owner is an owner conflict: the executable reports it and leaves the repair to the user.
 
 **Backup container**:
 The previous container of a sandbox, kept under its own name while `update` replaces it and removed once the new container is ready. It is not a sandbox and never appears in `list`.

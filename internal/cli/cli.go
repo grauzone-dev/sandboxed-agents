@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
+	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
@@ -115,30 +117,11 @@ func (tree Tree) failure(stderr io.Writer, path string, err error, usage bool) i
 }
 
 func Run(args []string, stdout, stderr io.Writer, version, assetHash string) int {
+	host := platform.CurrentHost()
+	if host.OS == "windows" {
+		return RunWithWindowsHost(args, stdout, stderr, version, assetHash, host)
+	}
 	return RunWithHost(args, stdout, stderr, version, assetHash, preflight.LocalHost())
-}
-
-func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
-	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
-		upCommand(assetHash, host),
-		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: func(invocation *Invocation) error {
-			return preflight.Run(context.Background(), host, invocation.Stdout)
-		}}, Action: func(invocation *Invocation) error {
-			if err := images.BuildBase(context.Background(), assetHash, host.Run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
-				return err
-			}
-			_, err := fmt.Fprintf(invocation.Stdout, "Built image %s.\nExisting sandboxes keep their current image until you update them; list marks them as outdated.\n", images.BaseTag(assetHash))
-			return err
-		}},
-		{Name: "check", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
-			return preflight.Run(context.Background(), host, invocation.Stdout)
-		}},
-		{Name: "version", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
-			_, err := fmt.Fprintf(invocation.Stdout, "sandboxed-agents %s\nassets %s\n", version, assetHash)
-			return err
-		}},
-	}}
-	return tree.Execute(args, stdout, stderr)
 }
 
 func noArguments(invocation *Invocation) error {
@@ -156,7 +139,7 @@ func unexpectedArgument(arg string) error {
 	return fmt.Errorf("%s %q", message, arg)
 }
 
-func upCommand(assetHash string, host preflight.Host) Command {
+func upCommand(assetHash string, run process.Runner, check Handler) Command {
 	ctx := context.Background()
 	var up *sandbox.Up
 	return Command{Name: "up", Checks: Checks{
@@ -170,12 +153,55 @@ func upCommand(assetHash string, host preflight.Host) Command {
 			if len(invocation.Args) > 1 {
 				return unexpectedArgument(invocation.Args[1])
 			}
-			up = sandbox.NewUp(invocation.Args[0], assetHash, host.Run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			up = sandbox.NewUp(invocation.Args[0], assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
-		Preflight:         func(invocation *Invocation) error { return preflight.Run(ctx, host, invocation.Stdout) },
+		Preflight:         check,
 		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
 	}, Action: func(*Invocation) error { return up.Apply(ctx) }}
+}
+
+func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetHash string, host platform.Host) int {
+	return runWithCheck(args, stdout, stderr, version, assetHash, platform.Run, func(invocation *Invocation) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		report := preflight.CheckWindows(ctx, host, platform.Run)
+		for _, result := range report.Results {
+			prefix := "missing"
+			if result.Met {
+				prefix = "ok"
+			}
+			if _, err := fmt.Fprintf(invocation.Stdout, "%s: %s\n", prefix, result.Message); err != nil {
+				return err
+			}
+		}
+		return report.Err()
+	})
+}
+
+func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
+	return runWithCheck(args, stdout, stderr, version, assetHash, host.Run, func(invocation *Invocation) error {
+		return preflight.Run(context.Background(), host, invocation.Stdout)
+	})
+}
+
+func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, run process.Runner, check Handler) int {
+	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
+		upCommand(assetHash, run, check),
+		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: check}, Action: func(invocation *Invocation) error {
+			if err := images.BuildBase(context.Background(), assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(invocation.Stdout, "Built image %s.\nExisting sandboxes keep their current image until you update them; list marks them as outdated.\n", images.BaseTag(assetHash))
+			return err
+		}},
+		{Name: "version", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
+			_, err := fmt.Fprintf(invocation.Stdout, "sandboxed-agents %s\nassets %s\n", version, assetHash)
+			return err
+		}},
+		{Name: "check", Checks: Checks{Usage: noArguments}, Action: check},
+	}}
+	return tree.Execute(args, stdout, stderr)
 }

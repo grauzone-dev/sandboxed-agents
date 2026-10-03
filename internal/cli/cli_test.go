@@ -13,6 +13,7 @@ import (
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/assets"
 	"github.com/grauzone-dev/sandboxed-agents/internal/cli"
+	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
@@ -58,6 +59,20 @@ func TestCLIProcess(t *testing.T) {
 	for index, arg := range os.Args {
 		if arg == "--" {
 			args := os.Args[index+1:]
+			if strings.HasPrefix(os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE"), "windows") {
+				host := platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
+				switch os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") {
+				case "windows-10":
+					host.WindowsBuild = 19045
+				case "windows-arm64":
+					host.Architecture = "arm64"
+				case "windows-server":
+					host.WindowsWorkstation = false
+				case "windows-unknown":
+					host = platform.Host{OS: "windows"}
+				}
+				os.Exit(cli.RunWithWindowsHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", host))
+			}
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "nested" {
 				tree := cli.Tree{Name: "sandboxed-agents", Commands: []cli.Command{
 					{Name: "agents", Commands: []cli.Command{

@@ -62,6 +62,10 @@ The build tool's test copies the sources into a temporary directory and builds h
 
 The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every push and pull request, on Linux and on Windows, with module downloads turned off. Each job runs the build tool, then `go test ./...` and `go vet ./...`. The Linux job also runs the mirror test. Each job then records the output of its native `version`, and a final job checks that the Linux and Windows outputs are identical. That check confirms that both builds embed the same assets.
 
+### Live suite
+
+The live suite runs the executable against real Podman and starts only with `go run ./tools/live -opt-in`. `go test ./...` and CI never call real Podman. The offline tests in `internal/livesuite` and `tools/live` cover the harness against the fake programs ([Verification](live-suite.md#verification)). [Live suite](live-suite.md) describes how to run it on Linux and on Windows 11, how to select its image part, and the summary it writes.
+
 ### Test seams
 
 - **CLI boundary.** Tests run the public CLI as a separate process. `testutil.NewFakePrograms` places native fake `podman`, `ssh`, `ssh-keygen`, and `getent` programs first on `PATH`. A test scripts their output and exit statuses with `Script` and asserts the exact calls they recorded with `Calls`. `TestMain` in `cli_test.go` unsets `SANDBOXED_AGENTS_GROUP` in the parent test process, the one without `SANDBOXED_AGENTS_CLI_FIXTURE`, so a group exported in your shell does not change the tests. The CLI subprocess keeps the environment it is given, so a group that a test sets with `t.Setenv` reaches it. For host preflight, see [Host preflight tests](#host-preflight-tests).

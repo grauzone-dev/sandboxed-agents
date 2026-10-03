@@ -163,6 +163,39 @@ func upCommand(assetHash string, run process.Runner, check Handler) Command {
 	}, Action: func(*Invocation) error { return up.Apply(ctx) }}
 }
 
+func lifecycleCommand(action sandbox.LifecycleAction, run process.Runner) Command {
+	name := string(action)
+	ctx := context.Background()
+	var lifecycle *sandbox.Lifecycle
+	var force bool
+	return Command{Name: name, Checks: Checks{
+		Usage: func(invocation *Invocation) error {
+			if len(invocation.Args) == 0 {
+				return fmt.Errorf("missing sandbox name; use sandboxed-agents %s NAME", name)
+			}
+			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
+				return err
+			}
+			for _, arg := range invocation.Args[1:] {
+				if arg != "--force" || action == sandbox.Start {
+					return unexpectedArgument(arg)
+				}
+				if force {
+					return errors.New("duplicate option \"--force\"")
+				}
+				force = true
+			}
+			lifecycle = sandbox.NewLifecycle(invocation.Args[0], action, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			return nil
+		},
+		Sandbox:           func(*Invocation) error { return lifecycle.CheckSandbox(ctx) },
+		Owner:             func(*Invocation) error { return lifecycle.CheckOwner(ctx) },
+		InterruptedUpdate: func(*Invocation) error { return lifecycle.CheckInterruptedUpdate() },
+		Preconditions:     func(*Invocation) error { return lifecycle.CheckSessions(ctx) },
+		SessionGuard:      func(*Invocation) error { return lifecycle.CheckSessionGuard() },
+	}, Action: func(*Invocation) error { return lifecycle.Apply(ctx) }}
+}
+
 func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetHash string, host platform.Host) int {
 	return runWithCheck(args, stdout, stderr, version, assetHash, platform.Run, func(invocation *Invocation) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -188,6 +221,9 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
 		upCommand(assetHash, run, check),
 		removeCommand(run),
+		lifecycleCommand(sandbox.Start, run),
+		lifecycleCommand(sandbox.Stop, run),
+		lifecycleCommand(sandbox.Restart, run),
 		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: check}, Action: func(invocation *Invocation) error {
 			if err := images.BuildBase(context.Background(), assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
 				return err

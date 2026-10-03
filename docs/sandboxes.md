@@ -1,6 +1,6 @@
 # Sandboxes
 
-A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)).
+A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)). `stop`, `start`, and `restart` change whether an existing sandbox runs and keep everything else ([Stop, start, and restart a sandbox](#stop-start-and-restart-a-sandbox)).
 
 `up` first runs the preflight for the host operating system: the Linux preflight on Linux and the Windows preflight on Windows ([Host prerequisites](host-prerequisites.md)). On any other operating system, the preflight reports that no prerequisite check is available, and `up` stops before it looks up or creates anything.
 
@@ -184,6 +184,83 @@ A bound host directory is never deleted, with or without `--volumes`. Binding a 
 
 An owner conflict or an interrupted update is therefore reported ahead of running sessions.
 
+## Stop, start, and restart a sandbox
+
+```sh
+sandboxed-agents stop NAME [--force]
+sandboxed-agents start NAME
+sandboxed-agents restart NAME [--force]
+```
+
+These commands act on the existing container of the sandbox `NAME` and on nothing else. `start` and `restart` start that same container again. All three keep the three volumes and the sandbox's configuration: the Podman options, the resource limits, the owner labels, and the workspace. They create, remove, and reconfigure no container or volume, and they do not check or build the image. They run no preflight and call neither `ssh` nor `podman machine ssh`.
+
+| Command | On a running sandbox | On a stopped sandbox |
+| --- | --- | --- |
+| `stop` | asks the manager for running agent sessions, then runs `podman stop` and prints `Sandbox NAME is stopped.` | changes nothing and prints `Sandbox NAME is stopped.` |
+| `start` | changes nothing and prints `Sandbox NAME is running.` | runs `podman start` and prints `Sandbox NAME is running.` |
+| `restart` | asks the manager for running agent sessions, then runs `podman stop` and `podman start` and prints `Sandbox NAME is running.` | runs `podman start`, no `podman stop`, and prints `Sandbox NAME is running.` |
+
+On success each command exits with status 0, also when nothing had to change.
+
+### Command line
+
+Each command takes exactly one sandbox name. As with `up`, the first word is always read as the sandbox name and is checked against the [sandbox name rules](#sandbox-names). After the name, `stop` and `restart` accept `--force` once; `start` accepts no option. A usage error prints a message and a usage line on standard error, calls no Podman command, and exits with status 1:
+
+- Without a name, the command reports the missing sandbox name and names its own usage, for example `missing sandbox name; use sandboxed-agents stop NAME`.
+- An option in place of the name, such as `--force`, is reported as an invalid sandbox name.
+- A second `--force` is reported as a duplicate option.
+- Any other word after the name is reported as an unexpected argument, or as an unknown option when it starts with `-`. This includes `--force` given to `start`.
+
+### What `stop`, `start`, and `restart` do
+
+1. They check the command line and the sandbox name.
+2. They look up the container and the three volumes of the sandbox by their exact Podman names, as `up` does, and read the owner label of each one that exists and whether the container is running.
+3. When neither the container nor any of the three volumes exists, the command reports `sandbox NAME does not exist in this controller group` and exits with status 1. When no container exists but some or all of the volumes do, the name is known, but there is no container to act on: if one of those volumes has a missing or different owner, the command reports that owner conflict; otherwise it reports `sandbox NAME has no container; run sandboxed-agents up NAME, which adopts its volumes`. Either way it exits with status 1 and changes nothing.
+4. They check the owners of the container and of every existing volume, then look up the backup container and check its owner (see [Refusals](#refusals)).
+5. They refuse a sandbox with a backup container of an interrupted update and name `sandboxed-agents update NAME`.
+6. They act on the running state of the container, as the table above shows. `stop` and `restart` on a running sandbox first pass the [session guard](#session-guard).
+
+The lookups and checks of steps 2 to 5 run also when the command will change nothing. `stop` on a stopped sandbox and `start` on a running one therefore still refuse an owner conflict or a backup container, exit with status 1, and do not print the sandbox's state.
+
+If a Podman command fails, the command stops, reports the Podman command and its exit status, and exits with status 1 without printing the sandbox's state. If `restart` stopped the container and `podman start` then fails, the sandbox stays stopped.
+
+### Session guard
+
+Before `stop` or `restart` stops a running container, it asks the in-container manager for the running agent sessions:
+
+```sh
+podman exec sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+```
+
+The manager answers when this command exits with status 0 within 30 seconds and prints exactly one JSON array on standard output. Each element is an object whose `name` and `agent` are strings that are not empty or only whitespace: the name of a running agent session and the agent it runs, for example `[{"name":"main","agent":"claude"}]`. An empty array means that no agent session runs. Anything else counts as no answer, including a partly valid array.
+
+In this version the manager always answers with an empty array, because agent sessions come with #45. The refusals for running sessions below take effect once the manager reports sessions.
+
+| Manager answer | Without `--force` | With `--force` |
+| --- | --- | --- |
+| No running session | stops the container | stops the container |
+| Running sessions | refuses: `sandbox NAME has running agent sessions: SESSIONS; use --force to end them` | stops the container and prints `Ended agent sessions: SESSIONS.` |
+| No answer | refuses: `cannot rule out running agent sessions in sandbox NAME: DETAIL; use --force to proceed anyway` | stops the container and prints `Agent sessions that may have been running were ended and cannot be named.` |
+
+`SESSIONS` lists every running session as `NAME (AGENT)`, separated by commas, in the order the manager reported them. `DETAIL` says why the answer is missing: an error running `podman exec`, such as the timeout, its exit status and standard error, or an invalid answer. A refusal exits with status 1. Its only Podman calls are the lookups and `podman exec`; it issues no `podman stop` or `podman start`.
+
+`--force` does not skip the query: the command still asks the manager so that it can name the sessions it ends. It prints the line about ended sessions after `podman stop` succeeds, and prints no such line when the manager reported no running session. `restart` then starts the container. `stop` and `restart` on a stopped sandbox, and `start` in every case, ask the manager nothing.
+
+### Order of checks for `stop`, `start`, and `restart`
+
+These commands run their checks in the order described in [Development](development.md#order-of-checks) and report only the first failure:
+
+| Step | What the command does at this step |
+| --- | --- |
+| 1. Usage and names | reports a usage error or an invalid sandbox name, before any Podman call |
+| 3. Sandbox existence | reports an unknown sandbox name. When only volumes of the sandbox remain, reports an owner conflict on those volumes or, if they all carry the current owner, that no container exists. |
+| 4. Owner | reports an owner conflict on the container or its volumes, then on the backup container |
+| 5. Interrupted update | reports a backup container with the current owner |
+| 7. Preconditions | `stop` and `restart` on a running sandbox without `--force`: reports that the manager did not answer |
+| 9. Session guard | `stop` and `restart` on a running sandbox without `--force`: reports the running agent sessions |
+
+The preflight (step 2), the running-state check (step 6), and the terminal check (step 8) do not apply to these commands. A sandbox with running agent sessions and an owner conflict or a backup container is therefore refused for the owner or the interrupted update, and the manager is not asked.
+
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The manager's side of the session query is covered by tests with injected process functions. The refusal on running sessions is covered by a fake `podman` whose `exec` answer reports sessions. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.

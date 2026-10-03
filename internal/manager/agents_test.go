@@ -23,7 +23,7 @@ func TestEnableInstallsIntoHomeAsAgent(t *testing.T) {
 		if r.User == nil || r.User.UID != 1000 || r.User.GID != 1000 {
 			t.Fatalf("installation identity=%+v", r.User)
 		}
-		want := []string{"install", "--global", "--prefix", filepath.Join(home, ".local"), "@openai/codex@latest"}
+		want := []string{"install", "--global", "--prefix", filepath.Join(home, ".local"), "--cache", filepath.Join(home, ".local", "cache", "sandboxed-agents", "npm"), "@openai/codex@latest"}
 		if r.Name != "/usr/bin/npm" || !reflect.DeepEqual(r.Args, want) {
 			t.Fatalf("request=%+v", r)
 		}

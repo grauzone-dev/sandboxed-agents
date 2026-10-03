@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
@@ -13,13 +12,6 @@ type Shell struct {
 
 func NewShell(name, group string, run process.Runner, streams process.Streams) *Shell {
 	return &Shell{sandboxObjects: newSandboxObjects(name, group, run, streams)}
-}
-
-func (shell *Shell) CheckRunning() error {
-	if !shell.containerRunning {
-		return fmt.Errorf(shellStoppedFormat, shell.name)
-	}
-	return nil
 }
 
 func (shell *Shell) Open(ctx context.Context, terminal bool) (int, error) {

@@ -36,13 +36,6 @@ func NewIntegrationWorkflow(name, group string, workflow integrations.Request, r
 	return &IntegrationWorkflow{sandboxObjects: newSandboxObjects(name, group, cleanRun, streams), request: workflow}
 }
 
-func (integration *IntegrationWorkflow) CheckRunning() error {
-	if !integration.containerRunning {
-		return fmt.Errorf(integrations.StoppedSandbox, integration.name)
-	}
-	return nil
-}
-
 func (integration *IntegrationWorkflow) CheckManager(ctx context.Context) error {
 	if _, err := RunningSessions(ctx, integration.container, integration.run); err != nil {
 		return fmt.Errorf(integrations.ManagerUnavailable, integration.name)

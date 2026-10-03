@@ -99,6 +99,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -113,10 +115,28 @@ jobs:
           done
           cmp artifacts/preview-linux/version.txt artifacts/preview-windows/version.txt
           (cd artifacts/preview-linux/preview && sha256sum -c SHA256SUMS)
+      - id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: artifacts/preview-linux/preview/*
+      - env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          for file in artifacts/preview-linux/preview/*; do
+            gh attestation verify "$file" --repo "$GH_REPO" --bundle "$ATTESTATION_BUNDLE"
+          done
       - run: |
           gh release create "$RELEASE_TAG" \
-            artifacts/preview-linux/preview/sandboxed-agents-linux-amd64 \
-            artifacts/preview-linux/preview/sandboxed-agents-windows-amd64.exe \
-            artifacts/preview-linux/preview/SHA256SUMS \
+            artifacts/preview-linux/preview/* \
             --verify-tag --prerelease --title "$RELEASE_TAG" \
             --notes "Preview build of commit $GITHUB_SHA."
+      - run: |
+          gh release download "$RELEASE_TAG" --dir downloaded
+          for file in downloaded/*; do
+            gh attestation verify "$file" --repo "$GH_REPO"
+            cp "$file" "$RUNNER_TEMP/tampered"
+            printf '\n' >> "$RUNNER_TEMP/tampered"
+            if gh attestation verify "$RUNNER_TEMP/tampered" --repo "$GH_REPO"; then
+              exit 1
+            fi
+          done

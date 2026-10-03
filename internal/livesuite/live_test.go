@@ -178,12 +178,14 @@ func TestSelectedImagePartRebuildsOnceAndRecordsItsOutcome(t *testing.T) {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			config := fixtureConfig(t)
 			config.Images = true
+			var diagnostic bytes.Buffer
+			config.Stderr = &diagnostic
 			config.Host = platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
 			fakes := testutil.NewFakePrograms(t)
 			fakes.Script("podman", testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: status}, testutil.Response{Stdout: "[]"})
 			err := livesuite.Run(context.Background(), config)
 			if (err == nil) != (status == 0) {
-				t.Fatalf("error=%v status=%d calls=%v", err, status, fakes.Calls("podman"))
+				t.Fatalf("error=%v status=%d stderr=%q calls=%v", err, status, diagnostic.String(), fakes.Calls("podman"))
 			}
 			builds := 0
 			for _, call := range fakes.Calls("podman") {

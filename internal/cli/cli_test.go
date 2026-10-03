@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -95,6 +96,9 @@ func TestCLIProcess(t *testing.T) {
 			}
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "checks" {
 				os.Exit(checkTree().Execute(args, os.Stdout, os.Stderr))
+			}
+			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "unsupported-preflight" {
+				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", preflight.Host{Platform: "darwin"}))
 			}
 			if fixture := os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE"); fixture == "linux-preflight" || fixture == "linux-build" {
 				host := preflight.LocalHost()
@@ -325,5 +329,51 @@ func TestUnknownOptionsAreNamedAsOptions(t *testing.T) {
 				t.Fatal("invalid usage ran an external program")
 			}
 		})
+	}
+}
+
+func TestCheckUsesNativeOperatingSystem(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	if runtime.GOOS == "linux" {
+		fakes.Script("podman", testutil.Response{Stdout: "podman version 5.0.0\n"})
+		stdout, _, _ := runCLI(t, "production", "check")
+		if !strings.Contains(stdout, "OK: Podman version") {
+			t.Fatalf("native Linux check output=%q", stdout)
+		}
+		if calls := fakes.Calls("podman"); !reflect.DeepEqual(calls, []testutil.Call{{Args: []string{"--version"}}}) {
+			t.Fatalf("native Linux Podman calls=%v", calls)
+		}
+	} else if runtime.GOOS == "windows" {
+		fakes.Script("podman", healthyWindowsPodman()...)
+		stdout, _, _ := runCLI(t, "production", "check")
+		if !strings.Contains(stdout, "ok: Podman client") {
+			t.Fatalf("native Windows check output=%q", stdout)
+		}
+		calls := fakes.Calls("podman")
+		if len(calls) != 7 || !reflect.DeepEqual(calls[1].Args, []string{"machine", "list", "--format", "json"}) {
+			t.Fatalf("native Windows Podman calls=%v", calls)
+		}
+	} else {
+		stdout, _, status := runCLI(t, "production", "check")
+		if status == 0 || !strings.Contains(stdout, "Prerequisite checks are not available for this operating system yet") {
+			t.Fatalf("native unsupported check status=%d output=%q", status, stdout)
+		}
+		if len(fakes.Calls("podman")) != 0 {
+			t.Fatal("unsupported host check ran Podman")
+		}
+	}
+	if len(fakes.Calls("ssh")) != 0 || len(fakes.Calls("ssh-keygen")) != 0 {
+		t.Fatal("native check ran an unexpected host program")
+	}
+}
+
+func TestCheckExplainsUnsupportedOperatingSystem(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	stdout, stderr, status := runCLI(t, "unsupported-preflight", "check")
+	if status == 0 || stderr == "" || !strings.Contains(stdout, "Prerequisite checks are not available for this operating system yet") || strings.Contains(stdout, "Linux hosts only") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if len(fakes.Calls("podman")) != 0 || len(fakes.Calls("getent")) != 0 || len(fakes.Calls("ssh")) != 0 || len(fakes.Calls("ssh-keygen")) != 0 {
+		t.Fatal("unsupported host check ran an external program")
 	}
 }

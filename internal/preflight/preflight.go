@@ -47,7 +47,7 @@ type Result struct {
 
 func Check(ctx context.Context, host Host) []Result {
 	if host.Platform != "linux" {
-		return []Result{{Name: "Linux host", Remedy: "check currently supports Linux hosts only"}}
+		return []Result{{Name: "Linux host", Remedy: unsupportedMessage}}
 	}
 	host.Username = accountName(ctx, host)
 	has := func(name string) bool { _, err := host.LookPath(name); return err == nil }

@@ -118,10 +118,10 @@ func (tree Tree) failure(stderr io.Writer, path string, err error, usage bool) i
 
 func Run(args []string, stdout, stderr io.Writer, version, assetHash string) int {
 	host := platform.CurrentHost()
-	if host.OS == "windows" {
-		return RunWithWindowsHost(args, stdout, stderr, version, assetHash, host)
+	if host.OS == "linux" {
+		return RunWithHost(args, stdout, stderr, version, assetHash, preflight.LocalHost())
 	}
-	return RunWithHost(args, stdout, stderr, version, assetHash, preflight.LocalHost())
+	return RunWithWindowsHost(args, stdout, stderr, version, assetHash, host)
 }
 
 func noArguments(invocation *Invocation) error {

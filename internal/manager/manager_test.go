@@ -114,7 +114,7 @@ func TestSessionQueryRejectsInvalidUsageWithoutRunningProcesses(t *testing.T) {
 				return 1, nil
 			})
 			status := app.Run(context.Background(), args, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			if status == 0 || stdout.Len() != 0 || stderr.String() != "usage: sandboxed-agents-manager sessions list\n" {
+			if status == 0 || stdout.Len() != 0 || stderr.String() != "sandboxed-agents-manager sessions list\n" {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
 			}
 		})

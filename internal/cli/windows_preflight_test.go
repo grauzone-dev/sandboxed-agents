@@ -22,6 +22,7 @@ func healthyWindowsPodman() []testutil.Response {
 		{Stdout: `[{"Name":"podman-machine-default","State":"running","Rootful":false}]`},
 		{Stdout: `{"Client":{"Version":"6.0.0"},"Server":{"Version":"6.0.0"}}`},
 		{Stdout: `{"host":{"cgroupVersion":"v2","cgroupControllers":["cpu","memory","pids"],"security":{"rootless":true}}}`},
+		{Stdout: "delegated\n"},
 		{Stdout: "[automount]\nroot=/mnt/\n"},
 	}
 }
@@ -206,8 +207,28 @@ func TestCheckUsesOnlyReadOnlyPodmanCalls(t *testing.T) {
 		{Args: []string{"--connection", "podman-machine-default", "info", "--format", "json"}},
 		{Args: []string{"machine", "ssh", "podman-machine-default", "sh", "-c", "'if [ -e /etc/wsl.conf ] || [ -L /etc/wsl.conf ]; then cat /etc/wsl.conf; fi'"}},
 	}
-	if got := fakes.Calls("podman"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("calls=%v want=%v", got, want)
+	got := fakes.Calls("podman")
+	if len(got) != len(want)+1 {
+		t.Fatalf("calls=%v want one additional delegation probe", got)
+	}
+	delegation := got[5]
+	if len(delegation.Args) != 6 || !reflect.DeepEqual(delegation.Args[:5], []string{"machine", "ssh", "podman-machine-default", "sh", "-c"}) {
+		t.Fatalf("delegation probe=%v", delegation)
+	}
+	script := delegation.Args[5]
+	for _, query := range []string{"-p Delegate --value", "-p ActiveState --value", "-p ControlGroup --value", "cgroup.procs cgroup.threads cgroup.subtree_control", "cgroup.controllers"} {
+		if !strings.Contains(script, query) {
+			t.Errorf("delegation probe lacks read-only query %q: %s", query, script)
+		}
+	}
+	for _, mutation := range []string{"mkdir", "chmod", "chown", "systemctl start", "systemctl set-property", "sudo", " > "} {
+		if strings.Contains(script, mutation) {
+			t.Errorf("delegation probe mutates guest with %q", mutation)
+		}
+	}
+	withoutDelegation := append(append([]testutil.Call{}, got[:5]...), got[6:]...)
+	if !reflect.DeepEqual(withoutDelegation, want) {
+		t.Fatalf("calls=%v want=%v", withoutDelegation, want)
 	}
 	entries, err := os.ReadDir(home)
 	if err != nil {
@@ -247,10 +268,11 @@ func TestCheckFailsClosedWhenHostInformationCannotBeRead(t *testing.T) {
 		{2, "unknown: Could not determine whether a Podman machine", true},
 		{3, "unknown: Could not read the Podman version of the Podman machine", true},
 		{4, "unknown: Could not determine whether cgroups v2 delegates", true},
-		{5, "unknown: WSL automount root", false},
+		{5, "unknown: Could not determine whether cgroups v2 delegates", true},
+		{6, "unknown: WSL automount root", false},
 	} {
 		for _, failure := range []string{"exit", "json"} {
-			if failure == "json" && (probe.index == 0 || probe.index == 5) {
+			if failure == "json" && (probe.index == 0 || probe.index == 6) {
 				continue
 			}
 			t.Run(fmt.Sprintf("%d/%s", probe.index, failure), func(t *testing.T) {
@@ -276,7 +298,7 @@ func TestCheckRejectsInvalidAutomountConfiguration(t *testing.T) {
 		t.Run(config, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			responses := healthyWindowsPodman()
-			responses[5].Stdout = config
+			responses[6].Stdout = config
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, "windows", "check")
 			if status != 0 || !strings.Contains(stdout, "unknown: WSL automount root") || stderr != "" {
@@ -310,7 +332,7 @@ func TestPreflightMakesTheAutomountRootAvailableToCallers(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			responses := healthyWindowsPodman()
-			responses[5].Stdout = test.config
+			responses[6].Stdout = test.config
 			fakes.Script("podman", responses...)
 			host := platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22000, WindowsWorkstation: true}
 			report := preflight.CheckWindows(context.Background(), host, platform.Run)
@@ -350,7 +372,7 @@ func TestCheckUsesTheSelectedMachineInsteadOfAnotherConnection(t *testing.T) {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 	calls := fakes.Calls("podman")
-	if !reflect.DeepEqual(calls[3].Args, []string{"--connection", "chosen-machine", "version", "--format", "json"}) || !reflect.DeepEqual(calls[4].Args, []string{"--connection", "chosen-machine", "info", "--format", "json"}) || calls[5].Args[2] != "chosen-machine" {
+	if !reflect.DeepEqual(calls[3].Args, []string{"--connection", "chosen-machine", "version", "--format", "json"}) || !reflect.DeepEqual(calls[4].Args, []string{"--connection", "chosen-machine", "info", "--format", "json"}) || calls[5].Args[2] != "chosen-machine" || calls[6].Args[2] != "chosen-machine" {
 		t.Fatalf("probed another machine: %v", calls)
 	}
 }
@@ -373,7 +395,7 @@ func TestCheckDoesNotInventMissingRequirementsForAStoppedMachine(t *testing.T) {
 func TestCheckKeepsUnreadableAutomountInformationSeparateFromRequirements(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	responses := healthyWindowsPodman()
-	responses[5] = testutil.Response{ExitCode: 1, Stderr: "Permission denied"}
+	responses[6] = testutil.Response{ExitCode: 1, Stderr: "Permission denied"}
 	fakes.Script("podman", responses...)
 	stdout, stderr, status := runCLI(t, "windows", "check")
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "unknown:") || strings.Contains(stdout, "missing:") {
@@ -453,4 +475,34 @@ func stoppedWindowsPodman() []testutil.Response {
 	responses[1].Stdout = `[{"Name":"podman-machine-default","Default":true,"Running":false,"VMType":"wsl"}]`
 	responses[2].Stdout = `[{"Name":"podman-machine-default","State":"stopped","Rootful":false}]`
 	return responses
+}
+
+func TestCheckRequiresCgroupDelegationAndWriteAccess(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := healthyWindowsPodman()
+	responses[5].Stdout = "not-delegated\n"
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "windows", "check")
+	if status == 0 || stderr == "" || !strings.Contains(stdout, "missing: Podman machine must use cgroups v2") || strings.Contains(stdout, "ok: cgroups v2") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if strings.Count(stdout, "missing:") != 1 {
+		t.Fatalf("only delegation is missing: %q", stdout)
+	}
+}
+
+func TestCheckDoesNotInferMissingDelegationFromRootfulMode(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := healthyWindowsPodman()
+	responses[2].Stdout = `[{"Name":"podman-machine-default","State":"running","Rootful":true}]`
+	responses[4].Stdout = `{"host":{"cgroupVersion":"v2","cgroupControllers":["cpu","memory","pids"],"security":{"rootless":false}}}`
+	responses = append(responses[:5], responses[6:]...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "windows", "check")
+	if status == 0 || stderr == "" || strings.Count(stdout, "missing:") != 1 || !strings.Contains(stdout, "unknown: Could not determine whether cgroups v2 delegates") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if calls := fakes.Calls("podman"); len(calls) != 6 {
+		t.Fatalf("rootful machine must not run a rootless delegation probe: %v", calls)
+	}
 }

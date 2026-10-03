@@ -15,92 +15,150 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-const MinimumWindowsPodman = "5.0.0"
+const minimumWindowsPodman = "5.0.0"
+
+type Status string
+
+const (
+	Met     Status = "ok"
+	Missing Status = "missing"
+	Unknown Status = "unknown"
+)
 
 type WindowsResult struct {
-	Name    string
-	Met     bool
-	Message string
+	Name     string
+	Status   Status
+	Required bool
+	Message  string
 }
 
 type Report struct {
 	Results       []WindowsResult
 	AutomountRoot string
+	err           error
 }
 
 func (report Report) Err() error {
+	if report.err != nil {
+		return report.err
+	}
 	for _, result := range report.Results {
-		if !result.Met {
+		if result.Required && result.Status != Met {
 			return errors.New(failedMessage)
 		}
 	}
 	return nil
 }
 
-func (report *Report) add(name string, met bool, args ...any) {
-	index := 0
-	if met {
-		index = 1
+func (report *Report) add(name string, known, met bool, args ...any) {
+	text, found := messages[name]
+	if !found {
+		panic(name)
 	}
-	message := messages[name][index]
-	if len(args) > 0 {
+	status, message := Missing, text.Missing
+	if !known {
+		status, message = Unknown, text.Unknown
+	} else if met {
+		status, message = Met, text.Met
+	}
+	if status != Unknown && len(args) > 0 {
 		message = fmt.Sprintf(message, args...)
 	}
-	report.Results = append(report.Results, WindowsResult{Name: name, Met: met, Message: message})
+	report.Results = append(report.Results, WindowsResult{Name: name, Status: status, Required: name != "automount", Message: message})
 }
 
 func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) Report {
 	var report Report
 	if host.OS != "windows" {
-		report.Results = []WindowsResult{{Name: "platform", Message: unsupportedMessage}}
+		report.Results = []WindowsResult{{Name: "platform", Status: Unknown, Required: true, Message: unsupportedMessage}}
+		report.err = errors.New(unsupportedMessage)
 		return report
 	}
-	report.add("windows", host.Architecture == "amd64" && host.WindowsMajor == 10 && host.WindowsBuild >= 22000 && host.WindowsWorkstation)
-	output, clientOK := read(ctx, run, "--version")
+	report.add("windows", true, host.Architecture == "amd64" && host.WindowsMajor == 10 && host.WindowsBuild >= 22000 && host.WindowsWorkstation)
+	output, clientOK := readPodman(ctx, run, "--version")
 	client := strings.TrimPrefix(strings.TrimSpace(string(output)), "podman version ")
-	report.add("client", clientOK && versionAtLeast(client, MinimumWindowsPodman), MinimumWindowsPodman)
+	report.add("client", true, clientOK && versionAtLeast(client, minimumWindowsPodman), minimumWindowsPodman)
+	machine := inspectMachine(ctx, run)
+	report.add("running_machine", machine.StateKnown, machine.Running)
+	report.add("wsl2", machine.Provider != "", machine.Provider == "wsl")
+	reportMachineService(ctx, run, machine, &report)
+	_, sshErr := exec.LookPath("ssh")
+	report.add("ssh", true, sshErr == nil)
+	_, keygenErr := exec.LookPath("ssh-keygen")
+	report.add("ssh_keygen", true, keygenErr == nil)
+	if machine.Running && machine.Provider == "wsl" {
+		output, ok := readPodman(ctx, run, "machine", "ssh", machine.Name, "sh", "-c", "'if [ -e /etc/wsl.conf ] || [ -L /etc/wsl.conf ]; then cat /etc/wsl.conf; fi'")
+		if ok {
+			report.AutomountRoot, ok = automountRoot(string(output))
+		}
+		report.add("automount", ok, ok)
+	}
+	if report.Err() != nil && ctx.Err() != nil {
+		report.err = ctx.Err()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			report.err = errors.New(timeoutMessage)
+		}
+	}
+	return report
+}
+
+type machineFacts struct {
+	Name       string
+	Provider   string
+	Running    bool
+	StateKnown bool
+	Rootful    *bool
+}
+
+func inspectMachine(ctx context.Context, run process.Runner) machineFacts {
 	var machines []struct {
 		Name    string
 		Default bool
 		Running bool
 		VMType  string
 	}
-	output, listOK := read(ctx, run, "machine", "list", "--format", "json")
-	listOK = listOK && json.Unmarshal(output, &machines) == nil
+	output, ok := readPodman(ctx, run, "machine", "list", "--format", "json")
+	if !ok || json.Unmarshal(output, &machines) != nil {
+		return machineFacts{}
+	}
+	if len(machines) == 0 {
+		return machineFacts{StateKnown: true}
+	}
 	selected := -1
-	if listOK {
-		for index, machine := range machines {
-			if machine.Default {
-				selected = index
-				break
-			}
-		}
-		if selected < 0 && len(machines) == 1 {
-			selected = 0
+	for index, machine := range machines {
+		if machine.Default {
+			selected = index
+			break
 		}
 	}
-	var name, provider string
-	var running, rootless bool
-	if selected >= 0 {
-		machine := machines[selected]
-		name, provider = machine.Name, machine.VMType
-		var inspected []struct {
-			Name    string
-			State   string
-			Rootful *bool
-		}
-		output, ok := read(ctx, run, "machine", "inspect", name)
-		if ok && json.Unmarshal(output, &inspected) == nil && len(inspected) == 1 && inspected[0].Name == name {
-			running = machine.Running && inspected[0].State == "running"
-			rootless = inspected[0].Rootful != nil && !*inspected[0].Rootful
-		}
+	if selected < 0 && len(machines) == 1 {
+		selected = 0
 	}
-	report.add("running_machine", running)
-	report.add("wsl2", provider == "wsl")
-	var serverOK, infoOK bool
-	var server struct {
-		Server struct{ Version string }
+	if selected < 0 {
+		return machineFacts{}
 	}
+	machine := machines[selected]
+	facts := machineFacts{Name: machine.Name, Provider: machine.VMType}
+	if facts.Name == "" {
+		return facts
+	}
+	var inspected []struct {
+		Name    string
+		State   string
+		Rootful *bool
+	}
+	output, ok = readPodman(ctx, run, "machine", "inspect", facts.Name)
+	if !ok || json.Unmarshal(output, &inspected) != nil || len(inspected) != 1 || inspected[0].Name != facts.Name || inspected[0].State == "" {
+		return facts
+	}
+	facts.StateKnown = true
+	facts.Running = machine.Running && inspected[0].State == "running"
+	facts.Rootful = inspected[0].Rootful
+	return facts
+}
+
+func reportMachineService(ctx context.Context, run process.Runner, machine machineFacts, report *Report) {
+	var server struct{ Server struct{ Version string } }
 	var info struct {
 		Host struct {
 			CgroupVersion     string
@@ -108,34 +166,26 @@ func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) R
 			Security          struct{ Rootless *bool }
 		}
 	}
-	if running {
-		output, serverOK = read(ctx, run, "--connection", name, "version", "--format", "json")
-		serverOK = serverOK && json.Unmarshal(output, &server) == nil
-		output, infoOK = read(ctx, run, "--connection", name, "info", "--format", "json")
-		infoOK = infoOK && json.Unmarshal(output, &info) == nil
+	var serverOK, infoOK bool
+	if machine.Running {
+		output, ok := readPodman(ctx, run, "--connection", machine.Name, "version", "--format", "json")
+		serverOK = ok && json.Unmarshal(output, &server) == nil && server.Server.Version != ""
+		output, ok = readPodman(ctx, run, "--connection", machine.Name, "info", "--format", "json")
+		infoOK = ok && json.Unmarshal(output, &info) == nil
 	}
-	report.add("machine_version", serverOK && versionAtLeast(server.Server.Version, MinimumWindowsPodman), MinimumWindowsPodman)
-	report.add("rootless", rootless && infoOK && info.Host.Security.Rootless != nil && *info.Host.Security.Rootless)
+	report.add("machine_version", serverOK, serverOK && versionAtLeast(server.Server.Version, minimumWindowsPodman), minimumWindowsPodman)
+	rootlessKnown := machine.Running && machine.Rootful != nil && (*machine.Rootful || infoOK && info.Host.Security.Rootless != nil)
+	rootless := rootlessKnown && !*machine.Rootful && *info.Host.Security.Rootless
+	report.add("rootless", rootlessKnown, rootless)
 	controllers := map[string]bool{}
 	for _, controller := range info.Host.CgroupControllers {
 		controllers[controller] = true
 	}
-	report.add("cgroups", infoOK && info.Host.CgroupVersion == "v2" && controllers["cpu"] && controllers["memory"] && controllers["pids"])
-	_, sshErr := exec.LookPath("ssh")
-	report.add("ssh", sshErr == nil)
-	_, keygenErr := exec.LookPath("ssh-keygen")
-	report.add("ssh_keygen", keygenErr == nil)
-	if running && provider == "wsl" {
-		output, ok := read(ctx, run, "machine", "ssh", name, "sh", "-c", "'if [ -e /etc/wsl.conf ] || [ -L /etc/wsl.conf ]; then cat /etc/wsl.conf; fi'")
-		if ok {
-			report.AutomountRoot, ok = automountRoot(string(output))
-		}
-		report.add("automount", ok)
-	}
-	return report
+	cgroupsKnown := infoOK && info.Host.CgroupVersion != "" && (info.Host.CgroupVersion != "v2" || info.Host.CgroupControllers != nil)
+	report.add("cgroups", cgroupsKnown, cgroupsKnown && info.Host.CgroupVersion == "v2" && controllers["cpu"] && controllers["memory"] && controllers["pids"])
 }
 
-func read(ctx context.Context, run process.Runner, args ...string) ([]byte, bool) {
+func readPodman(ctx context.Context, run process.Runner, args ...string) ([]byte, bool) {
 	var stdout, stderr bytes.Buffer
 	status, err := run(ctx, process.Request{Name: "podman", Args: args, Streams: process.Streams{Stdout: &stdout, Stderr: &stderr}})
 	return stdout.Bytes(), err == nil && status == 0

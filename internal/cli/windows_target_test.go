@@ -44,7 +44,7 @@ func TestWindowsOperationsStayOnTheCheckedConnection(t *testing.T) {
 						args = []string{command, "agent01"}
 						operations = []string{"exec"}
 					case "build":
-						responses = append(preflight, testutil.Response{})
+						responses = append(preflight, testutil.Response{}, testutil.Response{Stdout: "[]"})
 						args = []string{command}
 						operations = []string{"build"}
 					case "up":

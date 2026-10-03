@@ -25,7 +25,7 @@ func buildCalls(t *testing.T, fakes *testutil.FakePrograms) (string, string) {
 		t.Fatalf("invalid asset hash %q", hash)
 	}
 	calls := fakes.Calls("podman")
-	if len(calls) != 2 || !reflect.DeepEqual(calls[0].Args, []string{"--version"}) {
+	if (len(calls) != 2 && len(calls) != 3) || !reflect.DeepEqual(calls[0].Args, []string{"--version"}) {
 		t.Fatalf("calls=%v", calls)
 	}
 	args := calls[1].Args
@@ -61,9 +61,13 @@ func TestBuildRebuildsBaseAndRemovesContextOnSuccessAndFailure(t *testing.T) {
 		t.Run(map[int]string{0: "success", 42: "failure"}[status], func(t *testing.T) {
 			fakes := linuxHost(t)
 			captured := filepath.Join(t.TempDir(), "captured")
-			fakes.Script("podman", testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{
+			responses := []testutil.Response{{Stdout: "podman version 5.0.0\n"}, {
 				Stdout: "build log\n", Stderr: "build diagnostic\n", ExitCode: status, CaptureBuildContext: captured,
-			})
+			}}
+			if status == 0 {
+				responses = append(responses, testutil.Response{Stdout: "[]"})
+			}
+			fakes.Script("podman", responses...)
 			stdout, stderr, exit := runCLIAt(t, t.TempDir(), "linux-build", "build")
 			tag, _ := buildCalls(t, fakes)
 			if !strings.Contains(stdout, "OK: podman") || !strings.Contains(stdout, "build log\n") || !strings.Contains(stderr, "build diagnostic\n") {
@@ -151,8 +155,8 @@ func checkBaseContext(t *testing.T, directory string) {
 func TestBuildUsesTheSameTagAcrossControllerGroupsAndRebuildsAnExistingTag(t *testing.T) {
 	fakes := linuxHost(t)
 	fakes.Script("podman",
-		testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{},
-		testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{},
+		testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{}, testutil.Response{Stdout: "[]"},
+		testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{}, testutil.Response{Stdout: "[]"},
 	)
 	var tag string
 	for index, group := range []string{"default", "second-group"} {
@@ -162,10 +166,10 @@ func TestBuildUsesTheSameTagAcrossControllerGroupsAndRebuildsAnExistingTag(t *te
 			t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 		}
 		calls := fakes.Calls("podman")
-		if len(calls) != 2*(index+1) {
+		if len(calls) != 3*(index+1) {
 			t.Fatalf("unexpected calls=%v", calls)
 		}
-		build := calls[2*index+1].Args
+		build := calls[3*index+1].Args
 		if len(build) < 5 || !reflect.DeepEqual(build[:4], []string{"build", "--pull=always", "--no-cache", "--tag"}) {
 			t.Fatalf("unexpected build=%v", build)
 		}
@@ -181,7 +185,7 @@ func TestBuildUsesTheSameTagAcrossControllerGroupsAndRebuildsAnExistingTag(t *te
 }
 
 func TestBuildRejectsUsageBeforePreflight(t *testing.T) {
-	for _, args := range [][]string{{"--unknown"}, {"extra"}, {"--with", "none"}} {
+	for _, args := range [][]string{{"--unknown"}, {"extra"}, {"--with"}, {"--with", "none", "extra"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			fakes := linuxHost(t)
 			if err := os.Remove(fakes.Podman); err != nil {

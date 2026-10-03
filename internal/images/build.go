@@ -4,21 +4,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/assets"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
 const (
 	ManagedLabel    = "io.github.sandboxed-agents.managed"
 	AssetHashLabel  = "io.github.sandboxed-agents.asset-hash"
 	ToolchainsLabel = "io.github.sandboxed-agents.toolchains"
+	BaseImageLabel  = "io.github.sandboxed-agents.base-image"
 )
 
 func BaseTag(assetHash string) string {
 	return "localhost/sandboxed-agents:base-" + assetHash
+}
+
+func Tag(assetHash string, set toolchains.Set) string {
+	if set.String() == "" {
+		return BaseTag(assetHash)
+	}
+	return "localhost/sandboxed-agents:toolchains-" + strings.ReplaceAll(set.String(), ",", "-") + "-" + assetHash
 }
 
 func BuildBase(ctx context.Context, assetHash string, run process.Runner, streams process.Streams) (result error) {
@@ -35,7 +46,7 @@ func BuildBase(ctx context.Context, assetHash string, run process.Runner, stream
 	if err != nil {
 		return fmt.Errorf("read embedded build context: %w", err)
 	}
-	if err := os.CopyFS(directory, buildContext); err != nil {
+	if err := copyBaseContext(directory, buildContext); err != nil {
 		return fmt.Errorf("write build context to %s: %w", directory, err)
 	}
 	manager, err := assets.Manager()
@@ -64,4 +75,27 @@ func BuildBase(ctx context.Context, assetHash string, run process.Runner, stream
 		return fmt.Errorf("podman build failed with exit status %d", status)
 	}
 	return nil
+}
+
+func copyBaseContext(directory string, buildContext fs.FS) error {
+	return fs.WalkDir(buildContext, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if name == "toolchains" {
+			return fs.SkipDir
+		}
+		if name == "." {
+			return nil
+		}
+		path := filepath.Join(directory, filepath.FromSlash(name))
+		if entry.IsDir() {
+			return os.MkdirAll(path, 0755)
+		}
+		contents, err := fs.ReadFile(buildContext, name)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, contents, 0644)
+	})
 }

@@ -3,7 +3,7 @@ package sandbox
 const (
 	limitsUnexpectedArgument = "unexpected argument"
 	limitsUnknownOption      = "unknown option"
-	limitsArgumentError      = "%s %q; up accepts only --memory, --cpus, --pids-limit, --shm-size, and --help after NAME"
+	limitsArgumentError      = "%s %q; up accepts only --memory, --cpus, --pids-limit, --shm-size, --with, and --help after NAME"
 	limitsDuplicateError     = "option %s is given more than once"
 	limitsMissingValueError  = "missing value for option %s"
 	limitsInvalidValueError  = "option %s does not accept %q; see sandboxed-agents up --help for the accepted values"

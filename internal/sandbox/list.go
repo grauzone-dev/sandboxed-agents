@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
@@ -35,10 +36,11 @@ const (
 )
 
 type listRow struct {
-	name      string
-	state     sandboxState
-	workspace string
-	volumes   []string
+	name       string
+	state      sandboxState
+	workspace  string
+	volumes    []string
+	toolchains string
 }
 
 func List(ctx context.Context, group string, run process.Runner, output io.Writer) error {
@@ -145,7 +147,11 @@ func renderList(output io.Writer, rows []listRow) error {
 		if len(row.volumes) > 0 {
 			existingVolumes = strings.Join(row.volumes, ",")
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t-\t-\t-\t%s\n", row.name, row.state, workspace, existingVolumes)
+		selection := row.toolchains
+		if selection == "" {
+			selection = "-"
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t-\t%s\t-\t%s\n", row.name, row.state, workspace, selection, existingVolumes)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -196,6 +202,7 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 				result.state = sandboxRunning
 			}
 			result.workspace = record.Config.Labels[WorkspaceKindLabel]
+			result.toolchains = record.Config.Labels[images.ToolchainsLabel]
 		}
 	}
 	slices.SortFunc(row.volumes, func(a, b volume) int { return strings.Compare(a.name, b.name) })
@@ -217,8 +224,11 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 			return listRow{}, err
 		}
 		conflict = conflict || !row.state.isOwned(record.Config.Labels[OwnerLabel])
-		if len(row.containers) == 0 && result.workspace == "" {
-			result.workspace = record.Config.Labels[WorkspaceKindLabel]
+		if len(row.containers) == 0 {
+			if result.workspace == "" {
+				result.workspace = record.Config.Labels[WorkspaceKindLabel]
+			}
+			result.toolchains = record.Config.Labels[images.ToolchainsLabel]
 		}
 		result.state = sandboxUpdateInterrupted
 	}

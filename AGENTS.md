@@ -3,6 +3,11 @@
 - Discuss with the user in German or English. Write all work artifacts in English, including documents, research requests and proposals, ticket descriptions, pull request descriptions, and commit messages.
 - Format every commit message according to the Conventional Commits standard. Remove every `Co-authored-by` trailer before committing, including trailers added by tools or harnesses.
 
+## Pull requests
+
+- After opening a pull request, stay on it until CodeRabbit (`coderabbitai[bot]`) has reviewed the head commit without findings. Wait for its review, fix each valid finding or reply on it with the reason for leaving it, push, and wait for the review of the new head.
+- A merge waits for that clean review of the head commit, also when the user asks for the merge: report the open findings first.
+
 ## Agent skills
 
 ### Model routing

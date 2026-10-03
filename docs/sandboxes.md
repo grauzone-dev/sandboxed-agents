@@ -1,10 +1,10 @@
 # Sandboxes
 
-A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)). `stop`, `start`, and `restart` change whether an existing sandbox runs and keep everything else ([Stop, start, and restart a sandbox](#stop-start-and-restart-a-sandbox)). `sandboxed-agents list` shows the sandboxes of the current controller group ([List sandboxes](#list-sandboxes)). `sandboxed-agents shell NAME` opens a shell in a running sandbox through `podman exec`, without SSH ([Shell and SSH access](ssh.md)).
+A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. On Linux, `sandboxed-agents up NAME WORKSPACE` binds one existing host directory as the workspace in place of the workspace volume ([Workspace bind](#workspace-bind)). `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)). `stop`, `start`, and `restart` change whether an existing sandbox runs and keep everything else ([Stop, start, and restart a sandbox](#stop-start-and-restart-a-sandbox)). `sandboxed-agents list` shows the sandboxes of the current controller group ([List sandboxes](#list-sandboxes)). `sandboxed-agents shell NAME` opens a shell in a running sandbox through `podman exec`, without SSH ([Shell and SSH access](ssh.md)).
 
 `up` first runs the preflight for the host operating system: the Linux preflight on Linux and the Windows preflight on Windows ([Host prerequisites](host-prerequisites.md)). On any other operating system, the preflight reports that no prerequisite check is available, and `up` stops before it looks up or creates anything.
 
-Every command acts only on the sandboxes of the current [controller group](#controller-groups). Only the resource limits and the toolchain set of a sandbox can differ from the defaults; binding a host directory as the workspace comes with #26.
+Every command acts only on the sandboxes of the current [controller group](#controller-groups). Only the resource limits, the toolchain set, and, on Linux, the workspace of a sandbox can differ from the defaults; binding a host directory on Windows comes with #27.
 
 ## Controller groups
 
@@ -49,10 +49,10 @@ In this version no command reads or writes host state, and none creates these di
 ## Create or start a sandbox
 
 ```sh
-sandboxed-agents up NAME [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE] [--with SET]
+sandboxed-agents up NAME [WORKSPACE] [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE] [--with SET]
 ```
 
-`up` takes one sandbox name, followed by the resource limit options and the toolchain option. Each option is given as `--option VALUE` or `--option=VALUE`, at most once. An option that is not given keeps its default:
+`up` takes one sandbox name, optionally followed by `WORKSPACE`, the host directory to bind as the workspace ([Workspace bind](#workspace-bind)), and then the resource limit options and the toolchain option. `WORKSPACE` is the word directly after the name; a directory whose name starts with `-` is given as `./-dir`. Each option is given as `--option VALUE` or `--option=VALUE`, at most once. An option that is not given keeps its default:
 
 | Option | Limit | Default | Accepted values |
 | --- | --- | --- | --- |
@@ -65,15 +65,16 @@ A `SIZE` is a positive whole number of bytes, optionally followed by one of the 
 
 `--with SET` selects the toolchains built into the sandbox's image: a comma-separated list of toolchain names, or `none` alone for the base image. Without `--with`, a new sandbox uses the base image, as with `--with none`. In this version the only toolchain is `native`, so the valid values are `native` and `none` ([Toolchains](images.md#toolchains)). Order and repetition of names do not matter.
 
-`--help` prints the help of `up`, with the option formats, the defaults, and how to change a limit or the toolchain set, and exits with status 0. It may stand anywhere after `up`, as long as the other words form a valid `up` command line: `up --help`, `up NAME --help`, and `up NAME --memory 16g --help` all print the help. Otherwise `up` reports the usage error instead. `--help` runs no preflight and calls no Podman command.
+`--help` prints the help of `up`, with `WORKSPACE`, the option formats, the defaults, and how to change the workspace, a limit, or the toolchain set, and exits with status 0. It may stand anywhere after `up`, as long as the other words form a valid `up` command line: `up --help`, `up NAME --help`, and `up NAME --memory 16g --help` all print the help. Otherwise `up` reports the usage error instead. `--help` runs no preflight and calls no Podman command.
 
 A usage error prints a message and a usage line on standard error, calls no Podman command, and exits with status 1:
 
 - Without a name, `up` reports the missing sandbox name.
 - The first word is the sandbox name, so an option in its place, other than `--help`, is a usage error.
-- A word after the name that is not an option is reported as an unexpected argument, and an unknown option as an unknown option.
+- The word after the name, when it is not an option, is `WORKSPACE`. A further word that is not an option is reported as an unexpected argument, and an unknown option as an unknown option.
 - A limit option without a value, given twice, or with a value in a format it does not accept is a usage error that names the option.
 - `--with` without a value or given twice is a usage error. So is a value with an unknown or undelivered toolchain name, with an empty name, or with `none` combined with another name; the message lists the valid values.
+- On Windows, any `WORKSPACE` is refused until #27 adds path translation; `up` without `WORKSPACE` creates a workspace volume.
 
 ### Sandbox names
 
@@ -81,19 +82,65 @@ A sandbox name matches `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`: it starts with a letter o
 
 ### What `up` does
 
-1. It checks the command line, the sandbox name, the format of each limit option, and the toolchain names of `--with`.
+1. It checks the command line, the sandbox name, the format of each limit option, and the toolchain names of `--with`. With `WORKSPACE`, it resolves the directory and applies the [workspace guards](#workspace-guards), without any Podman call.
 2. It runs the preflight and prints its lines. On Linux, the preflight's only Podman call is `podman --version`. If a prerequisite is missing, `up` reports `host prerequisites are missing` and exits with status 1. On Windows, the preflight runs read-only queries of the Podman client and the [selected Podman machine](host-prerequisites.md#selected-podman-machine), including commands in the machine through `podman machine ssh`. If a required prerequisite is missing or could not be checked, `up` exits with status 1. Every later Podman call of `up` names that machine with `--connection`, without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY` in its environment, so neither these settings nor another default connection redirect it. When the preflight fails, `up` stops before it looks up, creates, or changes any sandbox object.
 3. It looks up the container and the three volumes of the sandbox by their exact Podman names (see [Podman names and labels](#podman-names-and-labels)) and reads the owner label of each one that exists. It looks at no other container or volume. When no container exists, it also looks up the backup container of an interrupted update and checks the owners of the existing volumes and of the backup container here.
 4. When the container exists, it looks up the backup container now and checks the owners of the container, its volumes, and the backup container together. It refuses to continue on an owner conflict or an interrupted update (see [Refusals](#refusals)).
-5. If the container exists, `up` compares each given limit option and the given toolchain set with the values recorded on the container and refuses on a difference. Otherwise it starts the container when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
+5. If the container exists, `up` compares a given `WORKSPACE` with the workspace recorded on the container and each given limit option and the given toolchain set with the values recorded on the container, and refuses on a difference. Otherwise it starts the container when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
 6. Otherwise `up` creates the sandbox:
    - It makes sure the image for the selected toolchain set exists ([Images](images.md)). Without toolchains, that is the base image: if it does not exist, `up` builds it, as `sandboxed-agents build` does. With toolchains, `up` builds the base image first when it is missing, and then builds the toolchain image when it is missing or not current, that is, when it was not built on the current base image ([Image names and labels](images.md#image-names-and-labels)). When the image exists and is current, `up` builds nothing. It never rebuilds a current image or any image of another toolchain set; that is what `build` is for. The image names contain no controller group, so an image that another controller group built with the same executable counts as existing (ADR-0005).
-   - It creates each of the three volumes that does not exist yet and adopts each one that does (see [Kept volumes](#kept-volumes)). It prints one line per volume, `Created volume NAME.` or `Adopted volume NAME.`.
-   - It creates the container from that image with the defaults below, the given limits, and a label recording the toolchain set, and starts it. A toolchain image is passed to `podman create` by the image ID that `up` inspected and found current, not by its tag; the base image is passed by its tag. When the toolchain tag no longer names an image built on the current base image right after `up` built it, `up` reports that the image changed during its build and stops before it creates a volume or the container.
+   - It creates each of the three volumes that does not exist yet and adopts each one that does (see [Kept volumes](#kept-volumes)). It prints one line per volume, `Created volume NAME.` or `Adopted volume NAME.`. With `WORKSPACE`, it creates no workspace volume, and a kept workspace volume stays unused (see [Workspace bind](#workspace-bind)).
+   - It creates the container from that image with the defaults below, the given limits, a label recording the toolchain set, and the workspace bind when `WORKSPACE` is given, and starts it. A toolchain image is passed to `podman create` by the image ID that `up` inspected and found current, not by its tag; the base image is passed by its tag. When the toolchain tag no longer names an image built on the current base image right after `up` built it, `up` reports that the image changed during its build and stops before it creates a volume or the container.
 
 When the sandbox runs, `up` prints `Sandbox NAME is running.` and exits with status 0. Podman's own output, such as that of a build, passes through.
 
 If a Podman command fails, `up` stops, reports the command and its exit status, and exits with status 1. It does not remove what it created before the failure. Volumes it created carry the owner label, so the next `up` adopts them.
+
+## Workspace bind
+
+On Linux, `up NAME WORKSPACE` binds the host directory `WORKSPACE` at `/workspace` in place of the workspace volume. The home and SSH server state stay named volumes. Agents in the sandbox read and change the files of that directory directly; everything else on the host stays out of their reach (ADR-0003).
+
+`up` resolves `WORKSPACE` before it uses it: a relative path such as `./dir` is resolved against the current directory, and symlinks and `..` components are resolved as the file system resolves them, so `link/..` names the parent of the symlink's target. The bind source in the Podman call is that resolved directory. `up` never creates the directory.
+
+The workspace bind is the only host path that any Podman call of the executable mounts. No call mounts a socket: no host credentials, no SSH-agent socket, no container-engine socket, and no display socket.
+
+### Workspace guards
+
+Before the preflight and without any Podman call, `up` refuses a `WORKSPACE` and exits with status 1 in these cases:
+
+- **Unresolvable path.** A symlink in the workspace or in a protected host path cannot be resolved, for example because of a symlink loop or a missing permission, so `up` cannot rule out a protected host path. The message names the path.
+- **Missing.** The resolved path does not exist or cannot be read. The message names the resolved path.
+- **Not a directory.** The resolved path names a file or anything else that is not a directory. The message names the resolved path.
+- **Protected host path.** The resolved directory equals a protected host path, lies inside one, or contains one. The message names the workspace and the resolved protected host path.
+
+The protected host paths on Linux are:
+
+| Protected host path | Location |
+| --- | --- |
+| The executable | the running executable, as the operating system reports its path |
+| Host state of the controller group | `group-GROUP` of the current group ([Host state](#host-state)) |
+| Host state root | the `sandboxed-agents` directory that holds the `group-GROUP` directories of all groups |
+| System temporary directory | `$TMPDIR`, or `/tmp` when it is not set; `build` and `up` write every build context there |
+| `/tmp` | always, also when `$TMPDIR` names another directory |
+| The SSH directory | `.ssh` in your home directory, `$HOME` |
+
+Each protected host path is resolved like the workspace, so a workspace that reaches one through a symlink, and a protected host path that is itself a symlink into the workspace, are refused. A protected host path that does not exist yet, such as host state before its first use, is resolved through its nearest existing parent and stays protected. Your home directory and `/` contain `~/.ssh` and are therefore refused. Later Stories add protected host paths, such as the npm launcher and its shims (#61).
+
+### Workspace volumes beside a bind
+
+With `WORKSPACE`, `up` creates no workspace volume. A workspace volume kept by an earlier `remove` is neither mounted nor removed; `up` prints `Kept volume NAME unused: the workspace is a bind; remove --volumes deletes it.` with the volume's Podman name. Kept home and SSH server state volumes are adopted as described in [Kept volumes](#kept-volumes). `check NAME` will name the unused volume (#20).
+
+### The workspace is part of the configuration
+
+`up` records the workspace kind, `volume` or `bind`, in a label on the container ([Podman names and labels](#podman-names-and-labels)), and `list` shows it. No label records the bound directory: `up` reads it from the source of the container's `/workspace` mount. `up` never changes the workspace of an existing sandbox:
+
+| Existing sandbox | `up NAME` | `up NAME WORKSPACE` |
+| --- | --- | --- |
+| Workspace volume | starts it | refuses |
+| Bind of the directory `WORKSPACE` resolves to | starts it | starts it |
+| Bind of another directory | starts it | refuses |
+
+A refusal is a workspace conflict (see [Refusals](#refusals)), reported after an owner conflict and an interrupted update. To change the workspace, run `remove NAME`, which keeps the sandbox's volumes and never deletes a bound directory, and then `up NAME` with the new `WORKSPACE`.
 
 ## Podman names and labels
 
@@ -102,7 +149,7 @@ The executable derives every Podman name from the current controller group and t
 | Object | Podman name | Mounted at |
 | --- | --- | --- |
 | Container | `sandboxed-agents.GROUP.NAME` | |
-| Workspace volume | `sandboxed-agents.GROUP.NAME.workspace` | `/workspace` |
+| Workspace volume | `sandboxed-agents.GROUP.NAME.workspace` | `/workspace`, unless `WORKSPACE` binds a host directory there |
 | Home volume | `sandboxed-agents.GROUP.NAME.home` | `/home/agent` |
 | SSH server state volume | `sandboxed-agents.GROUP.NAME.ssh` | `/etc/ssh` |
 | Backup container of an interrupted update | `sandboxed-agents-backup.GROUP.NAME` | |
@@ -117,7 +164,7 @@ The container and the volumes carry these labels:
 | --- | --- | --- |
 | `io.github.sandboxed-agents.owner` | the current controller group | the container and each of the three volumes |
 | `io.github.sandboxed-agents.sandbox-name` | the sandbox name | the container |
-| `io.github.sandboxed-agents.workspace-kind` | `volume` | the container |
+| `io.github.sandboxed-agents.workspace-kind` | `volume`, or `bind` when `WORKSPACE` is given | the container |
 | `io.github.sandboxed-agents.memory` | the memory limit in bytes, `8589934592` by default | the container |
 | `io.github.sandboxed-agents.cpus` | the number of CPUs as a decimal number whose trailing zeros after the point are trimmed, with the point dropped when no decimals remain: `--cpus 1.50` records `1.5`, `--cpus 10.000` records `10`, and `--cpus 10` stays `10`; `4` by default | the container |
 | `io.github.sandboxed-agents.pids-limit` | the process limit, `2048` by default | the container |
@@ -143,7 +190,7 @@ The owner label is the authoritative check: a container or volume with a matchin
 | Processes | `--pids-limit`: 2048, or the value of `--pids-limit` |
 | Shared memory | `--shm-size`: 1 GiB, or the value of `--shm-size` |
 
-A container that `up` creates mounts its three named volumes and nothing else: no host path, no SSH-agent socket, no container-engine socket, and no display socket (ADR-0003). The resource limits need delegated cgroup v2 controllers, which the preflight checks.
+A container that `up` creates mounts its three named volumes, or with `WORKSPACE` the workspace bind and the home and SSH server state volumes, and nothing else: no other host path, no SSH-agent socket, no container-engine socket, and no display socket (ADR-0003). The resource limits need delegated cgroup v2 controllers, which the preflight checks.
 
 A sandbox created by this version does not yet offer:
 
@@ -163,9 +210,9 @@ Root in the container is root only inside the sandbox's user namespace: it maps 
 
 ## Existing sandboxes
 
-When the container of the sandbox exists with the current owner, and no volume or backup container under its names has a missing or different owner, `up` checks the given limit options and the given toolchain set. If none is given, or each one equals the value recorded on the container, `up` starts the container if it is stopped and exits with status 0. If it already runs, `up` exits with status 0 without a change. In both cases it creates, removes, and reconfigures no container or volume, and it does not check or build the image. `up` never changes the configuration of an existing sandbox.
+When the container of the sandbox exists with the current owner, and no volume or backup container under its names has a missing or different owner, `up` checks a given `WORKSPACE` ([The workspace is part of the configuration](#the-workspace-is-part-of-the-configuration)), the given limit options, and the given toolchain set. If none is given, or each one equals the value recorded on the container, `up` starts the container if it is stopped and exits with status 0. If it already runs, `up` exits with status 0 without a change. In both cases it creates, removes, and reconfigures no container or volume, and it does not check or build the image. `up` never changes the configuration of an existing sandbox.
 
-`up`, `start`, and `restart` start an existing container of the current owner as it is. The owner label authorizes them to act on it, but it is not a record of the container's whole configuration. `up` compares only the limit options and the toolchain set you give with their labels. The image, the mounts, the user, the user namespace, the network, and the security options of an existing container are not compared with the [container defaults](#container-defaults). A container that carries the current owner label but was created or changed outside `sandboxed-agents`, which needs access to your Podman, is therefore started with the configuration it has. Comparing that configuration has no Story yet.
+`up`, `start`, and `restart` start an existing container of the current owner as it is. The owner label authorizes them to act on it, but it is not a record of the container's whole configuration. `up` compares only a `WORKSPACE` you give with the recorded workspace, and the limit options and the toolchain set you give with their labels. The image, the other mounts, the user, the user namespace, the network, and the security options of an existing container are not compared with the [container defaults](#container-defaults). A container that carries the current owner label but was created or changed outside `sandboxed-agents`, which needs access to your Podman, is therefore started with the configuration it has. Comparing that configuration has no Story yet.
 
 Only the options you give are compared, and they are compared by value: `--memory 8192m` equals a recorded `8589934592`, and `--cpus 1.50` equals a recorded `1.5`. A limit option that differs from the recorded value is refused (see [Refusals](#refusals)). To change a limit, run `remove NAME` and then `up NAME` with the new value; `up` adopts the kept volumes.
 
@@ -175,7 +222,7 @@ Without limit options and without `--with`, `up` also starts a container that ca
 
 ### Kept volumes
 
-Volumes can outlive their container, for example when the container was removed with `sandboxed-agents remove NAME` or `podman rm`, or when an earlier `up` failed after creating them. When no container of the sandbox exists but some or all of its volumes do, and each of them carries the current owner, `up` adopts them: it creates only the missing volumes and a new container on all three. The files in an adopted volume are kept. The new container gets the given limits and the defaults for the others; the volumes record no limits.
+Volumes can outlive their container, for example when the container was removed with `sandboxed-agents remove NAME` or `podman rm`, or when an earlier `up` failed after creating them. When no container of the sandbox exists but some or all of its volumes do, and each of them carries the current owner, `up` adopts them: it creates only the missing volumes and a new container on all three. The files in an adopted volume are kept. The new container gets the given limits and the defaults for the others; the volumes record no limits. With `WORKSPACE`, a kept workspace volume is not adopted but stays unused ([Workspace volumes beside a bind](#workspace-volumes-beside-a-bind)).
 
 ## Refusals
 
@@ -185,6 +232,7 @@ Volumes can outlive their container, for example when the container was removed 
 - **Interrupted update.** The backup container `sandboxed-agents-backup.GROUP.NAME` exists and carries the current owner. The message names the backup container and `sandboxed-agents update NAME`. This version has no `update` command yet; it comes with a later Story. Until then, `up` refuses such a sandbox.
 - **Limit conflict.** On an existing sandbox, a given limit option differs from the value recorded on the container. The message names the limit, the recorded value as the label stores it (in bytes for memory and shared memory), the given value as you typed it, such as `16g`, and `remove NAME` followed by `up NAME` as the way to change it. When the label of a given limit is missing or unreadable, `up` refuses as well, since it cannot rule out a difference; the message then shows the recorded value as empty or as the unreadable label value. In both cases it also says that `up` without that option starts the sandbox as it is. `remove NAME` without `--volumes` keeps the volumes, and the next `up NAME` with the new value adopts them ([Remove a sandbox](#remove-a-sandbox)).
 - **Toolchain conflict.** On an existing sandbox, the set given with `--with` differs from the set recorded on the container. The message names the recorded set and the given set, each shown as `none` when it is empty, and `update NAME --with ...` as the way to change it. A container without the toolchain label counts as recorded `none`. This version has no `update` command yet; changing the set with it comes with #71. Until then, `remove NAME` followed by `up NAME --with SET` replaces the container and keeps the volumes. `up` issues no build and does not start the sandbox.
+- **Workspace conflict.** On an existing sandbox, `WORKSPACE` resolves to another directory than the source of the container's `/workspace` mount, or is given for a sandbox with a workspace volume. The message names the recorded workspace, the bound directory or the workspace volume, and the given one, says that `up` without `WORKSPACE` starts the sandbox as it is, and names `remove NAME` followed by `up NAME` with the new `WORKSPACE`.
 
 If a Podman lookup itself fails or returns output that `up` cannot read, `up` also stops with status 1, reports the failure with Podman's message, and changes nothing.
 
@@ -194,14 +242,14 @@ If a Podman lookup itself fails or returns output that `up` cannot read, `up` al
 
 | Step | What `up` does at this step |
 | --- | --- |
-| 1. Usage and names | reports an invalid controller group, then a usage error, an invalid sandbox name, a limit option in a format it does not accept, or an invalid toolchain selection, before any Podman call. `--help` ends here and exits with status 0 when the group is valid. |
+| 1. Usage and names | reports an invalid controller group, then a usage error, an invalid sandbox name, a limit option in a format it does not accept, an invalid toolchain selection, or a `WORKSPACE` that the [workspace guards](#workspace-guards) refuse, before any Podman call. `--help` ends here and exits with status 0 when the group is valid. |
 | 2. Preflight | reports a missing host prerequisite. On Windows, it also reports a required prerequisite that could not be checked. |
 | 3. Sandbox existence | looks up the container and the volumes. An unknown name is no failure: it is a sandbox to create. When no container exists, also looks up the backup container and reports an owner conflict on the remaining volumes or the backup container. |
 | 4. Owner | reports an owner conflict on an existing container, its volumes, or the backup container, with all foreign objects in one message |
 | 5. Interrupted update | reports a backup container with the current owner |
-| 7. Preconditions | reports a limit conflict or a toolchain conflict on an existing sandbox |
+| 7. Preconditions | reports a workspace conflict, a limit conflict, or a toolchain conflict on an existing sandbox |
 
-An invalid name, limit value, or toolchain selection is therefore reported ahead of a missing prerequisite, and a missing prerequisite ahead of an owner conflict or a backup container. An owner conflict is reported ahead of an interrupted update, and both ahead of a limit conflict or a toolchain conflict. `up NAME --with nosuch` reports the unknown toolchain even when a prerequisite is missing or `NAME` belongs to another controller group. Images are built only after all checks have passed, when `up` creates the sandbox.
+An invalid name, limit value, toolchain selection, or `WORKSPACE` is therefore reported ahead of a missing prerequisite, and a missing prerequisite ahead of an owner conflict or a backup container. An owner conflict is reported ahead of an interrupted update, and both ahead of a workspace, limit, or toolchain conflict. `up NAME --with nosuch` reports the unknown toolchain even when a prerequisite is missing or `NAME` belongs to another controller group. Images are built only after all checks have passed, when `up` creates the sandbox.
 
 ## Remove a sandbox
 
@@ -249,7 +297,7 @@ In this version the manager always answers with an empty list, because agent ses
 
 An owner-conflict message names each foreign object by its Podman name and points to Podman, where you remove or rename it. A backup container with a missing or different owner is an owner conflict as well. A foreign object is reported ahead of an interrupted update. `remove NAME --volumes` on a sandbox with a foreign volume and no backup container is the only command that acts on a sandbox with an owner conflict; it touches only objects that carry the current owner.
 
-A bound host directory is never deleted, with or without `--volumes`. Binding a host directory as the workspace comes with #26; the workspace volume left unused by such a bind counts as one of the sandbox's volumes.
+A bound host directory is never deleted, with or without `--volumes`, and no Podman call of `remove` names it. A workspace volume left unused beside a bind ([Workspace volumes beside a bind](#workspace-volumes-beside-a-bind)) counts as one of the sandbox's volumes.
 
 ### Order of checks for `remove`
 
@@ -369,7 +417,7 @@ agent02  volumes only  volume     -     -           -       sandboxed-agents.def
 | --- | --- |
 | `NAME` | the sandbox name, not the Podman name |
 | `STATE` | one of the states below |
-| `WORKSPACE` | the workspace kind recorded on the container. Without a container, `volume` when the workspace volume exists, otherwise the kind recorded on the backup container. `-` when it is not known. |
+| `WORKSPACE` | the workspace kind recorded on the container, `volume` or `bind`. Without a container, `volume` when the workspace volume exists, otherwise the kind recorded on the backup container. `-` when it is not known. |
 | `TOOLCHAINS` | the toolchain set recorded on the container, such as `native`. Without a container, the set recorded on the backup container. `-` for a sandbox without toolchains, for a container without the toolchain label, such as one created before the label existed, and when neither a container nor a backup container exists. |
 | `PORT`, `AGENTS` | `-`, meaning "not available". The SSH port comes with #18, and the enabled agents of a running sandbox whose manager answers with #69. |
 | `VOLUMES` | the Podman names of the sandbox's volumes that exist, separated by commas, or `-` when none exists |
@@ -385,4 +433,4 @@ If a Podman call fails or returns output that `list` cannot read, `list` prints 
 
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver alone, because no command uses host state yet. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. The toolchain selection, the image builds of `up`, the toolchain label, and the `TOOLCHAINS` column are covered by a fake `podman` that reports images and their labels. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver alone, because no command uses host state yet. The workspace bind, its guards against protected host paths reached directly or through symlinks, the unused workspace volume, and the workspace conflict are covered on Linux against the fake `podman`, with directories and symlinks in temporary test directories; these tests check the mounts that `up` passes to Podman, not what a real container can reach. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. The toolchain selection, the image builds of `up`, the toolchain label, and the `TOOLCHAINS` column are covered by a fake `podman` that reports images and their labels. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).

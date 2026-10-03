@@ -676,3 +676,60 @@ func TestUpNamesTheUnsupportedWorkspaceHostWithoutCallingItWindows(t *testing.T)
 	}
 	assertNoSSH(t, fakes)
 }
+
+func TestUpBindsWorkspaceWithTheInspectedNativeImageAndLimits(t *testing.T) {
+	fakes := linuxHost(t)
+	directory := workspaceFixture(t)
+	responses := append(upObjectResponses(nil, false, nil, nil),
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:current-base"}]`},
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:validated-native","Labels":{"io.github.sandboxed-agents.base-image":"sha256:current-base"}}]`},
+	)
+	responses = append(responses, make([]testutil.Response, 4)...)
+	fakes.Script("podman", responses...)
+	_, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", directory, "--cpus", "2", "--with", "native")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stderr=%q", status, stderr)
+	}
+	calls := fakes.Calls("podman")
+	create := calls[len(calls)-2].Args
+	if create[len(create)-1] != "sha256:validated-native" {
+		t.Fatalf("create did not use the inspected image: %v", create)
+	}
+	var mounts []string
+	for index, arg := range create {
+		if arg == "--mount" {
+			mounts = append(mounts, create[index+1])
+		}
+	}
+	wantMounts := []string{"type=bind,source=" + directory + ",target=/workspace", "type=volume,source=sandboxed-agents.default.agent01.home,target=/home/agent", "type=volume,source=sandboxed-agents.default.agent01.ssh,target=/etc/ssh"}
+	if !reflect.DeepEqual(mounts, wantMounts) || !strings.Contains(strings.Join(create, "\n"), "io.github.sandboxed-agents.toolchains=native") || !strings.Contains(strings.Join(create, "\n"), "--cpus=2") {
+		t.Fatalf("create=%v", create)
+	}
+	for _, call := range calls {
+		if len(call.Args) > 1 && call.Args[0] == "volume" && call.Args[1] == "create" && call.Args[len(call.Args)-1] == "sandboxed-agents.default.agent01.workspace" {
+			t.Fatalf("created workspace volume: %v", call.Args)
+		}
+	}
+	assertNoSSH(t, fakes)
+}
+
+func TestUpRejectsWorkspaceAfterToolchainOptionsBeforePodman(t *testing.T) {
+	for _, options := range [][]string{{"--with", "native"}, {"--with=native"}, {"--cpus", "2", "--with", "native"}} {
+		t.Run(strings.Join(options, " "), func(t *testing.T) {
+			fakes := linuxHost(t)
+			directory := workspaceFixture(t)
+			args := append([]string{"up", "agent01"}, options...)
+			args = append(args, directory)
+			stdout, stderr, status := runCLI(t, "linux-preflight", args...)
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "unexpected argument") || !strings.Contains(stderr, directory) {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("podman")) != 0 {
+				t.Fatal("workspace after options called Podman")
+			}
+			assertNoSSH(t, fakes)
+		})
+	}
+}

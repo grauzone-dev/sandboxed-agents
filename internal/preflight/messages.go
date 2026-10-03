@@ -1,17 +1,20 @@
 package preflight
 
-const failedMessage = "One or more prerequisites are missing; fix them and run the check again"
+const failedMessage = "One or more required prerequisites are missing or could not be checked"
+const timeoutMessage = "Host prerequisite check timed out waiting for the Podman connection"
 const unsupportedMessage = "Prerequisite checks are not available for this operating system yet"
 
-var messages = map[string][2]string{
-	"windows":         {"Windows 11 x64, build 22000 or later, is required; update Windows on a 64-bit PC", "Windows 11 x64, build 22000 or later"},
-	"client":          {"Podman client %s or later is required; install or update Podman", "Podman client %s or later is installed"},
-	"machine_version": {"Podman machine must run Podman %s or later; upgrade or recreate the machine", "Podman machine runs Podman %s or later"},
-	"running_machine": {"No running Podman machine found; create one with `podman machine init` and start it with `podman machine start`", "A Podman machine is running"},
-	"wsl2":            {"Podman machine must use WSL2; enable WSL2 and recreate the machine with the WSL provider", "Podman machine uses WSL2"},
-	"rootless":        {"Podman machine must run rootless; run `podman machine set --rootful=false` and restart the machine", "Podman machine runs rootless"},
-	"cgroups":         {"Podman machine must use cgroups v2 with cpu, memory and pids delegated; enable delegation of these controllers and restart the machine", "cgroups v2 delegates cpu, memory and pids"},
-	"ssh":             {"ssh was not found on PATH; install the Windows OpenSSH Client and add it to PATH", "ssh is available on PATH"},
-	"ssh_keygen":      {"ssh-keygen was not found on PATH; install the Windows OpenSSH Client and add it to PATH", "ssh-keygen is available on PATH"},
-	"automount":       {"Could not find where Windows drives are mounted in the Podman machine; check the automount settings in its /etc/wsl.conf and restart the machine", "Podman machine reports where Windows drives are mounted"},
+type messageText struct{ Missing, Met, Unknown string }
+
+var messages = map[string]messageText{
+	"windows":         {Missing: "Windows 11 x64, build 22000 or later, is required; update Windows on a 64-bit PC", Met: "Windows 11 x64, build 22000 or later", Unknown: ""},
+	"client":          {Missing: "Podman client %s or later is required; install or update Podman", Met: "Podman client %s or later is installed", Unknown: ""},
+	"machine_version": {Missing: "Podman machine must run Podman %s or later; upgrade or recreate the machine", Met: "Podman machine runs Podman %s or later", Unknown: "Podman machine version could not be determined; it can only be checked on a running Podman machine"},
+	"running_machine": {Missing: "No running Podman machine found; create one with `podman machine init` and start it with `podman machine start`", Met: "A Podman machine is running", Unknown: "Could not determine whether a Podman machine is running"},
+	"wsl2":            {Missing: "Podman machine must use WSL2; enable WSL2 and recreate the machine with the WSL provider", Met: "Podman machine uses WSL2", Unknown: "Could not determine whether the Podman machine uses WSL2"},
+	"rootless":        {Missing: "Podman machine must run rootless; run `podman machine set --rootful=false` and restart the machine", Met: "Podman machine runs rootless", Unknown: "Podman machine rootless mode could not be determined; it can only be checked on a running Podman machine"},
+	"cgroups":         {Missing: "Podman machine must use cgroups v2 with cpu, memory and pids delegated; enable delegation of these controllers and restart the machine", Met: "cgroups v2 delegates cpu, memory and pids", Unknown: "cgroups v2 delegation of cpu, memory and pids could not be determined; it can only be checked on a running Podman machine"},
+	"ssh":             {Missing: "ssh was not found on PATH; install the Windows OpenSSH Client and add it to PATH", Met: "ssh is available on PATH", Unknown: ""},
+	"ssh_keygen":      {Missing: "ssh-keygen was not found on PATH; install the Windows OpenSSH Client and add it to PATH", Met: "ssh-keygen is available on PATH", Unknown: ""},
+	"automount":       {Missing: "Could not find where Windows drives are mounted in the Podman machine; check the automount settings in its /etc/wsl.conf and restart the machine", Met: "Podman machine reports where Windows drives are mounted", Unknown: "WSL automount root could not be determined from the Podman machine; this does not fail the check"},
 }

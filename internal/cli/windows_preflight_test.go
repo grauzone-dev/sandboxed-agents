@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
@@ -61,6 +62,7 @@ func TestCheckRejectsMalformedPodmanVersions(t *testing.T) {
 }
 
 func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
+	missingMessages := map[string]string{}
 	cases := []struct {
 		name    string
 		fixture string
@@ -103,8 +105,6 @@ func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
 		}, missing: "Podman machine must use cgroups v2"},
 		{name: "ssh absent", remove: "ssh", missing: "ssh was not found on PATH"},
 		{name: "ssh-keygen absent", remove: "ssh-keygen", missing: "ssh-keygen was not found on PATH"},
-		{name: "automount unreadable", change: func(r []testutil.Response) { r[5].ExitCode = 1; r[5].Stderr = "Permission denied" }, missing: "Could not find where Windows drives"},
-		{name: "automount disabled", change: func(r []testutil.Response) { r[5].Stdout = "[automount]\nenabled=false\n" }, missing: "Could not find where Windows drives"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -129,6 +129,15 @@ func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
 			if status == 0 || !strings.Contains(stdout, "missing: "+test.missing) || !strings.Contains(stderr, "prerequisites") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
+			if count := strings.Count(stdout, "missing:"); count != 1 {
+				t.Fatalf("host lacks exactly one prerequisite but reported %d: %s", count, stdout)
+			}
+			for _, line := range strings.Split(stdout, "\n") {
+				if strings.HasPrefix(line, "missing:") {
+					missingMessages[test.missing] = line
+				}
+			}
+			assertReadOnlyPodmanCalls(t, fakes.Calls("podman"))
 			if test.name == "stopped machine" || test.name == "missing machine" {
 				for _, call := range fakes.Calls("podman") {
 					if len(call.Args) >= 2 && call.Args[0] == "machine" && call.Args[1] == "ssh" {
@@ -138,6 +147,17 @@ func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
 			}
 		})
 	}
+	seen := map[string]string{}
+	for prerequisite, message := range missingMessages {
+		if previous, duplicate := seen[message]; duplicate {
+			t.Errorf("%q and %q have identical missing-prerequisite message: %s", previous, prerequisite, message)
+		}
+		seen[message] = prerequisite
+	}
+	if len(missingMessages) != 9 {
+		t.Fatalf("covered %d prerequisite messages; want 9", len(missingMessages))
+	}
+
 }
 
 func TestCheckReportsSeveralMissingPrerequisitesTogether(t *testing.T) {
@@ -237,7 +257,12 @@ func TestCheckFailsClosedWhenHostInformationCannotBeRead(t *testing.T) {
 				}
 				fakes.Script("podman", responses...)
 				stdout, stderr, status := runCLI(t, "windows", "check")
-				if status == 0 || !strings.Contains(stdout, "missing: "+probe.message) || stderr == "" {
+				expected := "unknown: " + map[int]string{1: "Could not determine whether a Podman machine", 2: "Could not determine whether a Podman machine", 3: "Podman machine version could not be determined", 4: "cgroups v2 delegation", 5: "WSL automount root could not be determined"}[probe.index]
+				if probe.index == 0 {
+					expected = "missing: " + probe.message
+				}
+				requiredFailure := probe.index != 5
+				if (status != 0) != requiredFailure || !strings.Contains(stdout, expected) || (stderr != "") != requiredFailure {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
 			})
@@ -246,14 +271,14 @@ func TestCheckFailsClosedWhenHostInformationCannotBeRead(t *testing.T) {
 }
 
 func TestCheckRejectsInvalidAutomountConfiguration(t *testing.T) {
-	for _, config := range []string{"[automount\nroot=/custom/\n", "[automount]\nroot=relative\n", "[automount]\nroot=\n", "[automount]\nenabled=maybe\n", "[automount]\nroot=/mnt/\x00\n"} {
+	for _, config := range []string{"[automount\nroot=/custom/\n", "[automount]\nroot=relative\n", "[automount]\nroot=\n", "[automount]\nenabled=maybe\n", "[automount]\nroot=/mnt/\x00\n", "[automount]\nenabled=false\n"} {
 		t.Run(config, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			responses := healthyWindowsPodman()
 			responses[5].Stdout = config
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, "windows", "check")
-			if status == 0 || !strings.Contains(stdout, "missing: Could not find where Windows drives") || stderr == "" {
+			if status != 0 || !strings.Contains(stdout, "unknown: WSL automount root") || stderr != "" {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 		})
@@ -328,5 +353,65 @@ func TestCheckUsesTheSelectedMachineInsteadOfAnotherConnection(t *testing.T) {
 	calls := fakes.Calls("podman")
 	if !reflect.DeepEqual(calls[3].Args, []string{"--connection", "chosen-machine", "version", "--format", "json"}) || !reflect.DeepEqual(calls[4].Args, []string{"--connection", "chosen-machine", "info", "--format", "json"}) || calls[5].Args[2] != "chosen-machine" {
 		t.Fatalf("probed another machine: %v", calls)
+	}
+}
+
+func TestCheckDoesNotInventMissingRequirementsForAStoppedMachine(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := healthyWindowsPodman()[:3]
+	responses[1].Stdout = `[{"Name":"podman-machine-default","Default":true,"Running":false,"VMType":"wsl"}]`
+	responses[2].Stdout = `[{"Name":"podman-machine-default","State":"stopped","Rootful":false}]`
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "windows", "check")
+	if status == 0 || stderr == "" || strings.Count(stdout, "missing:") != 1 || !strings.Contains(stdout, "unknown:") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	for _, incorrectRemedy := range []string{"upgrade or recreate", "set --rootful=false", "enable delegation"} {
+		if strings.Contains(stdout, incorrectRemedy) {
+			t.Errorf("unverified remedy %q in %q", incorrectRemedy, stdout)
+		}
+	}
+}
+
+func TestCheckKeepsUnreadableAutomountInformationSeparateFromRequirements(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := healthyWindowsPodman()
+	responses[5] = testutil.Response{ExitCode: 1, Stderr: "Permission denied"}
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "windows", "check")
+	if status != 0 || stderr != "" || !strings.Contains(stdout, "unknown:") || strings.Contains(stdout, "missing:") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+}
+
+func assertReadOnlyPodmanCalls(t *testing.T, calls []testutil.Call) {
+	t.Helper()
+	for _, call := range calls {
+		args := call.Args
+		if reflect.DeepEqual(args, []string{"--version"}) {
+			continue
+		}
+		if len(args) >= 2 && args[0] == "machine" && (args[1] == "list" || args[1] == "inspect" || args[1] == "ssh") {
+			continue
+		}
+		if len(args) >= 3 && args[0] == "--connection" && (args[2] == "version" || args[2] == "info") {
+			continue
+		}
+		t.Fatalf("check changed host with Podman: %v", args)
+	}
+}
+
+func TestPreflightReportsAnExpiredPodmanCheck(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	fakes.Script("podman", healthyWindowsPodman()...)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	host := platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22000, WindowsWorkstation: true}
+	report := preflight.CheckWindows(ctx, host, platform.Run)
+	if err := report.Err(); err == nil || !strings.Contains(err.Error(), "timed out waiting for the Podman connection") {
+		t.Fatalf("error=%v", err)
+	}
+	if len(fakes.Calls("podman")) != 0 {
+		t.Fatal("expired check executed Podman")
 	}
 }

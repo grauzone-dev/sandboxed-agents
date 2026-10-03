@@ -169,10 +169,7 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 		defer cancel()
 		report := preflight.CheckWindows(ctx, host, platform.Run)
 		for _, result := range report.Results {
-			prefix := "missing"
-			if result.Met {
-				prefix = "ok"
-			}
+			prefix := result.Status
 			if _, err := fmt.Fprintf(invocation.Stdout, "%s: %s\n", prefix, result.Message); err != nil {
 				return err
 			}

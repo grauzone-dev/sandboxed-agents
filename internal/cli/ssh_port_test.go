@@ -531,3 +531,103 @@ func TestRestartRefusesAnSSHPortStillUnavailableAfterStopping(t *testing.T) {
 		})
 	}
 }
+
+func TestUpCombinesNativeImageSelectionWithExplicitSSHPort(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, current := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/current-%t", host.name, current), func(t *testing.T) {
+				port := unusedSSHPort(t)
+				fakes, fixture := resourceLimitHost(t, host.windows)
+				responses := append(upObjectResponses(nil, false, nil, nil),
+					testutil.Response{},
+					testutil.Response{Stdout: `[{"Id":"sha256:current-base"}]`},
+				)
+				if current {
+					responses = append(responses, testutil.Response{})
+				} else {
+					responses = append(responses, testutil.Response{ExitCode: 1}, testutil.Response{})
+				}
+				responses = append(responses, testutil.Response{Stdout: `[{"Id":"sha256:validated-native","Labels":{"io.github.sandboxed-agents.base-image":"sha256:current-base"}}]`})
+				responses = append(responses, make([]testutil.Response, 5)...)
+				scriptResourceLimitObjects(t, fakes, host.windows, responses, nil)
+				stdout, stderr, status := runCLI(t, fixture, "up", "agent01", "--port", strconv.Itoa(port), "--with=native", "--memory", "12g")
+				if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				calls := fakes.Calls("podman")
+				if host.windows {
+					calls = windowsOperationCalls(t, calls[7:], "podman-machine-default")
+				}
+				create := calls[len(calls)-2].Args
+				assertSSHPublication(t, create, port)
+				if create[len(create)-1] != "sha256:validated-native" || !slices.Contains(create, "io.github.sandboxed-agents.toolchains=native") || !slices.Contains(create, "--memory=12884901888") {
+					t.Fatalf("toolchain selection or resource option lost: %v", create)
+				}
+				var builds int
+				for _, call := range calls {
+					if call.Args[0] == "build" {
+						builds++
+					}
+				}
+				wantBuilds := 1
+				if current {
+					wantBuilds = 0
+				}
+				if builds != wantBuilds {
+					t.Fatalf("builds=%d want=%d", builds, wantBuilds)
+				}
+				assertNoSSH(t, fakes)
+			})
+		}
+	}
+}
+
+func TestUpRefusesBusyExplicitSSHPortBeforeSelectedImageWork(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		t.Run(host.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			port := listener.Addr().(*net.TCPAddr).Port
+			fakes, fixture := resourceLimitHost(t, host.windows)
+			scriptResourceLimitObjects(t, fakes, host.windows, upObjectResponses(nil, false, nil, nil), nil)
+			_, stderr, status := runCLI(t, fixture, "up", "agent01", "--with", "native", "--port="+strconv.Itoa(port))
+			if status == 0 || !strings.Contains(stderr, strconv.Itoa(port)) || !strings.Contains(stderr, "unavailable") {
+				t.Fatalf("status=%d stderr=%q", status, stderr)
+			}
+			assertSSHReadOnly(t, fakes)
+		})
+	}
+}
+
+func TestListShowsToolchainsAndRecordedSSHPortTogether(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, backupOnly := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/backup-%t", host.name, backupOnly), func(t *testing.T) {
+				fakes, fixture := resourceLimitHost(t, host.windows)
+				owner := "default"
+				container, backup := &owner, (*string)(nil)
+				state := "running"
+				if backupOnly {
+					container, backup = nil, &owner
+					state = "update interrupted"
+				}
+				responses := listOneSandboxResponses("default", "agent01", container, true, map[string]string{"workspace": owner}, backup)
+				for index := range responses {
+					responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, `"io.github.sandboxed-agents.workspace-kind":"volume","io.github.sandboxed-agents.toolchains":"native","io.github.sandboxed-agents.ssh-port":"2300"`)
+				}
+				if host.windows {
+					responses = append(healthyWindowsPodman()[1:3], responses...)
+				}
+				fakes.Script("podman", responses...)
+				stdout, stderr, status := runCLI(t, fixture, "list")
+				if status != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "agent01 "+state+" volume 2300 native -") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				assertListReadOnly(t, fakes, host.windows)
+			})
+		}
+	}
+}

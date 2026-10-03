@@ -3,7 +3,11 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +15,7 @@ import (
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/cli"
+	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -19,7 +24,7 @@ import (
 
 func TestEnableAgentInstallsThroughTheSandboxManager(t *testing.T) {
 	for _, agent := range []string{"copilot", "claude", "codex", "opencode"} {
-		for _, report := range []string{"Enabled " + agent + " 1.2.3.\n", "Agent " + agent + " is already enabled at 1.2.3.\n"} {
+		for _, report := range []string{"Agent " + agent + " is enabled (version 1.2.3).\n"} {
 			t.Run(agent+"/"+report, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				owned := "default"
@@ -85,19 +90,33 @@ func TestEnableAgentRejectsUndeliveredCatalogEntriesBeforePodman(t *testing.T) {
 }
 
 func TestEnableAgentCanUseAnAdditionalCatalogEntry(t *testing.T) {
-	catalog, err := agentcatalog.Load([]byte(`{"schema_version":1,"entries":[{"name":"fifth","delivered":true,"command":"fifth","install":{"kind":"npm","package":"fifth-agent"}}]}`))
+	entries := []agentcatalog.Entry{}
+	embedded := agentcatalog.Embedded()
+	for _, name := range embedded.Names() {
+		entry, _ := embedded.Find(name)
+		entries = append(entries, entry)
+	}
+	entries = append(entries, agentcatalog.Entry{Name: "fifth", Delivered: true, Command: "fifth", Install: agentcatalog.Install{Kind: "npm", Package: "@example/fifth"}})
+	data, err := json.Marshal(struct {
+		SchemaVersion int                  `json:"schema_version"`
+		Entries       []agentcatalog.Entry `json:"entries"`
+	}{1, entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := agentcatalog.Load(data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
 	responses := sandboxObjectResponses(&owned, true, nil, nil)
-	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Enabled fifth 2.0.0.\n"})
+	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Agent fifth is enabled (version 2.0.0).\n"})
 	fakes.Script("podman", responses...)
 	var stdout, stderr bytes.Buffer
 	status := cli.RunWithCatalog([]string{"agents", "enable", "agent01", "fifth"}, &stdout, &stderr, "fixture", "assets", preflight.Host{Platform: "linux", Run: platform.Run}, catalog)
 	calls := fakes.Calls("podman")
-	if status != 0 || stderr.Len() != 0 || stdout.String() != "Enabled fifth 2.0.0.\n" || len(calls) != len(responses) || !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", "enable", "fifth"}) {
+	if status != 0 || stderr.Len() != 0 || stdout.String() != "Agent fifth is enabled (version 2.0.0).\n" || len(calls) != len(responses) || !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", "enable", "fifth"}) {
 		t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout.String(), stderr.String(), calls)
 	}
 }
@@ -220,13 +239,13 @@ func TestWindowsEnableAgentKeepsManagerCallsOnTheSelectedTarget(t *testing.T) {
 	owned := "default"
 	responses := append([]testutil.Response{}, healthyWindowsPodman()[1:3]...)
 	responses = append(responses, sandboxObjectResponses(&owned, true, nil, nil)...)
-	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Enabled codex 1.2.3.\n"})
+	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Agent codex is enabled (version 1.2.3).\n"})
 	for index := range responses {
 		responses[index].AbsentEnv = []string{"CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY"}
 	}
 	fakes.Script("podman", responses...)
 	stdout, stderr, status := runCLI(t, "windows", "agents", "enable", "agent01", "codex")
-	if status != 0 || stderr != "" || stdout != "Enabled codex 1.2.3.\n" {
+	if status != 0 || stderr != "" || stdout != "Agent codex is enabled (version 1.2.3).\n" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 	calls := fakes.Calls("podman")
@@ -275,4 +294,70 @@ func TestEnableAgentRefusesWhenTheManagerDoesNotAnswer(t *testing.T) {
 			assertNoSSH(t, fakes)
 		})
 	}
+}
+
+func TestEnabledAgentSelectionSurvivesStopAndStart(t *testing.T) {
+	home := t.TempDir()
+	installs := 0
+	runner := func(_ context.Context, r process.Request) (int, error) {
+		installs++
+		path := filepath.Join(home, ".local", "lib", "node_modules", "@openai", "codex", "package.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return 1, err
+		}
+		return 0, os.WriteFile(path, []byte(`{"version":"1.2.3"}`), 0600)
+	}
+	options := manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }}
+	enable := func() {
+		var stdout, stderr bytes.Buffer
+		app := manager.NewWithOptions("test", runner, options)
+		if status := app.Run(context.Background(), []string{"agents", "enable", "codex"}, process.Streams{Stdout: &stdout, Stderr: &stderr}); status != 0 || stdout.String() != "Agent codex is enabled (version 1.2.3).\n" {
+			t.Fatalf("enable status=%d out=%s err=%s", status, &stdout, &stderr)
+		}
+	}
+	enable()
+	selectionPath := filepath.Join(home, ".local", "state", "sandboxed-agents", "selection.json")
+	before, err := os.ReadFile(selectionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakes := testutil.NewFakePrograms(t)
+	owned := "default"
+	responses := sandboxObjectResponses(&owned, true, map[string]string{"home": "default"}, nil)
+	responses = append(responses, testutil.Response{Stdout: "[]\n"}, testutil.Response{})
+	responses = append(responses, sandboxObjectResponses(&owned, false, map[string]string{"home": "default"}, nil)...)
+	responses = append(responses, testutil.Response{})
+	fakes.Script("podman", responses...)
+	for _, command := range []string{"stop", "start"} {
+		_, stderr, status := runCLI(t, "sandbox-host", command, "agent01")
+		if status != 0 || stderr != "" {
+			t.Fatalf("%s status=%d err=%s", command, status, stderr)
+		}
+	}
+	changes := []string{}
+	for _, call := range fakes.Calls("podman") {
+		switch call.Args[0] {
+		case "container", "volume":
+			if call.Args[1] != "exists" && call.Args[1] != "inspect" {
+				t.Fatal("lifecycle changed home objects", call)
+			}
+		case "exec":
+			if !reflect.DeepEqual(call.Args, sessionQueryArgs()) {
+				t.Fatal("unexpected home operation", call)
+			}
+		case "stop", "start":
+			changes = append(changes, call.Args[0])
+		default:
+			t.Fatal(fmt.Sprint("unexpected lifecycle operation: ", call))
+		}
+	}
+	if !reflect.DeepEqual(changes, []string{"stop", "start"}) {
+		t.Fatal(changes)
+	}
+	enable()
+	after, err := os.ReadFile(selectionPath)
+	if err != nil || !bytes.Equal(before, after) || installs != 1 {
+		t.Fatalf("selection changed=%t installs=%d err=%v", !bytes.Equal(before, after), installs, err)
+	}
+	assertNoSSH(t, fakes)
 }

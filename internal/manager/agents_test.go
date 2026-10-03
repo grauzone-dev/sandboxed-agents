@@ -186,7 +186,21 @@ func TestConcurrentEnablesSerializeInstallationAndKeepBothAgents(t *testing.T) {
 }
 
 func TestFifthNpmAgentNeedsOnlyCatalogData(t *testing.T) {
-	catalog, err := agentcatalog.Load([]byte(`{"schema_version":1,"entries":[{"name":"fifth","delivered":true,"command":"fifth","install":{"kind":"npm","package":"@example/fifth"}}]}`))
+	entries := []agentcatalog.Entry{}
+	embedded := agentcatalog.Embedded()
+	for _, name := range embedded.Names() {
+		entry, _ := embedded.Find(name)
+		entries = append(entries, entry)
+	}
+	entries = append(entries, agentcatalog.Entry{Name: "fifth", Delivered: true, Command: "fifth", Install: agentcatalog.Install{Kind: "npm", Package: "@example/fifth"}})
+	data, err := json.Marshal(struct {
+		SchemaVersion int                  `json:"schema_version"`
+		Entries       []agentcatalog.Entry `json:"entries"`
+	}{1, entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := agentcatalog.Load(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +215,19 @@ func TestFifthNpmAgentNeedsOnlyCatalogData(t *testing.T) {
 	var out, diagnostic bytes.Buffer
 	if status := app.Run(context.Background(), []string{"agents", "enable", "fifth"}, process.Streams{Stdout: &out, Stderr: &diagnostic}); status != 0 || !strings.Contains(out.String(), "9.8.7") {
 		t.Fatalf("status=%d out=%s err=%s", status, &out, &diagnostic)
+	}
+	if len(catalog.Names()) != 5 {
+		t.Fatal(catalog.Names())
+	}
+	selection, err := os.ReadFile(filepath.Join(home, ".local", "state", "sandboxed-agents", "selection.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected map[string]struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(selection, &selected); err != nil || selected["fifth"].Version != "9.8.7" {
+		t.Fatalf("selection=%s err=%v", selection, err)
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
-
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
@@ -101,11 +100,8 @@ func Run(ctx context.Context, config Config) (result error) {
 	if err != nil {
 		return err
 	}
-	relativeRecord, err := filepath.Rel(config.Repository, absoluteRecord)
-	if err != nil {
-		return err
-	}
-	if !filepath.IsAbs(relativeRecord) && relativeRecord != ".." && !strings.HasPrefix(relativeRecord, ".."+string(filepath.Separator)) {
+	relativeRecord, relativeErr := filepath.Rel(config.Repository, absoluteRecord)
+	if relativeErr == nil && !filepath.IsAbs(relativeRecord) && relativeRecord != ".." && !strings.HasPrefix(relativeRecord, ".."+string(filepath.Separator)) {
 		statusArgs = append(statusArgs, ":(exclude,literal)"+filepath.ToSlash(relativeRecord))
 	}
 	status, err := run(ctx, process.Request{Name: "git", Args: statusArgs, Streams: process.Streams{Stdout: &dirty, Stderr: config.Stderr}})

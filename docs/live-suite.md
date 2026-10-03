@@ -212,7 +212,11 @@ The offline tests in `internal/livesuite` and `tools/live` run against the fake 
 - a checkout with changes, a failed build, and an output directory that cannot be written: a non-zero exit and no Podman call;
 - a built executable whose `version` does not name the commit: a failing summary;
 - an output directory inside the checkout that Git does not ignore: the run's own summary does not make the checkout count as changed;
-- runs with Linux and Windows 11 host identities, with and without `-images`: no `build` without `-images`, exactly one `podman build` with it, `image_part_ran` `true` only when that `build` succeeded, and `image_coverage_complete` always `false`;
+- a run with a Linux host identity without `-images`: only the Podman calls of `list`, no `build`, and a passing summary;
+- runs with a Windows 11 host identity with `-images`, with `build` succeeding and failing: exactly one `podman build`, `image_part_ran` `true` only when that `build` succeeded, and `image_coverage_complete` always `false`;
+- on Windows only, an output directory on another drive than the checkout: the run passes. Only the Windows CI job runs this test;
 - a failing Podman call whose output holds a user name, a host name, paths, the group variable, a token, a key, an SSH host entry, a host key fingerprint, and a URL: each appears on the console and none in the summary, which holds only the fields of its record.
 
-No offline test reaches real Podman or a real Git checkout. Nothing on this page has been confirmed by a live run on Linux or on Windows 11. A live run is recorded only by the summaries uploaded to a prerelease, separate from the offline result.
+No offline test reaches real Podman or a real Git checkout. Live runs are recorded separately from the offline result, by the summaries uploaded to a prerelease.
+
+The only live run so far is a native Linux run without `-images` in a development environment, with Podman 4.3.1, below the supported minimum of 4.4.0. It built the executable, confirmed its version, and ran `list` against real Podman, which showed no sandboxes. Its summary passed, with `image_part_ran` and `image_coverage_complete` both `false`. That run shows only that the harness reaches real Podman on Linux. No live run has covered a supported host, the image part, or Windows 11, so validating the target platforms remains a task for the maintainer.

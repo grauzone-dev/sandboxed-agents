@@ -394,3 +394,23 @@ func TestCustomSummaryDirectoryDoesNotMakeTheSourceDirty(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 }
+
+func TestWindowsOutputOnAnotherDriveStillRuns(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows volume path handling")
+	}
+	config := fixtureConfig(t)
+	config.Host = platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
+	config.Repository = `D:\source`
+	if strings.EqualFold(filepath.VolumeName(config.OutputDirectory), "D:") {
+		config.Repository = `C:\source`
+	}
+	fakes := testutil.NewFakePrograms(t)
+	fakes.Script("podman", testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "[]"})
+	if err := livesuite.Run(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if summary := readSummary(t, config, "windows-11"); summary.Result != "pass" {
+		t.Fatalf("summary=%+v", summary)
+	}
+}

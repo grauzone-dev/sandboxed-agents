@@ -9,7 +9,7 @@ import (
 
 func TestInvalidControllerGroupFailsEveryCommandBeforeExternalCalls(t *testing.T) {
 	for _, group := range []string{"", "Team", "a.b", "-a", "a/b", "a b"} {
-		for _, args := range [][]string{{"up", "agent01"}, {"up", "--help"}, {"start", "agent01"}, {"stop", "agent01"}, {"restart", "agent01"}, {"remove", "agent01"}, {"shell", "agent01"}, {"list"}, {"build"}, {"check"}, {"version"}} {
+		for _, args := range [][]string{{"up", "agent01"}, {"up", "--help"}, {"start", "agent01"}, {"stop", "agent01"}, {"restart", "agent01"}, {"remove", "agent01"}, {"shell", "agent01"}, {"list"}, {"build"}, {"check"}, {"version"}, {"integrations", "config", "agent01", "git", "--name=N", "--email=E"}, {"integrations", "login", "agent01", "github"}} {
 			t.Run(group+"/"+args[0], func(t *testing.T) {
 				t.Setenv("SANDBOXED_AGENTS_GROUP", group)
 				fakes := testutil.NewFakePrograms(t)

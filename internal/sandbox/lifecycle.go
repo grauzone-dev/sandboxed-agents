@@ -26,15 +26,15 @@ type Lifecycle struct {
 	sessionsKnown bool
 }
 
-func NewLifecycle(name string, action LifecycleAction, force bool, run process.Runner, streams process.Streams) *Lifecycle {
-	return &Lifecycle{sandboxObjects: newSandboxObjects(name, run, streams), stops: action != Start, starts: action != Stop, force: force}
+func NewLifecycle(name, group string, action LifecycleAction, force bool, run process.Runner, streams process.Streams) *Lifecycle {
+	return &Lifecycle{sandboxObjects: newSandboxObjects(name, group, run, streams), stops: action != Start, starts: action != Stop, force: force}
 }
 
 func (lifecycle *Lifecycle) CheckSandbox(ctx context.Context) error {
 	if err := lifecycle.sandboxObjects.CheckSandbox(ctx); err != nil {
 		return err
 	}
-	if lifecycle.containerExists {
+	if lifecycle.containerExists || lifecycle.backupExists {
 		return nil
 	}
 	for _, volume := range lifecycle.volumes {

@@ -15,7 +15,6 @@ const (
 	OwnerLabel         = "io.github.sandboxed-agents.owner"
 	NameLabel          = "io.github.sandboxed-agents.sandbox-name"
 	WorkspaceKindLabel = "io.github.sandboxed-agents.workspace-kind"
-	defaultGroup       = "default"
 )
 
 type volume struct {
@@ -26,6 +25,7 @@ type volume struct {
 }
 
 type sandboxObjects struct {
+	group            string
 	name             string
 	container        string
 	backup           string
@@ -33,6 +33,7 @@ type sandboxObjects struct {
 	run              process.Runner
 	streams          process.Streams
 	containerExists  bool
+	backupChecked    bool
 	backupExists     bool
 	backupOwner      string
 	containerOwner   string
@@ -40,10 +41,10 @@ type sandboxObjects struct {
 	containerLabels  map[string]string
 }
 
-func newSandboxObjects(name string, run process.Runner, streams process.Streams) *sandboxObjects {
-	container := "sandboxed-agents." + defaultGroup + "." + name
+func newSandboxObjects(name, group string, run process.Runner, streams process.Streams) *sandboxObjects {
+	container := "sandboxed-agents." + group + "." + name
 	return &sandboxObjects{
-		name: name, container: container, backup: "sandboxed-agents-backup." + defaultGroup + "." + name,
+		group: group, name: name, container: container, backup: "sandboxed-agents-backup." + group + "." + name,
 		volumes: []volume{
 			{name: container + ".workspace", target: "/workspace"},
 			{name: container + ".home", target: "/home/agent"},
@@ -82,22 +83,28 @@ func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
 		}
 	}
 	if !state.containerExists {
+		if err := state.inspectBackup(ctx); err != nil {
+			return err
+		}
 		return state.checkSandboxOwner()
 	}
 	return nil
 }
 
-func isOwned(owner string) bool { return owner == defaultGroup }
+func (state *sandboxObjects) isOwned(owner string) bool { return owner == state.group }
 
 func (state *sandboxObjects) ownerConflicts() []string {
 	var conflicts []string
-	if state.containerExists && !isOwned(state.containerOwner) {
+	if state.containerExists && !state.isOwned(state.containerOwner) {
 		conflicts = append(conflicts, state.container)
 	}
 	for _, volume := range state.volumes {
-		if volume.exists && !isOwned(volume.owner) {
+		if volume.exists && !state.isOwned(volume.owner) {
 			conflicts = append(conflicts, volume.name)
 		}
+	}
+	if state.backupExists && !state.isOwned(state.backupOwner) {
+		conflicts = append(conflicts, state.backup)
 	}
 	return conflicts
 }
@@ -110,23 +117,16 @@ func (state *sandboxObjects) checkSandboxOwner() error {
 }
 
 func (state *sandboxObjects) CheckOwner(ctx context.Context) error {
-	if err := state.checkSandboxOwner(); err != nil {
-		return err
-	}
-	return state.checkBackupOwner(ctx)
-}
-
-func (state *sandboxObjects) checkBackupOwner(ctx context.Context) error {
 	if err := state.inspectBackup(ctx); err != nil {
 		return err
 	}
-	if state.backupExists && !isOwned(state.backupOwner) {
-		return ownerConflict([]string{state.backup})
-	}
-	return nil
+	return state.checkSandboxOwner()
 }
 
 func (state *sandboxObjects) inspectBackup(ctx context.Context) error {
+	if state.backupChecked {
+		return nil
+	}
 	var err error
 	state.backupExists, err = state.objectExists(ctx, "container", state.backup)
 	if err != nil {
@@ -139,6 +139,7 @@ func (state *sandboxObjects) inspectBackup(ctx context.Context) error {
 		}
 		state.backupOwner = backup.Config.Labels[OwnerLabel]
 	}
+	state.backupChecked = true
 	return nil
 }
 

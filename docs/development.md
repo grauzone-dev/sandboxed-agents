@@ -68,7 +68,7 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
 - **Image build.** Build tests run `sandboxed-agents build` from an empty working directory, with the real embedded assets, against the fake `podman`. The fake copies the build context while the build runs. The tests check that context: the recipe files have LF line endings and the manager is an executable static Linux amd64 binary. They also assert the following:
   - the exact `podman build` call, with its tag, labels, and context directory, and no Podman call besides the preflight's own calls (on Linux, only `--version`);
   - removal of the temporary context directory after a successful and after a failed build;
-  - the same tag from two builds. The test sets `SANDBOXED_AGENTS_GROUP` to a different value for each build, but no command reads that variable yet, because selecting a controller group comes with #21. The test therefore shows that two builds of one executable get the same tag, not that a build in another controller group shares the image;
+  - the same tag from two builds, the first in the controller group `default` and the second in `second-group`, selected through `SANDBOXED_AGENTS_GROUP`;
   - usage errors before the preflight, a stop after a failed preflight, and a stop when the context directory cannot be created.
 
   No offline test runs a real Podman build; #29 validates images against real Podman.
@@ -120,6 +120,25 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
   - failed `exists` lookups of the container, a volume, and the backup container, and `inspect` output that is not JSON, empty, or for another object.
 
   Failures of `podman stop` and `podman start`, including each step of `restart`, check the error message, the last call, and that the command did not report the sandbox's state. Only a `restart` whose `start` fails has already reported the ended sessions. Usage errors and invalid names check that neither `podman` nor `ssh` was called: a missing name, an invalid name, `--force` in place of the name, a second `--force`, `--force` given to `start`, an unknown option, and an extra argument. Every lifecycle test also asserts that `ssh` was never called. No offline test starts a real container.
+- **Controller groups.** The tests in `controller_group_test.go` drive the public CLI as a subprocess against the fake `podman` and `ssh`:
+  - an empty value and each of the invalid group names `Team`, `a.b`, `-a`, `a/b`, and `a b` makes `up`, `up --help`, `start`, `stop`, `restart`, `remove`, `list`, `build`, `check`, and `version` exit non-zero with a message naming the group, with no `podman` or `ssh` call;
+  - `up` with the group `team-a` creates the volumes and the container under `sandboxed-agents.team-a.agent01` with the owner label `team-a`, and no call names the `default` group;
+  - `start`, `stop`, `restart`, and `remove` in `team-a` report an unknown sandbox when no object exists under the `team-a` names, and every call names only those names;
+  - in `team-a`, an owner of `default` on the container, each volume, or the backup container makes `up`, `start`, `stop`, `restart`, and `remove` report an owner conflict that names the foreign object and Podman;
+  - a sandbox of which only the backup container exists, with the current, another, or an empty owner, is refused by the same five commands with `update agent01` or an owner conflict;
+  - a foreign container, two foreign volumes, and a foreign backup container are named together in one owner conflict by the same five commands, without a mention of the interrupted update;
+  - `up agent01` runs twice against one fake `podman`, first in `default` and then in `team-a`, each from its own empty working directory, and the two `create` calls name `sandboxed-agents.default.agent01` and `sandboxed-agents.team-a.agent01`. This shows that the group comes from the variable and not from the working directory. Both runs use the same test executable, so the tests do not vary its install location.
+
+  These tests assert read-only Podman calls on every refusal and that `ssh` was never called. The host state resolver `controller.StateDirectory` has its own tests in `internal/controller/group_test.go`: separate `group-GROUP` directories for `default`, `team-a`, `con`, and `nul` on Linux and Windows without creating them, the fallback to `~/.local/state` for an unset or relative `XDG_STATE_HOME`, and refusals of an invalid group and of an empty or relative `LOCALAPPDATA`. No command calls the resolver yet.
+- **List.** The tests in `list_test.go` script the fake `podman` answers for `ps --all --format json`, `volume ls --format json`, and the `inspect` calls, and compare the whole printed table, with whitespace normalized:
+  - rows only for the current group, sorted by sandbox name, with `-` in `PORT`, `TOOLCHAINS`, and `AGENTS`, and only the header without sandboxes;
+  - `volumes only` for each nonempty subset of volumes, including sandbox names that end in `.workspace`, `.home`, `.ssh`, or `.backup` or contain more dots, with the workspace kind `volume` only when the workspace volume exists;
+  - `owner conflict` for an empty or other owner on the container, each volume, or the backup container, with and without a container, ahead of `update interrupted`, which is shown with and without a container and when only the backup container remains, and never as a row of its own;
+  - the group `team-a` on the Linux and the Windows fixture. On Windows the machine is selected first, and every later call carries `--connection` without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY`;
+  - an owned container that was renamed with Podman, listed under its `sandbox-name` label;
+  - failed, malformed, `null`, duplicate, or incomplete inventory and `inspect` answers, which make `list` exit non-zero with nothing on standard output.
+
+  Every `list` test asserts that its only Podman calls are `ps`, `volume ls`, and `container` or `volume` `inspect`, so `list` asks no manager, and that `ssh` was never called.
 - **Podman target on Windows.** These tests are in `windows_target_test.go` and use a fake Windows host identity, so they run on the Linux and the Windows CI job alike.
   - `build`, `up`, `start`, `stop`, `restart`, and `remove` succeed for a default machine among two and for a sole machine that is not marked as default. Each case runs four times: with `CONTAINER_CONNECTION`, with `CONTAINER_HOST`, with both and `CONTAINER_SSHKEY`, and with none of them set to a value. None of the three variables reaches a Podman call. Every call after the preflight or the selection, the session query included, starts with `--connection` and the selected machine.
   - For `stop`, `restart`, and `remove` on a running sandbox, an owner conflict, running sessions, and a manager that does not answer are refused. The only calls after the selection are lookups and the session query on the selected machine. An owner conflict issues no session query.
@@ -160,6 +179,8 @@ A command declares its checks in `cli.Checks`. The tree runs them in this order 
 9. session guard
 
 A command can also set `Prepare`, which runs after the terminal check and before the session guard. It is for work that must finish before the guard, such as the builds `update` will run; no shipped command uses it yet. Nothing runs between the session guard and the command's action.
+
+The tree itself can set `Usage`, which runs for every command once the command name is recognized, before the command's `Help` and its own usage check. The executable uses it to read and validate the controller group, so an invalid group fails every command at step 1, also with `--help`.
 
 A command can also set `Help`. When its arguments contain `--help`, the tree runs `Help` in place of the usage check and stops: no later check, including the preflight, and no action runs. An error from `Help` is reported as a usage failure.
 

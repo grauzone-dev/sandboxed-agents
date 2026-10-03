@@ -19,6 +19,16 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
+func TestMain(m *testing.M) {
+	if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "" {
+		if err := os.Unsetenv("SANDBOXED_AGENTS_GROUP"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
+
 func TestVersionPrintsVersionAndAssetHash(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	stdout, stderr, status := runCLI(t, "production", "version")

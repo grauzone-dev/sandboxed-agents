@@ -1,10 +1,50 @@
 # Sandboxes
 
-A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)). `stop`, `start`, and `restart` change whether an existing sandbox runs and keep everything else ([Stop, start, and restart a sandbox](#stop-start-and-restart-a-sandbox)).
+A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)). `stop`, `start`, and `restart` change whether an existing sandbox runs and keep everything else ([Stop, start, and restart a sandbox](#stop-start-and-restart-a-sandbox)). `sandboxed-agents list` shows the sandboxes of the current controller group ([List sandboxes](#list-sandboxes)).
 
 `up` first runs the preflight for the host operating system: the Linux preflight on Linux and the Windows preflight on Windows ([Host prerequisites](host-prerequisites.md)). On any other operating system, the preflight reports that no prerequisite check is available, and `up` stops before it looks up or creates anything.
 
-In this version every sandbox belongs to the controller group `default`, and only the resource limits can differ from the defaults. Selecting another controller group comes with #21, and binding a host directory as the workspace with #26.
+Every command acts only on the sandboxes of the current [controller group](#controller-groups). Only the resource limits of a sandbox can differ from the defaults; binding a host directory as the workspace comes with #26.
+
+## Controller groups
+
+A controller group is the namespace the executable manages. The environment variable `SANDBOXED_AGENTS_GROUP` selects it:
+
+- When the variable is not set, the group is `default`.
+- When it is set, its value is the group. A group name matches `^[a-z0-9][a-z0-9-]*$`: lowercase letters, digits, and `-`, starting with a letter or digit. An empty value is invalid, as are values such as `Team`, `a.b`, or `-a`.
+
+Every command checks the group first, after it has recognized the command name: `up`, `remove`, `start`, `stop`, `restart`, `list`, `build`, `check`, and `version`, also with `--help`. An invalid group makes the command print an `invalid controller group` message, which names the value and the pattern, and the usage line on standard error and exit with status 1, before it runs Podman or any other program.
+
+The group does not depend on where the executable is installed. Two installed copies with the same value of the variable manage the same sandboxes, and one copy run with two values manages two separate groups.
+
+### One namespace per group
+
+`up` writes the current group into the Podman names of the container and the volumes and into their owner label ([Podman names and labels](#podman-names-and-labels)). Two groups can each hold a sandbox of the same name, for example `sandboxed-agents.default.agent01` and `sandboxed-agents.team-a.agent01`.
+
+A command looks for a sandbox only under the current group's Podman names. A sandbox of another group is therefore unknown to it: `stop`, `start`, and `restart` report `sandbox NAME does not exist in this controller group`, `remove` reports that no sandbox named `NAME` exists, and `up` creates a new sandbox of that name in the current group. `list` shows no row for it.
+
+Images are shared by all groups: their names contain no controller group ([Images](images.md)). `build` and `check` validate the group and otherwise do not use it.
+
+### Owners and backup containers
+
+Every command that takes a sandbox name checks the owner label of the container and of all three volumes under the sandbox's Podman names, and of the backup container `sandboxed-agents-backup.GROUP.NAME`. A missing owner label, or one that names another group, is an owner conflict, also when the container carries the current owner and only a volume or the backup container does not. The command refuses, names every foreign object in one message by its Podman name, and points to Podman, where you remove or rename it. No command repairs or adopts a foreign object. The only exception is `remove NAME --volumes` on a sandbox whose own container carries the current owner and that has no backup container: it removes the container and the owned volumes, keeps each foreign volume, names it, and exits with status 1 ([Owners and kept volumes](#owners-and-kept-volumes)).
+
+A backup container with the current owner marks an interrupted update. Every command that takes a sandbox name refuses such a sandbox and names `sandboxed-agents update NAME`; `update` comes with a later Story. The owner check comes first: when a backup container sits beside a foreign object, or is itself foreign, the command reports the owner conflict and not the interrupted update.
+
+A backup container is not a sandbox of its own: `list` shows it as the state of the sandbox it belongs to. A sandbox of which only the backup container exists, with no container and no volume under its own names, still counts as known. Every command that takes its name refuses it: with an owner conflict when the backup container is foreign, otherwise with the interrupted update and `sandboxed-agents update NAME`.
+
+When the sandbox has no container, the commands look up the backup container already at the sandbox existence step (step 3) and report an owner conflict on the remaining volumes or the backup container there. When the container exists, they report it at the owner step (step 4).
+
+### Host state
+
+Host state is per-group data the executable keeps outside Podman, in the operating system's state directory. Each group has its own directory, named `group-GROUP` on every platform, for example `group-con`. The prefix keeps the directory name valid on Windows also for group names that Windows reserves for devices, such as `con` or `nul` (ADR-0005).
+
+| Platform | Directory |
+| --- | --- |
+| Linux | `$XDG_STATE_HOME/sandboxed-agents/group-GROUP` when `XDG_STATE_HOME` is an absolute path, otherwise `~/.local/state/sandboxed-agents/group-GROUP` |
+| Windows | `%LOCALAPPDATA%\sandboxed-agents\group-GROUP` |
+
+In this version no command reads or writes host state, and none creates these directories. Later Stories keep the keys and configuration of an SSH setup there (#19). On Windows, a command that needs host state will fail when `LOCALAPPDATA` is not set or is not an absolute path.
 
 ## Create or start a sandbox
 
@@ -40,8 +80,8 @@ A sandbox name matches `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`: it starts with a letter o
 
 1. It checks the command line, the sandbox name, and the format of each limit option.
 2. It runs the preflight and prints its lines. On Linux, the preflight's only Podman call is `podman --version`. If a prerequisite is missing, `up` reports `host prerequisites are missing` and exits with status 1. On Windows, the preflight runs read-only queries of the Podman client and the [selected Podman machine](host-prerequisites.md#selected-podman-machine), including commands in the machine through `podman machine ssh`. If a required prerequisite is missing or could not be checked, `up` exits with status 1. Every later Podman call of `up` names that machine with `--connection`, without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY` in its environment, so neither these settings nor another default connection redirect it. When the preflight fails, `up` stops before it looks up, creates, or changes any sandbox object.
-3. It looks up the container and the three volumes of the sandbox by their exact Podman names (see [Podman names and labels](#podman-names-and-labels)) and reads the owner label of each one that exists. It looks at no other container or volume. When no container exists but volumes do, it checks the owners of those volumes here.
-4. It checks the owners of an existing container and its volumes, and then looks up the backup container of an interrupted update and checks its owner. It refuses to continue on an owner conflict or an interrupted update (see [Refusals](#refusals)).
+3. It looks up the container and the three volumes of the sandbox by their exact Podman names (see [Podman names and labels](#podman-names-and-labels)) and reads the owner label of each one that exists. It looks at no other container or volume. When no container exists, it also looks up the backup container of an interrupted update and checks the owners of the existing volumes and of the backup container here.
+4. When the container exists, it looks up the backup container now and checks the owners of the container, its volumes, and the backup container together. It refuses to continue on an owner conflict or an interrupted update (see [Refusals](#refusals)).
 5. If the container exists, `up` compares each given limit option with the value recorded on the container and refuses on a difference. Otherwise it starts the container when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
 6. Otherwise `up` creates the sandbox:
    - If the base image does not exist, it builds it first, as `sandboxed-agents build` does ([Images](images.md)). It never rebuilds an existing image; that is what `build` is for. The image name contains no controller group, so an image that another controller group built with the same executable counts as existing (ADR-0005).
@@ -54,15 +94,17 @@ If a Podman command fails, `up` stops, reports the command and its exit status, 
 
 ## Podman names and labels
 
-The executable derives every Podman name from the controller group and the sandbox name (ADR-0005). For the sandbox `NAME` in the `default` group:
+The executable derives every Podman name from the current controller group and the sandbox name (ADR-0005). For the sandbox `NAME` in the group `GROUP`, which is `default` when `SANDBOXED_AGENTS_GROUP` is not set:
 
 | Object | Podman name | Mounted at |
 | --- | --- | --- |
-| Container | `sandboxed-agents.default.NAME` | |
-| Workspace volume | `sandboxed-agents.default.NAME.workspace` | `/workspace` |
-| Home volume | `sandboxed-agents.default.NAME.home` | `/home/agent` |
-| SSH server state volume | `sandboxed-agents.default.NAME.ssh` | `/etc/ssh` |
-| Backup container of an interrupted update | `sandboxed-agents-backup.default.NAME` | |
+| Container | `sandboxed-agents.GROUP.NAME` | |
+| Workspace volume | `sandboxed-agents.GROUP.NAME.workspace` | `/workspace` |
+| Home volume | `sandboxed-agents.GROUP.NAME.home` | `/home/agent` |
+| SSH server state volume | `sandboxed-agents.GROUP.NAME.ssh` | `/etc/ssh` |
+| Backup container of an interrupted update | `sandboxed-agents-backup.GROUP.NAME` | |
+
+A group name contains no dot, so a Podman name splits unambiguously into the prefix, the group, and the sandbox name.
 
 A volume name is the container name followed by one more dot component, `workspace`, `home`, or `ssh`, which names the role of the volume. The role names contain no dot, so the last component always identifies the role, and everything before it is the container name of exactly one sandbox. Sandbox names may contain dots, but two different sandbox names never yield the same volume name. For example, the sandbox `a.home` has the volumes `sandboxed-agents.default.a.home.workspace`, `….a.home.home`, and `….a.home.ssh`, none of which is a volume of the sandbox `a`.
 
@@ -70,7 +112,7 @@ The container and the volumes carry these labels:
 
 | Label | Value | Carried by |
 | --- | --- | --- |
-| `io.github.sandboxed-agents.owner` | the controller group, `default` in this version | the container and each of the three volumes |
+| `io.github.sandboxed-agents.owner` | the current controller group | the container and each of the three volumes |
 | `io.github.sandboxed-agents.sandbox-name` | the sandbox name | the container |
 | `io.github.sandboxed-agents.workspace-kind` | `volume` | the container |
 | `io.github.sandboxed-agents.memory` | the memory limit in bytes, `8589934592` by default | the container |
@@ -135,7 +177,7 @@ Volumes can outlive their container, for example when the container was removed 
 `up` refuses to act, exits with status 1, and creates and changes nothing in these cases:
 
 - **Owner conflict.** The container, one of the three volumes, or the backup container exists under the sandbox's Podman name, and its owner label is missing or names another controller group. This includes a container with the current owner when one of its volumes does not have it. The message starts with `owner conflict`, names every such object, and points to Podman: remove or rename each foreign object there. `up` repairs and adopts nothing.
-- **Interrupted update.** The backup container `sandboxed-agents-backup.default.NAME` exists and carries the current owner. The message names the backup container and `sandboxed-agents update NAME`. This version has no `update` command yet; it comes with a later Story. Until then, `up` refuses such a sandbox.
+- **Interrupted update.** The backup container `sandboxed-agents-backup.GROUP.NAME` exists and carries the current owner. The message names the backup container and `sandboxed-agents update NAME`. This version has no `update` command yet; it comes with a later Story. Until then, `up` refuses such a sandbox.
 - **Limit conflict.** On an existing sandbox, a given limit option differs from the value recorded on the container. The message names the limit, the recorded value as the label stores it (in bytes for memory and shared memory), the given value as you typed it, such as `16g`, and `remove NAME` followed by `up NAME` as the way to change it. When the label of a given limit is missing or unreadable, `up` refuses as well, since it cannot rule out a difference; the message then shows the recorded value as empty or as the unreadable label value. In both cases it also says that `up` without that option starts the sandbox as it is. `remove NAME` without `--volumes` keeps the volumes, and the next `up NAME` with the new value adopts them ([Remove a sandbox](#remove-a-sandbox)).
 
 If a Podman lookup itself fails or returns output that `up` cannot read, `up` also stops with status 1, reports the failure with Podman's message, and changes nothing.
@@ -146,10 +188,10 @@ If a Podman lookup itself fails or returns output that `up` cannot read, `up` al
 
 | Step | What `up` does at this step |
 | --- | --- |
-| 1. Usage and names | reports a usage error, an invalid sandbox name, or a limit option in a format it does not accept, before any Podman call. `--help` ends here and exits with status 0. |
+| 1. Usage and names | reports an invalid controller group, then a usage error, an invalid sandbox name, or a limit option in a format it does not accept, before any Podman call. `--help` ends here and exits with status 0 when the group is valid. |
 | 2. Preflight | reports a missing host prerequisite. On Windows, it also reports a required prerequisite that could not be checked. |
-| 3. Sandbox existence | looks up the container and the volumes. An unknown name is no failure: it is a sandbox to create. When only volumes of the sandbox remain, reports an owner conflict on those volumes. |
-| 4. Owner | reports an owner conflict on an existing container or its volumes, then on the backup container |
+| 3. Sandbox existence | looks up the container and the volumes. An unknown name is no failure: it is a sandbox to create. When no container exists, also looks up the backup container and reports an owner conflict on the remaining volumes or the backup container. |
+| 4. Owner | reports an owner conflict on an existing container, its volumes, or the backup container, with all foreign objects in one message |
 | 5. Interrupted update | reports a backup container with the current owner |
 | 7. Preconditions | reports a limit conflict on an existing sandbox |
 
@@ -175,7 +217,7 @@ sandboxed-agents remove NAME [--volumes] [--force]
 Before it stops a running sandbox, `remove` asks the manager in the container for the running agent sessions:
 
 ```sh
-podman exec --user=0:0 sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager sessions list
 ```
 
 On Windows, the call also names the selected Podman machine with `--connection`. The manager answers with a JSON array of objects, one per running session, each with a non-empty `name` and a non-empty `agent` string. `remove` names each session as `AGENT/NAME`. If the query fails, returns no such array, or does not finish within 5 seconds, the manager counts as not answering. A stopped sandbox has no running sessions, so `remove` does not ask.
@@ -187,13 +229,13 @@ In this version the manager always answers with an empty list, because agent ses
 
 ### Owners and kept volumes
 
-`remove` checks the owner label of the container and of all three volumes, like `up` ([Podman names and labels](#podman-names-and-labels)). On a refusal it exits with status 1 and stops, removes, or changes nothing.
+`remove` checks the owner label of the container, of all three volumes, and of the backup container, like `up` ([Podman names and labels](#podman-names-and-labels)). On a refusal it exits with status 1 and stops, removes, or changes nothing.
 
 | Situation | `remove NAME` | `remove NAME --volumes` |
 | --- | --- | --- |
-| Neither the container nor a volume exists | refuses: the sandbox is unknown | refuses: the sandbox is unknown |
+| Neither the container, a volume, nor the backup container exists | refuses: the sandbox is unknown | refuses: the sandbox is unknown |
 | The container has a missing or different owner | refuses with an owner conflict | refuses with an owner conflict |
-| The backup container `sandboxed-agents-backup.default.NAME` exists with the current owner, and no object is foreign | refuses and names `sandboxed-agents update NAME` | refuses and names `sandboxed-agents update NAME` |
+| The backup container `sandboxed-agents-backup.GROUP.NAME` exists with the current owner, and no object is foreign | refuses and names `sandboxed-agents update NAME` | refuses and names `sandboxed-agents update NAME` |
 | The container has the current owner, a volume does not, and no backup container exists | refuses with an owner conflict | removes the container and the owned volumes, keeps the other volume, names it, points to Podman to remove or rename it, and exits with status 1 |
 | A volume has a missing or different owner, and a backup container exists | refuses with an owner conflict | refuses with an owner conflict, also with `--force` |
 | No container, and only volumes with the current owner remain | reports that no container exists, names `remove NAME --volumes`, deletes nothing, and exits with status 0 | deletes those volumes, names each, and exits with status 0 |
@@ -209,8 +251,8 @@ A bound host directory is never deleted, with or without `--volumes`. Binding a 
 
 | Step | What `remove` does at this step |
 | --- | --- |
-| 1. Usage and names | reports a usage error or an invalid sandbox name, before any Podman call |
-| 3. Sandbox existence | reports an unknown sandbox. When only volumes remain, checks their owners. |
+| 1. Usage and names | reports an invalid controller group, then a usage error or an invalid sandbox name, before any Podman call |
+| 3. Sandbox existence | reports an unknown sandbox, also for a sandbox of another controller group. When no container exists, looks up the backup container and checks the owners of the remaining volumes and of the backup container. |
 | 4. Owner | checks the owners of the container, the volumes, and the backup container, and reports all foreign objects together in one owner conflict. With `--volumes`, an owned container, and no backup container, a foreign volume is kept instead of reported here. |
 | 5. Interrupted update | reports a backup container with the current owner when no object is foreign |
 | 7. Preconditions | on a running sandbox, reports a manager that does not answer, unless `--force` is given |
@@ -254,9 +296,9 @@ Each command takes exactly one sandbox name. As with `up`, the first word is alw
 ### What `stop`, `start`, and `restart` do
 
 1. They check the command line and the sandbox name. On Windows, they then select the Podman machine ([Target on Windows](#target-on-windows)).
-2. They look up the container and the three volumes of the sandbox by their exact Podman names, as `up` does, and read the owner label of each one that exists and whether the container is running.
-3. When neither the container nor any of the three volumes exists, the command reports `sandbox NAME does not exist in this controller group` and exits with status 1. When no container exists but some or all of the volumes do, the name is known, but there is no container to act on: if one of those volumes has a missing or different owner, the command reports that owner conflict; otherwise it reports `sandbox NAME has no container; run sandboxed-agents up NAME, which adopts its volumes`. Either way it exits with status 1 and changes nothing.
-4. They check the owners of the container and of every existing volume, then look up the backup container and check its owner (see [Refusals](#refusals)).
+2. They look up the container and the three volumes of the sandbox by their exact Podman names, as `up` does, and read the owner label of each one that exists and whether the container is running. When no container exists, they also look up the backup container.
+3. When neither the container, a volume, nor the backup container exists, the command reports `sandbox NAME does not exist in this controller group` and exits with status 1. When no container exists, an owner conflict on the remaining volumes or the backup container is reported here. When only owned volumes remain, with no backup container, the name is known, but there is no container to act on: the command reports `sandbox NAME has no container; run sandboxed-agents up NAME, which adopts its volumes`. Either way it exits with status 1 and changes nothing. A backup container with the current owner, with or without volumes, is reported in step 5.
+4. When the container exists, they look up the backup container and check the owners of the container, every existing volume, and the backup container together (see [Owners and backup containers](#owners-and-backup-containers)).
 5. They refuse a sandbox with a backup container of an interrupted update and name `sandboxed-agents update NAME`.
 6. They act on the running state of the container, as the table above shows. `stop` and `restart` on a running sandbox first pass the [session guard](#session-guard).
 
@@ -269,7 +311,7 @@ If a Podman command fails, the command stops, reports the Podman command and its
 Before `stop` or `restart` stops a running container, it asks the in-container manager for the running agent sessions:
 
 ```sh
-podman exec --user=0:0 sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager sessions list
 ```
 
 The manager answers when this command exits with status 0 within 30 seconds and prints exactly one JSON array on standard output. Each element is an object whose `name` and `agent` are strings that are not empty or only whitespace: the name of a running agent session and the agent it runs, for example `[{"name":"main","agent":"claude"}]`. An empty array means that no agent session runs. Anything else counts as no answer, including a partly valid array.
@@ -292,15 +334,48 @@ These commands run their checks in the order described in [Development](developm
 
 | Step | What the command does at this step |
 | --- | --- |
-| 1. Usage and names | reports a usage error or an invalid sandbox name, before any Podman call |
-| 3. Sandbox existence | reports an unknown sandbox name. When only volumes of the sandbox remain, reports an owner conflict on those volumes or, if they all carry the current owner, that no container exists. |
-| 4. Owner | reports an owner conflict on the container or its volumes, then on the backup container |
+| 1. Usage and names | reports an invalid controller group, then a usage error or an invalid sandbox name, before any Podman call |
+| 3. Sandbox existence | reports an unknown sandbox name, also for a sandbox of another controller group. When no container exists, reports an owner conflict on the remaining volumes or the backup container or, when only owned volumes and no backup container remain, that no container exists. |
+| 4. Owner | reports an owner conflict on the container, its volumes, or the backup container, with all foreign objects in one message |
 | 5. Interrupted update | reports a backup container with the current owner |
 | 7. Preconditions | `stop` and `restart` on a running sandbox without `--force`: reports that the manager did not answer |
 | 9. Session guard | `stop` and `restart` on a running sandbox without `--force`: reports the running agent sessions |
 
 The preflight (step 2), the running-state check (step 6), and the terminal check (step 8) do not apply to these commands. On Windows, the machine selection adds no step: it runs after step 1 and before step 3, and a failed selection is reported before an unknown sandbox, an owner conflict, or an interrupted update. The same holds for `remove`. A sandbox with running agent sessions and an owner conflict or a backup container is therefore refused for the owner or the interrupted update, and the manager is not asked.
 
+## List sandboxes
+
+```sh
+sandboxed-agents list
+```
+
+`list` takes no arguments; an extra word is a usage error and calls no Podman command. It runs no preflight. On Windows it first selects the Podman machine, as `stop` does ([Target on Windows](#target-on-windows)). It only reads: it runs `podman ps --all`, `podman volume ls`, and `podman container inspect` or `podman volume inspect` for each object it shows. It asks no manager and opens no SSH connection.
+
+`list` prints one row per sandbox of the current controller group, sorted by sandbox name:
+
+```text
+NAME     STATE         WORKSPACE  PORT  TOOLCHAINS  AGENTS  VOLUMES
+agent01  running       volume     -     -           -       -
+agent02  volumes only  volume     -     -           -       sandboxed-agents.default.agent02.home,sandboxed-agents.default.agent02.workspace
+```
+
+| Column | Content |
+| --- | --- |
+| `NAME` | the sandbox name, not the Podman name |
+| `STATE` | one of the states below |
+| `WORKSPACE` | the workspace kind recorded on the container. Without a container, `volume` when the workspace volume exists, otherwise the kind recorded on the backup container. `-` when it is not known. |
+| `PORT`, `TOOLCHAINS`, `AGENTS` | `-`, meaning "not available". The SSH port comes with #18, the toolchains with #28, and the enabled agents of a running sandbox whose manager answers with #69. |
+| `VOLUMES` | the Podman names of the sandbox's volumes that exist, separated by commas, or `-` when none exists |
+
+A sandbox is shown when a container, a backup container, or a volume exists under the current group's Podman names ([Podman names and labels](#podman-names-and-labels)). A container that carries the current group in its owner label is also shown when it was renamed with Podman, under the sandbox name from its `sandbox-name` label; the other commands look only under the exact Podman names and do not find such a container. A sandbox of another group gets no row. Without any sandbox, `list` prints only the header line. Each sandbox gets one row in the first state that applies:
+
+1. `owner conflict`: the container, a volume, or the backup container under the sandbox's Podman names has a missing owner label or one that names another group.
+2. `update interrupted`: a backup container exists, with or without a container under the sandbox's own name. A backup container never gets a row of its own.
+3. `volumes only`: no container exists, but some or all of the three volumes do.
+4. `running` or `stopped`: the state of the container.
+
+If a Podman call fails or returns output that `list` cannot read, `list` prints no table, reports the failure, and exits with status 1.
+
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver alone, because no command uses host state yet. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).

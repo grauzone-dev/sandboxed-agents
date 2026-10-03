@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/controller"
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
@@ -46,6 +47,7 @@ type Command struct {
 }
 
 type Tree struct {
+	Usage    Handler
 	Name     string
 	Commands []Command
 }
@@ -80,6 +82,11 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 		return tree.failure(stderr, path, errors.New("missing command"), true)
 	}
 	invocation := &Invocation{Args: args, Stdout: stdout, Stderr: stderr}
+	if tree.Usage != nil {
+		if err := tree.Usage(invocation); err != nil {
+			return tree.failure(stderr, path, err, true)
+		}
+	}
 	if selected.Help != nil && slices.Contains(args, "--help") {
 		if err := selected.Help(invocation); err != nil {
 			return tree.failure(stderr, path, err, true)
@@ -147,7 +154,7 @@ func unexpectedArgument(arg string) error {
 	return fmt.Errorf("%s %q", message, arg)
 }
 
-func upCommand(assetHash string, run process.Runner, check Handler) Command {
+func upCommand(assetHash string, group *string, run process.Runner, check Handler) Command {
 	ctx := context.Background()
 	var up *sandbox.Up
 	return Command{Name: "up", Checks: Checks{
@@ -162,7 +169,7 @@ func upCommand(assetHash string, run process.Runner, check Handler) Command {
 			if err != nil {
 				return err
 			}
-			up = sandbox.NewUp(invocation.Args[0], assetHash, limits, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Preflight:         check,
@@ -185,7 +192,7 @@ func upCommand(assetHash string, run process.Runner, check Handler) Command {
 	}}
 }
 
-func lifecycleCommand(action sandbox.LifecycleAction, run process.Runner) Command {
+func lifecycleCommand(action sandbox.LifecycleAction, group *string, run process.Runner) Command {
 	name := string(action)
 	ctx := context.Background()
 	var lifecycle *sandbox.Lifecycle
@@ -207,7 +214,7 @@ func lifecycleCommand(action sandbox.LifecycleAction, run process.Runner) Comman
 				}
 				force = true
 			}
-			lifecycle = sandbox.NewLifecycle(invocation.Args[0], action, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			lifecycle = sandbox.NewLifecycle(invocation.Args[0], *group, action, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Sandbox:           func(*Invocation) error { return lifecycle.CheckSandbox(ctx) },
@@ -249,12 +256,20 @@ func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash str
 }
 
 func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, run process.Runner, check Handler) int {
-	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
-		upCommand(assetHash, run, check),
-		removeCommand(run),
-		lifecycleCommand(sandbox.Start, run),
-		lifecycleCommand(sandbox.Stop, run),
-		lifecycleCommand(sandbox.Restart, run),
+	var group string
+	tree := Tree{Name: "sandboxed-agents", Usage: func(*Invocation) error {
+		var err error
+		group, err = controller.CurrentGroup()
+		return err
+	}, Commands: []Command{
+		upCommand(assetHash, &group, run, check),
+		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
+			return sandbox.List(context.Background(), group, run, invocation.Stdout)
+		}},
+		removeCommand(&group, run),
+		lifecycleCommand(sandbox.Start, &group, run),
+		lifecycleCommand(sandbox.Stop, &group, run),
+		lifecycleCommand(sandbox.Restart, &group, run),
 		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: check}, Action: func(invocation *Invocation) error {
 			if err := images.BuildBase(context.Background(), assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
 				return err

@@ -42,19 +42,19 @@ The container filesystem a sandbox is created from: the base contents every sand
 ### Ownership
 
 **Controller group**:
-The namespace an installed executable manages. The default group is `default`; an environment variable selects another. It does not depend on where the executable is installed. Two controller groups can each hold a sandbox of the same name.
+The namespace an installed executable manages. The default group is `default`; the environment variable `SANDBOXED_AGENTS_GROUP` selects another. It does not depend on where the executable is installed. Two controller groups can each hold a sandbox of the same name.
 _Avoid_: Controller, owner path, installation
 
 **Owner**:
 The controller group recorded on a sandbox and its volumes. The executable changes only objects whose owner is its own controller group. An object under one of its sandbox names with a missing or different owner is an owner conflict: the executable reports it and leaves the repair to the user.
 
 **Backup container**:
-The previous container of a sandbox, kept under its own name while `update` replaces it and removed once the new container is ready. It is not a sandbox and never appears in `list`.
+The previous container of a sandbox, kept under its own name while `update` replaces it and removed once the new container is ready. It is not a sandbox and never gets a row of its own in `list`, which shows its sandbox as "update interrupted".
 
 ### Host boundaries
 
 **Host state**:
-Mutable data the executable keeps in the operating system's state directory, separated by controller group. It holds managed SSH keys and configuration.
+Mutable data the executable keeps in the operating system's state directory, in one `group-GROUP` directory per controller group. It holds managed SSH keys and configuration.
 
 **Protected host paths**:
 Host locations that must never be exposed through a workspace bind: the executable and its package launchers, host state, temporary build inputs, and the user's SSH directory. Symlinks, junctions, and other aliases do not make a protected path bindable.

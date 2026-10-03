@@ -14,8 +14,8 @@ type Up struct {
 	limits    ResourceLimits
 }
 
-func NewUp(name, assetHash string, limits ResourceLimits, run process.Runner, streams process.Streams) *Up {
-	return &Up{sandboxObjects: newSandboxObjects(name, run, streams), assetHash: assetHash, limits: limits}
+func NewUp(name, group, assetHash string, limits ResourceLimits, run process.Runner, streams process.Streams) *Up {
+	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: limits}
 }
 
 func (up *Up) Apply(ctx context.Context) error {
@@ -54,7 +54,7 @@ func (up *Up) createSandbox(ctx context.Context) error {
 	for _, volume := range up.volumes {
 		verb := "Adopted"
 		if !volume.exists {
-			if err := up.runPodman(ctx, "volume", "create", "--label", OwnerLabel+"="+defaultGroup, volume.name); err != nil {
+			if err := up.runPodman(ctx, "volume", "create", "--label", OwnerLabel+"="+up.group, volume.name); err != nil {
 				return err
 			}
 			verb = "Created"
@@ -66,7 +66,7 @@ func (up *Up) createSandbox(ctx context.Context) error {
 
 	args := []string{
 		"create", "--name", up.container,
-		"--label", OwnerLabel + "=" + defaultGroup,
+		"--label", OwnerLabel + "=" + up.group,
 		"--label", NameLabel + "=" + up.name,
 		"--label", WorkspaceKindLabel + "=volume",
 		"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",

@@ -19,15 +19,15 @@ type Remove struct {
 	sessionsKnown bool
 }
 
-func NewRemove(name string, deleteVolumes, force bool, run process.Runner, streams process.Streams) *Remove {
-	return &Remove{sandboxObjects: newSandboxObjects(name, run, streams), deleteVolumes: deleteVolumes, force: force}
+func NewRemove(name, group string, deleteVolumes, force bool, run process.Runner, streams process.Streams) *Remove {
+	return &Remove{sandboxObjects: newSandboxObjects(name, group, run, streams), deleteVolumes: deleteVolumes, force: force}
 }
 
 func (remove *Remove) CheckSandbox(ctx context.Context) error {
 	if err := remove.sandboxObjects.CheckSandbox(ctx); err != nil {
 		return err
 	}
-	if remove.containerExists {
+	if remove.containerExists || remove.backupExists {
 		return nil
 	}
 	for _, volume := range remove.volumes {
@@ -35,7 +35,7 @@ func (remove *Remove) CheckSandbox(ctx context.Context) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no sandbox named %s exists: neither its container nor any of its volumes was found", remove.name)
+	return fmt.Errorf("no sandbox named %s exists in this controller group: neither its container, any of its volumes, nor its backup container was found", remove.name)
 }
 
 func (remove *Remove) CheckOwner(ctx context.Context) error {
@@ -46,10 +46,7 @@ func (remove *Remove) CheckOwner(ctx context.Context) error {
 		return err
 	}
 	conflicts := remove.ownerConflicts()
-	if remove.backupExists && !isOwned(remove.backupOwner) {
-		conflicts = append(conflicts, remove.backup)
-	}
-	if len(conflicts) == 0 || (remove.deleteVolumes && isOwned(remove.containerOwner) && !remove.backupExists) {
+	if len(conflicts) == 0 || (remove.deleteVolumes && remove.isOwned(remove.containerOwner) && !remove.backupExists) {
 		return nil
 	}
 	return ownerConflict(conflicts)
@@ -82,7 +79,7 @@ func (remove *Remove) Apply(ctx context.Context) error {
 		}
 		message := "Kept volume %s.\n"
 		if remove.deleteVolumes {
-			if !isOwned(volume.owner) {
+			if !remove.isOwned(volume.owner) {
 				message = "Kept volume %s: its owner label is missing or names another controller group; remove or rename it with Podman.\n"
 				foreign = true
 			} else {

@@ -180,7 +180,7 @@ func TestSelectedImagePartRebuildsOnceAndRecordsItsOutcome(t *testing.T) {
 			config.Images = true
 			config.Host = platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
 			fakes := testutil.NewFakePrograms(t)
-			fakes.Script("podman", testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: status})
+			fakes.Script("podman", testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: status}, testutil.Response{Stdout: "[]"})
 			err := livesuite.Run(context.Background(), config)
 			if (err == nil) != (status == 0) {
 				t.Fatalf("error=%v status=%d", err, status)

@@ -36,7 +36,7 @@ func linuxHost(t *testing.T) *testutil.FakePrograms {
 	for path, data := range map[string]string{
 		"/etc/subuid": "fixture:100000:65536\n", "/etc/subgid": "1000:200000:65536\n",
 		"/proc/self/cgroup":    "0::/user.slice/user-1000.slice/session-3.scope\n",
-		"/proc/self/mountinfo": "32 24 0:28 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
+		"/proc/self/mountinfo": "1 0 0:1 / / rw - overlay overlay rw\n32 24 0:28 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
 		"/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers":     "cpu memory pids\n",
 		"/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.procs":           "",
 		"/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.subtree_control": "cpu memory pids\n",

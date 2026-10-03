@@ -44,7 +44,7 @@ Host state is per-group data the executable keeps outside Podman, in the operati
 | Linux | `$XDG_STATE_HOME/sandboxed-agents/group-GROUP` when `XDG_STATE_HOME` is an absolute path, otherwise `~/.local/state/sandboxed-agents/group-GROUP` |
 | Windows | `%LOCALAPPDATA%\sandboxed-agents\group-GROUP` |
 
-In this version no command reads or writes host state, and none creates these directories. Later Stories keep the keys and configuration of an SSH setup there (#19). On Windows, a command that needs host state will fail when `LOCALAPPDATA` is not set or is not an absolute path.
+In this version no command reads or writes data in host state, and none creates these directories. `up NAME WORKSPACE` only computes their paths to keep them out of a workspace bind ([Workspace guards](#workspace-guards)). Later Stories keep the keys and configuration of an SSH setup there (#19). On Windows, a command that needs host state will fail when `LOCALAPPDATA` is not set or is not an absolute path.
 
 ## Create or start a sandbox
 
@@ -100,7 +100,7 @@ If a Podman command fails, `up` stops, reports the command and its exit status, 
 
 On Linux, `up NAME WORKSPACE` binds the host directory `WORKSPACE` at `/workspace` in place of the workspace volume. The home and SSH server state stay named volumes. Agents in the sandbox read and change the files of that directory directly; everything else on the host stays out of their reach (ADR-0003).
 
-`up` resolves `WORKSPACE` before it uses it: a relative path such as `./dir` is resolved against the current directory, and symlinks and `..` components are resolved as the file system resolves them, so `link/..` names the parent of the symlink's target. The bind source in the Podman call is that resolved directory. `up` never creates the directory.
+`up` resolves `WORKSPACE` before it uses it: a relative path such as `./dir` is resolved against the current directory, and symlinks and `..` components are resolved one component at a time, as the file system resolves them, so `link/..` names the parent of the symlink's target. Components that do not exist are kept as written. The bind source in the Podman call is that resolved directory. `up` never creates the directory.
 
 The workspace bind is the only host path that any Podman call of the executable mounts. No call mounts a socket: no host credentials, no SSH-agent socket, no container-engine socket, and no display socket.
 
@@ -108,10 +108,10 @@ The workspace bind is the only host path that any Podman call of the executable 
 
 Before the preflight and without any Podman call, `up` refuses a `WORKSPACE` and exits with status 1 in these cases:
 
-- **Unresolvable path.** A symlink in the workspace or in a protected host path cannot be resolved, for example because of a symlink loop or a missing permission, so `up` cannot rule out a protected host path. The message names the path.
-- **Missing.** The resolved path does not exist or cannot be read. The message names the resolved path.
-- **Not a directory.** The resolved path names a file or anything else that is not a directory. The message names the resolved path.
-- **Protected host path.** The resolved directory equals a protected host path, lies inside one, or contains one. The message names the workspace and the resolved protected host path.
+- **Unresolvable path.** A path in the workspace or in a protected host path cannot be resolved, for example because of more than 255 symlinks or a missing permission, or `/proc/self/mountinfo` cannot be read or parsed or has no mount for a path. `up` then cannot rule out a protected host path. The message names the path.
+- **Unusable.** `WORKSPACE` as given cannot be opened, for example because it or one of its components does not exist or is a file, as in `missing/..` or `file/child`. The message names the resolved path and the underlying error, and the resolved path need not exist.
+- **Not a directory.** `WORKSPACE` names a file or anything else that is not a directory. The message names the resolved path.
+- **Protected host path.** The workspace equals a protected host path, lies inside one, or contains one. The message names the workspace and the resolved protected host path.
 
 The protected host paths on Linux are:
 
@@ -124,7 +124,13 @@ The protected host paths on Linux are:
 | `/tmp` | always, also when `$TMPDIR` names another directory |
 | The SSH directory | `.ssh` in your home directory, `$HOME` |
 
-Each protected host path is resolved like the workspace, so a workspace that reaches one through a symlink, and a protected host path that is itself a symlink into the workspace, are refused. A protected host path that does not exist yet, such as host state before its first use, is resolved through its nearest existing parent and stays protected. Your home directory and `/` contain `~/.ssh` and are therefore refused. Later Stories add protected host paths, such as the npm launcher and its shims (#61).
+Each protected host path is resolved like the workspace, so a workspace that reaches one through a symlink, and a protected host path that is itself a symlink into the workspace, are refused. A protected host path that does not exist yet, such as host state before its first use, stays protected, also when a dangling symlink points it into the workspace. Your home directory and `/` contain `~/.ssh` and are therefore refused.
+
+Beyond symlinks, `up` detects these aliases:
+
+- **Bind mounts.** `up` reads the mount table from `/proc/self/mountinfo` and maps the workspace, every mount below it, and each protected host path to its file system and the path within it. A workspace that reaches a protected host path through another mount of the same file system is refused.
+- **Same directory or file.** A workspace that is the same directory as a protected host path or one of its parents, or the reverse, is refused, whatever paths lead to them.
+- **Hard links.** When a protected file, such as the executable, has more than one hard link, `up` searches the workspace, without following symlinks, for a link to it and refuses the workspace when it finds one. Later Stories add protected host paths, such as the npm launcher and its shims (#61).
 
 ### Workspace volumes beside a bind
 
@@ -433,4 +439,4 @@ If a Podman call fails or returns output that `list` cannot read, `list` prints 
 
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver alone, because no command uses host state yet. The workspace bind, its guards against protected host paths reached directly or through symlinks, the unused workspace volume, and the workspace conflict are covered on Linux against the fake `podman`, with directories and symlinks in temporary test directories; these tests check the mounts that `up` passes to Podman, not what a real container can reach. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. The toolchain selection, the image builds of `up`, the toolchain label, and the `TOOLCHAINS` column are covered by a fake `podman` that reports images and their labels. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver; no command reads or writes host state data, and the workspace tests use the resolved paths only as protected host paths. The workspace bind, its guards, the unused workspace volume, and the workspace conflict are covered on Linux against the fake `podman`, with real directories, symlinks, and hard links in temporary test directories. Bind-mount aliases are covered only through a static mount table that the tests inject in place of `/proc/self/mountinfo`; no test creates a real mount. These tests check the mounts that `up` passes to Podman, not what a real container can reach. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. The toolchain selection, the image builds of `up`, the toolchain label, and the `TOOLCHAINS` column are covered by a fake `podman` that reports images and their labels. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).

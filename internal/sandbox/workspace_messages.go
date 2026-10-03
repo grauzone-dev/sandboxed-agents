@@ -1,7 +1,7 @@
 package sandbox
 
 const (
-	workspacePathError           = "workspace %q does not exist or cannot be read: %w"
+	workspacePathError           = "cannot use workspace %q: %w"
 	workspaceDirectoryError      = "workspace %q is not a directory"
 	workspaceProtectedError      = "workspace %q contains or lies inside the protected host path %q"
 	workspaceConflictError       = "workspace does not match the sandbox: recorded %q, given %q; omit WORKSPACE to start the sandbox as it is, or run sandboxed-agents remove %s, which keeps its volumes, and then sandboxed-agents up %s with the new WORKSPACE"

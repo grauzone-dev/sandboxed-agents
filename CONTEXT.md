@@ -22,6 +22,22 @@ _Avoid_: Assistant, bot, model
 A persistent terminal session running one agent in a sandbox, which the user can detach from and reattach to. It ends when its agent exits, so a running agent session always means a running agent.
 _Avoid_: Agent run (a run is a one-shot command that ends with its terminal)
 
+**Agent catalog**:
+The agent data embedded in the executable: per agent its install method, command, login workflows, and an optional status probe that reports whether the agent is signed in. During development it may hold entries not delivered yet; those count as unknown, and only delivered entries can be enabled.
+_Avoid_: Agent registry, agent list
+
+**Agent selection**:
+The set of agents enabled in a sandbox. It is stored in the sandbox's home data, so it survives `stop` and `start`; host state keeps no copy.
+_Avoid_: Enabled agents list, agent config
+
+**Manager**:
+The trusted Go program in a sandbox's image that handles the executable's administrative requests and agent work. It handles administrative requests as container root and changes to the user `agent` before it reads home data or does work for an agent.
+_Avoid_: Daemon, agent (for the manager itself)
+
+**Manager lock**:
+The one lock with which a sandbox's manager serializes installation changes (enabling, updating, or disabling an agent) and session changes (starting or ending an agent session). Attaching to a running agent session does not take it.
+_Avoid_: Install lock, session lock
+
 **Integration**:
 A connection between a sandbox and an external account or service, such as Git, GitHub, Azure, or Azure DevOps. An integration offers login and config workflows and has no installable program of its own.
 _Avoid_: Tool, built-in workflow target, plugin

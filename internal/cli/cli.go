@@ -118,6 +118,10 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if err := selected.Action(invocation); err != nil {
+		var status exitStatus
+		if errors.As(err, &status) {
+			return int(status)
+		}
 		return tree.failure(stderr, path, err, false)
 	}
 	return 0
@@ -270,6 +274,7 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 		lifecycleCommand(sandbox.Start, &group, run),
 		lifecycleCommand(sandbox.Stop, &group, run),
 		lifecycleCommand(sandbox.Restart, &group, run),
+		shellCommand(&group, run),
 		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: check}, Action: func(invocation *Invocation) error {
 			if err := images.BuildBase(context.Background(), assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
 				return err

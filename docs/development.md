@@ -174,7 +174,7 @@ The live suite runs the executable against real Podman and starts only with `go 
 
   The fake `podman` runs no command: the terminal tests use a real terminal of the test host only to check how `shell` detects it. No offline test opens a shell in a container or a pseudo-terminal inside one.
 - **Controller groups.** The tests in `controller_group_test.go` drive the public CLI as a subprocess against the fake `podman` and `ssh`:
-  - an empty value and each of the invalid group names `Team`, `a.b`, `-a`, `a/b`, and `a b` makes `up`, `up --help`, `start`, `stop`, `restart`, `remove`, `shell`, `list`, `build`, `check`, and `version` exit non-zero with a message naming the group, with no `podman` or `ssh` call;
+  - an empty value and each of the invalid group names `Team`, `a.b`, `-a`, `a/b`, and `a b` makes `up`, `up --help`, `start`, `stop`, `restart`, `remove`, `shell`, `list`, `build`, `check`, `version`, `integrations config`, and `integrations login` exit non-zero with a message naming the group, with no `podman` or `ssh` call;
   - `up` with the group `team-a` creates the volumes and the container under `sandboxed-agents.team-a.agent01` with the owner label `team-a`, and no call names the `default` group;
   - `start`, `stop`, `restart`, `remove`, and `shell` in `team-a` report an unknown sandbox when no object exists under the `team-a` names, and every call names only those names;
   - in `team-a`, an owner of `default` on the container, each volume, or the backup container makes `up`, `start`, `stop`, `restart`, `remove`, and `shell` report an owner conflict that names the foreign object and Podman;

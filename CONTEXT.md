@@ -63,4 +63,4 @@ Host locations that must never be exposed through a workspace bind: the executab
 The opt-in host configuration that lets editors and desktop UIs reach a sandbox over SSH, using a key dedicated to that sandbox and a pinned host key. Without it, the executable leaves host SSH files untouched.
 
 **Preflight**:
-The read-only check of host prerequisites that runs before a sandbox or image is built. It reports each missing prerequisite and never changes the host.
+The read-only check of host prerequisites that runs before a sandbox or image is built. It reports each missing prerequisite. The executable only reads the host and never changes it. The one permitted exception is Podman's own initialization during the informational `podman --version` query, which may create or adjust Podman's per-user configuration and runtime directories.

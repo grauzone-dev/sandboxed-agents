@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	ChecksumFilename  = "SHA256SUMS"
 	LinuxExecutable   = "sandboxed-agents-linux-amd64"
 	WindowsExecutable = "sandboxed-agents-windows-amd64.exe"
 )

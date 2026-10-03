@@ -13,25 +13,28 @@ import (
 	"runtime"
 	"strings"
 
-	releaseassets "github.com/grauzone-dev/sandboxed-agents/internal/release"
+	"github.com/grauzone-dev/sandboxed-agents/internal/buildenv"
+	"github.com/grauzone-dev/sandboxed-agents/internal/release"
 )
+
+var artifactNames = [...]string{release.LinuxExecutable, release.WindowsExecutable, release.ChecksumFilename}
 
 var previewTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.[0-9]{8}\.(0|[1-9][0-9]*)$`)
 
 func main() {
-	if err := release(); err != nil {
+	if err := buildPreview(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func release() error {
+func buildPreview() error {
 	tag := flag.String("tag", "", "preview tag vX.Y.Z-preview.YYYYMMDD.N, also the version the binaries report")
 	output := flag.String("output", "", "directory for the release files; must be absent or empty")
 	checkTag := flag.Bool("check-tag", false, "only validate -tag; build and write nothing")
 	flag.Parse()
 	if flag.NArg() != 0 {
-		return errors.New("unexpected arguments")
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
 	}
 	if !previewTag.MatchString(*tag) {
 		return fmt.Errorf("invalid preview tag %q: want vX.Y.Z-preview.YYYYMMDD.N", *tag)
@@ -60,12 +63,12 @@ func release() error {
 			return err
 		}
 		for _, target := range []struct{ goos, name string }{
-			{"linux", releaseassets.LinuxExecutable},
-			{"windows", releaseassets.WindowsExecutable},
+			{"linux", release.LinuxExecutable},
+			{"windows", release.WindowsExecutable},
 		} {
 			binaryPath := filepath.Join(dir, target.name)
 			command := exec.Command("go", "run", "./tools/build", "-goos", target.goos, "-output", binaryPath, "-version", *tag)
-			command.Env = goEnvironment()
+			command.Env = buildenv.ForTarget(runtime.GOOS, runtime.GOARCH)
 			command.Stdout = os.Stdout
 			command.Stderr = os.Stderr
 			if err := command.Run(); err != nil {
@@ -90,20 +93,23 @@ func release() error {
 			if runtime.GOARCH == "amd64" && runtime.GOOS == target.goos {
 				version, err := exec.Command(binaryPath, "version").CombinedOutput()
 				want := fmt.Sprintf("sandboxed-agents %s\nassets %x\n", *tag, sha256.Sum256(bundle))
-				if err != nil || string(version) != want {
-					return fmt.Errorf("%s version check failed: %v, output %q", target.name, err, version)
+				if err != nil {
+					return fmt.Errorf("%s version command failed: %w, output %q", target.name, err, version)
+				}
+				if string(version) != want {
+					return fmt.Errorf("%s version output mismatch: got %q, want %q", target.name, version, want)
 				}
 			}
 		}
-		checksums, err := releaseassets.Checksums(dir)
+		checksums, err := release.Checksums(dir)
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), checksums, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, release.ChecksumFilename), checksums, 0644); err != nil {
 			return err
 		}
 	}
-	for _, name := range []string{releaseassets.LinuxExecutable, releaseassets.WindowsExecutable, "SHA256SUMS"} {
+	for _, name := range artifactNames {
 		first, err := os.ReadFile(filepath.Join(work, "first", name))
 		if err != nil {
 			return err
@@ -116,7 +122,7 @@ func release() error {
 			return fmt.Errorf("repeated builds differ: %s", name)
 		}
 	}
-	return publish(filepath.Join(work, "first"), *output)
+	return writeArtifacts(filepath.Join(work, "first"), *output)
 }
 
 func checkOutput(output string) error {
@@ -140,7 +146,7 @@ func checkOutput(output string) error {
 	return nil
 }
 
-func publish(source, output string) error {
+func writeArtifacts(source, output string) error {
 	if err := checkOutput(output); err != nil {
 		return err
 	}
@@ -156,13 +162,13 @@ func publish(source, output string) error {
 	if err := os.Chmod(stage, 0755); err != nil {
 		return err
 	}
-	for _, name := range []string{releaseassets.LinuxExecutable, releaseassets.WindowsExecutable, "SHA256SUMS"} {
+	for _, name := range artifactNames {
 		contents, err := os.ReadFile(filepath.Join(source, name))
 		if err != nil {
 			return err
 		}
 		mode := os.FileMode(0755)
-		if name == "SHA256SUMS" {
+		if name == release.ChecksumFilename {
 			mode = 0644
 		}
 		if err := os.WriteFile(filepath.Join(stage, name), contents, mode); err != nil {
@@ -176,17 +182,4 @@ func publish(source, output string) error {
 		return err
 	}
 	return os.Rename(stage, output)
-}
-
-func goEnvironment() []string {
-	env := make([]string, 0, len(os.Environ())+12)
-	for _, value := range os.Environ() {
-		key, _, _ := strings.Cut(value, "=")
-		switch strings.ToUpper(key) {
-		case "GOOS", "GOARCH", "CGO_ENABLED", "GOAMD64", "GOPROXY", "GOSUMDB", "GOFLAGS", "GOEXPERIMENT", "GOWORK", "GOTOOLCHAIN", "GO111MODULE":
-		default:
-			env = append(env, value)
-		}
-	}
-	return append(env, "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0", "GOAMD64=v1", "GOPROXY=off", "GOSUMDB=off", "GOFLAGS=", "GOEXPERIMENT=", "GOWORK=off", "GOTOOLCHAIN=local", "GO111MODULE=on")
 }

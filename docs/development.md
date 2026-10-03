@@ -72,6 +72,22 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
   - usage errors before the preflight, a stop after a failed preflight, and a stop when the context directory cannot be created.
 
   No offline test runs a real Podman build; #29 validates images against real Podman.
+- **Sandbox creation.** `up` tests drive the public CLI as a subprocess that enters through `cli.RunWithHost` with the read-only host adapter, so the Linux preflight passes on fixture files. They run only on Linux and are skipped by the Windows CI job. Two fixtures differ in the asset hash the CLI receives: `linux-preflight` passes `fixture-assets`, so the base image is `localhost/sandboxed-agents:base-fixture-assets`, and `linux-build` passes the real embedded asset hash, so a build writes the real build context. Most `up` tests use `linux-preflight`; the image-build test and the build-failure case use `linux-build`. A test scripts the fake `podman` answers for `exists` and the JSON of `inspect`, including the owner labels.
+
+  The tests compare the complete list of Podman calls in these cases:
+  - on a host without the sandbox: the preflight's `--version`, the `exists` lookups of the container, the three volumes, the backup container, and the image, the three `volume create` calls with the owner label, the `create` call with its labels, default options, limits, and exactly the three volume mounts, and `start`;
+  - for an owned stopped sandbox, the lookups and `inspect` calls followed by `start`, and for a running one, the same calls without `start`;
+  - for a failed preflight, only `--version`.
+
+  Other cases assert only part of the calls:
+  - the image-build test checks the image lookup, exactly one `podman build` with the real tag and labels when the image is missing and none when it exists, the captured build context, its removal, and the tag in the `create` call;
+  - the kept-volume tests cover every subset of kept volumes and check which volumes `volume create` received, the `Adopted volume` and `Created volume` lines, and the three mounts of the `create` call;
+  - the name tests accept `up`, `list`, `default`, `backup`, and dotted names such as `a.home`, and check that no two of them yield the same volume name;
+  - refusals for owner conflicts (an empty, missing, or other owner on the container, each volume, or the backup container, and several foreign objects in one message), for an interrupted update, and for Podman lookups that fail or return unusable JSON check the error message and that every recorded call is `--version` or a `container` or `volume` `exists` or `inspect`, so nothing was created or changed;
+  - failures of the image lookup, the build, `volume create`, `create`, and `start` check the error message, the last call, and the number of calls, and that `up` did not report a running sandbox;
+  - usage errors and invalid names check that neither `podman` nor `ssh` was called, with the preflight set to fail.
+
+  Every `up` test also asserts that `ssh` was never called. No offline test starts a real container.
 - **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start.
 - **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks, its preparation, and its action in order. The executable has no debug commands for this.
 

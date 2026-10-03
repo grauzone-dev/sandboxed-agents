@@ -1,9 +1,11 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,6 +16,9 @@ import (
 
 func workspaceFixture(t *testing.T) string {
 	t.Helper()
+	if err := os.MkdirAll("../../.scratch", 0700); err != nil {
+		t.Fatal(err)
+	}
 	directory, err := os.MkdirTemp("../../.scratch", "workspace-test-")
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +192,7 @@ func TestUpNeverExposesItsExecutableOrTheSystemTemporaryDirectory(t *testing.T) 
 }
 
 func TestUpAcceptsAbsoluteRelativeAndAliasedWorkspaces(t *testing.T) {
-	for _, spelling := range []string{"absolute", "relative", "symlink", "symlink-parent"} {
+	for _, spelling := range []string{"absolute", "relative", "symlink", "symlink-parent", "direct-symlink"} {
 		t.Run(spelling, func(t *testing.T) {
 			fakes := linuxHost(t)
 			root := workspaceFixture(t)
@@ -201,6 +206,11 @@ func TestUpAcceptsAbsoluteRelativeAndAliasedWorkspaces(t *testing.T) {
 			}
 			workspace := directory
 			switch spelling {
+			case "direct-symlink":
+				workspace = filepath.Join(root, "project-link")
+				if err := os.Symlink(directory, workspace); err != nil {
+					t.Fatal(err)
+				}
 			case "relative":
 				workspace = "./project"
 			case "symlink":
@@ -432,4 +442,168 @@ func TestUpDoesNotTreatAMissingWorkspaceComponentAsAnExistingDirectory(t *testin
 		t.Fatal("missing workspace called Podman")
 	}
 	assertNoSSH(t, fakes)
+}
+
+func TestUpProtectsAnExecutableInstalledOutsideTheTemporaryDirectory(t *testing.T) {
+	for _, alias := range []string{"none", "symlink", "hardlink"} {
+		t.Run(alias, func(t *testing.T) {
+			fakes := linuxHost(t)
+			root := workspaceFixture(t)
+			directory := filepath.Join(root, "bin")
+			if err := os.Mkdir(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(directory, "sandboxed-agents")
+			contents, err := os.ReadFile(os.Args[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(binary, contents, 0700); err != nil {
+				t.Fatal(err)
+			}
+			executable := binary
+			workspace := directory
+			if alias == "symlink" {
+				executable = filepath.Join(root, "launch-link")
+				workspace = filepath.Join(root, "workspace-link")
+				if err := os.Symlink(binary, executable); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(directory, workspace); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if alias == "hardlink" {
+				workspace = filepath.Join(root, "project")
+				if err := os.Mkdir(workspace, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(binary, filepath.Join(workspace, "executable-alias")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			command := exec.Command(executable, "-test.run=^TestCLIProcess$", "--", "up", "agent01", workspace)
+			command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE=linux-preflight")
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			if err := command.Run(); err == nil {
+				t.Fatal("bound the executable directory")
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "protected host path") || !strings.Contains(stderr.String(), binary) {
+				t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+			if len(fakes.Calls("podman")) != 0 {
+				t.Fatal("protected executable called Podman")
+			}
+			assertNoSSH(t, fakes)
+		})
+	}
+}
+
+func TestUpNamesTheResolvedWorkspaceWhenAnIntermediateComponentIsAFile(t *testing.T) {
+	fakes := linuxHost(t)
+	root := workspaceFixture(t)
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(file, filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, status := runCLIAt(t, root, "linux-preflight", "up", "agent01", "./alias/child")
+	if status == 0 || stdout != "" || !strings.Contains(stderr, filepath.Join(root, "file", "child")) {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if len(fakes.Calls("podman")) != 0 {
+		t.Fatal("invalid workspace called Podman")
+	}
+	assertNoSSH(t, fakes)
+}
+
+func TestUpProtectsHostPathsReachedThroughLinuxBindMountAliases(t *testing.T) {
+	for _, role := range []string{"state", "ssh", "temp", "executable"} {
+		for _, relation := range []string{"equal", "inside", "contains", "protected-alias"} {
+			if role == "executable" && relation == "inside" {
+				continue
+			}
+			t.Run(role+"/"+relation, func(t *testing.T) {
+				fakes := linuxHost(t)
+				root := workspaceFixture(t)
+				home := filepath.Join(root, "home")
+				state := filepath.Join(root, "state")
+				temp := filepath.Join(root, "build-temp")
+				project := filepath.Join(root, "project")
+				for _, directory := range []string{home, state, temp, project} {
+					if err := os.MkdirAll(directory, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				t.Setenv("HOME", home)
+				t.Setenv("XDG_STATE_HOME", state)
+				t.Setenv("TMPDIR", temp)
+				executable, err := filepath.EvalSymlinks(os.Args[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				protected := map[string]string{"state": filepath.Join(state, "sandboxed-agents", "group-default"), "ssh": filepath.Join(home, ".ssh"), "temp": temp, "executable": executable}[role]
+				source := protected
+				if role == "executable" {
+					source = filepath.Dir(executable)
+				} else if err := os.MkdirAll(protected, 0700); err != nil {
+					t.Fatal(err)
+				}
+				target := project
+				workspace := project
+				switch relation {
+				case "inside":
+					workspace = filepath.Join(project, "nested")
+					if err := os.Mkdir(workspace, 0700); err != nil {
+						t.Fatal(err)
+					}
+				case "contains":
+					target = filepath.Join(project, "alias")
+					if err := os.Mkdir(target, 0700); err != nil {
+						t.Fatal(err)
+					}
+				case "protected-alias":
+					if role == "executable" {
+						target = filepath.Dir(executable)
+						source = project
+					} else {
+						target = protected
+						source = project
+					}
+				}
+				escape := strings.NewReplacer(`\`, `\134`, " ", `\040`, "\t", `\011`, "\n", `\012`)
+				mountinfo := fmt.Sprintf("1 0 0:1 / / rw - overlay overlay rw\n2 1 0:1 %s %s rw - overlay overlay rw\n32 1 0:28 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n", escape.Replace(source), escape.Replace(target))
+				hostFile(t, os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"), "/proc/self/mountinfo", mountinfo)
+				stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", workspace)
+				if status == 0 || stdout != "" || !strings.Contains(stderr, "protected host path") || !strings.Contains(stderr, protected) {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				if len(fakes.Calls("podman")) != 0 {
+					t.Fatal("aliased protected workspace called Podman")
+				}
+				assertNoSSH(t, fakes)
+			})
+		}
+	}
+}
+
+func TestUpRefusesUnreadableMountAliasesBeforePodman(t *testing.T) {
+	for _, data := range []string{"", "not mountinfo\n", "32 1 0:28 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n"} {
+		t.Run(fmt.Sprintf("bytes-%d", len(data)), func(t *testing.T) {
+			fakes := linuxHost(t)
+			workspace := workspaceFixture(t)
+			hostFile(t, os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"), "/proc/self/mountinfo", data)
+			stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", workspace)
+			if status == 0 || stdout != "" || stderr == "" {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("podman")) != 0 {
+				t.Fatal("unreadable aliases called Podman")
+			}
+			assertNoSSH(t, fakes)
+		})
+	}
 }

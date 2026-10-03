@@ -10,7 +10,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
-func TestListShowsRetainedVolumesAndPreservesSandboxNameSuffixes(t *testing.T) {
+func TestListShowsKeptVolumesAndPreservesSandboxNameSuffixes(t *testing.T) {
 	for _, name := range []string{"agent.workspace", "agent.home", "agent.ssh", "agent.backup", "agent.with.dots"} {
 		for _, volumes := range [][]string{{"home"}, {"workspace"}, {"home", "ssh", "workspace"}} {
 			t.Run(name+"/"+strings.Join(volumes, "+"), func(t *testing.T) {
@@ -76,7 +76,7 @@ func TestListReportsOwnerConflictsBeforeInterruptedUpdatesAndVolumesOnly(t *test
 	}
 }
 
-func TestListShowsAnInterruptedUpdateWhenOnlyItsBackupRemains(t *testing.T) {
+func TestListShowsAnInterruptedUpdateWhenOnlyItsBackupContainerRemains(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
 	fakes.Script("podman", listOneSandboxResponses("default", "agent.backup", nil, false, nil, &owned)...)
@@ -145,7 +145,7 @@ func TestListShowsAHeaderWhenNoSandboxesExist(t *testing.T) {
 	assertListReadOnly(t, fakes, false)
 }
 
-func TestListReportsAnOwnerConflictForAContainerOrRetainedVolumesWithoutABackup(t *testing.T) {
+func TestListReportsAnOwnerConflictForAContainerOrKeptVolumesWithoutABackupContainer(t *testing.T) {
 	for _, object := range []string{"container", "workspace", "home", "ssh"} {
 		for _, owner := range []string{"", "other"} {
 			t.Run(object+"/owner-"+owner, func(t *testing.T) {

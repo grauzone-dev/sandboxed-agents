@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grauzone-dev/sandboxed-agents/internal/controller"
+	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
@@ -259,7 +259,7 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 	var group string
 	tree := Tree{Name: "sandboxed-agents", Usage: func(*Invocation) error {
 		var err error
-		group, err = controller.CurrentGroup()
+		group, err = controllergroup.CurrentGroup()
 		return err
 	}, Commands: []Command{
 		upCommand(assetHash, &group, run, check),

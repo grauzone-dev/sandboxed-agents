@@ -12,10 +12,18 @@ import (
 )
 
 const (
+	containerPrefix    = "sandboxed-agents."
+	backupPrefix       = "sandboxed-agents-backup."
 	OwnerLabel         = "io.github.sandboxed-agents.owner"
 	NameLabel          = "io.github.sandboxed-agents.sandbox-name"
 	WorkspaceKindLabel = "io.github.sandboxed-agents.workspace-kind"
 )
+
+var volumeDefinitions = [...]struct{ suffix, target string }{
+	{"workspace", "/workspace"},
+	{"home", "/home/agent"},
+	{"ssh", "/etc/ssh"},
+}
 
 type volume struct {
 	name   string
@@ -42,15 +50,14 @@ type sandboxObjects struct {
 }
 
 func newSandboxObjects(name, group string, run process.Runner, streams process.Streams) *sandboxObjects {
-	container := "sandboxed-agents." + group + "." + name
+	container := containerPrefix + group + "." + name
+	volumes := make([]volume, len(volumeDefinitions))
+	for i, definition := range volumeDefinitions {
+		volumes[i] = volume{name: container + "." + definition.suffix, target: definition.target}
+	}
 	return &sandboxObjects{
-		group: group, name: name, container: container, backup: "sandboxed-agents-backup." + group + "." + name,
-		volumes: []volume{
-			{name: container + ".workspace", target: "/workspace"},
-			{name: container + ".home", target: "/home/agent"},
-			{name: container + ".ssh", target: "/etc/ssh"},
-		},
-		run: run, streams: streams,
+		group: group, name: name, container: container, backup: backupPrefix + group + "." + name,
+		volumes: volumes, run: run, streams: streams,
 	}
 }
 
@@ -199,16 +206,20 @@ func (state *sandboxObjects) inspectContainer(ctx context.Context, name string) 
 }
 
 func (state *sandboxObjects) inspect(ctx context.Context, kind, name string, record any) error {
+	return queryPodmanJSON(ctx, state.run, []string{kind, "inspect", name}, kind+" inspect "+name, record)
+}
+
+func queryPodmanJSON(ctx context.Context, run process.Runner, args []string, operation string, records any) error {
 	var output, diagnostic bytes.Buffer
-	status, err := state.run(ctx, process.Request{Name: "podman", Args: []string{kind, "inspect", name}, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
+	status, err := run(ctx, process.Request{Name: "podman", Args: args, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
 	if err != nil {
-		return fmt.Errorf("start podman %s inspect %s: %w", kind, name, err)
+		return fmt.Errorf("start podman %s: %w", operation, err)
 	}
 	if status != 0 {
-		return fmt.Errorf("podman %s inspect %s failed with exit status %d: %s", kind, name, status, diagnostic.String())
+		return fmt.Errorf("podman %s failed with exit status %d: %s", operation, status, diagnostic.String())
 	}
-	if err := json.Unmarshal(output.Bytes(), record); err != nil {
-		return fmt.Errorf("decode podman %s inspect %s: %w", kind, name, err)
+	if err := json.Unmarshal(output.Bytes(), records); err != nil {
+		return fmt.Errorf("decode podman %s: %w", operation, err)
 	}
 	return nil
 }

@@ -134,6 +134,8 @@ Beyond symlinks, `up` detects these aliases:
 
 The hard link search fails closed. When the executable has more than one hard link, every directory in the workspace must be readable to rule out a link to it. An unreadable subtree, even one without such a link, refuses the workspace before any Podman call as an unresolvable path; the message names the executable and the file system error, such as `permission denied`. Skipping the subtree would be unsafe: an agent could later make its own unreadable directory readable and reach a link hidden there. With a single hard link, `up` does not search the workspace, and an unreadable subtree does not matter.
 
+The guards compare the protected host paths themselves, not the files beneath them. A file inside a protected directory, such as `~/.ssh`, host state, or the temporary directory, that shares a hard link with a file in the workspace is not detected, and neither is a symlink inside a protected directory that points into the workspace. Agents in the sandbox can read and change such a shared file through the workspace. The guards also check the file system only when `up` is given `WORKSPACE`; a link created afterwards is not detected.
+
 Later Stories add protected host paths, such as the npm launcher and its shims (#61).
 
 ### Workspace volumes beside a bind

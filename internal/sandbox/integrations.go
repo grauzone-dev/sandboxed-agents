@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/integrations"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -50,9 +51,14 @@ func (integration *IntegrationWorkflow) Apply(ctx context.Context) error {
 	}
 	args = append(args, integration.container, "/usr/local/bin/sandboxed-agents-manager")
 	args = append(args, integration.request.Args()...)
+	if !integration.request.NeedsTerminal() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	status, err := integration.run(ctx, process.Request{Name: "podman", Args: args, Streams: integration.streams})
 	if err != nil {
-		return fmt.Errorf(integrations.IntegrationStartFailure, err)
+		return fmt.Errorf(integrations.IntegrationRunFailure, err)
 	}
 	if status != 0 {
 		return fmt.Errorf(integrations.IntegrationFailure, status)

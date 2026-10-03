@@ -72,6 +72,7 @@ Every `integrations` command needs a running container of a known sandbox. It ne
 - **Stopped sandbox.** The command fails, names `sandboxed-agents start NAME`, and starts nothing.
 - **Manager does not answer.** The container runs, but its manager does not answer the session query. The command fails, says so, and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. It attempts nothing around the manager and issues no further Podman call.
 - **Workflow failure.** Git could not be started or exited with a non-zero status. The command shows Git's output and the manager's message with Git's exit status, and reports that the integration workflow failed.
+- **Workflow timeout.** With both `--name` and `--email` given, the `podman exec` call that runs the workflow has 30 seconds to finish. When it does not, the executable ends that call and the command fails. When the command prompts for a missing value, this call has no added deadline, so it waits for your input.
 
 Owner conflicts and interrupted updates are refused as for the other commands ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)).
 
@@ -95,4 +96,4 @@ The preflight (step 2) and the session guard (step 9) do not apply. An unknown w
 
 ## Verification
 
-The behavior on this page is covered by offline tests against a fake `podman` and against the manager with injected process functions ([Development](development.md#test-seams)). Nothing on this page has been confirmed against Podman on a live host, and no test observes the isolation of the sandbox or a real Git configuration in its home volume.
+The behavior on this page is covered by offline tests against a fake `podman` and against the manager with injected process functions ([Development](development.md#test-seams)). Nothing on this page has been confirmed against Podman on a live host, and no test observes the isolation of the sandbox or a real Git configuration in its home volume. The [live suite](live-suite.md) does not run `integrations` commands.

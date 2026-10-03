@@ -64,7 +64,7 @@ case "$endpoint" in
     jq -s --argjson payload "$payload" 'add + [$payload]' "$FIXTURES/comments.json" > "$FIXTURES/comments-next.json"
     mv "$FIXTURES/comments-next.json" "$FIXTURES/comments.json"
     printf '{}\n' ;;
-  repos/grauzone-dev/planning/issues/*/sub_issues) printf '{}\n' ;;
+  repos/grauzone-dev/planning/issues/*/sub_issues|repos/grauzone-dev/planning/issues/*/sub_issue) printf '{}\n' ;;
   repos/grauzone-dev/planning/issues/*)
     if [[ -f "$FIXTURES/fetch-error" ]]; then printf 'Candidate fetch failed\n' >&2; exit 1; fi
     if [[ $method == PATCH ]]; then
@@ -134,7 +134,7 @@ After grauzone-dev/sandboxed-agents#14
 BODY
 )
 expected_body+=$'\n\n'
-jq -n --arg title "$title" --arg body "$body" '{number:10,id:100,node_id:"I_source",title:$title,body:$body,labels:[{name:"bug"},{name:"type: story"},{name:"source only"}],state:"open",state_reason:null}' > "$test_dir/source-base.json"
+jq -n --arg title "$title" --arg body "$body" '{number:10,id:100,node_id:"I_source",author_association:"OWNER",title:$title,body:$body,labels:[{name:"bug"},{name:"type: story"},{name:"source only"}],state:"open",state_reason:null}' > "$test_dir/source-base.json"
 jq -n --arg title "$title" --arg body "$expected_body" '{number:42,id:420,node_id:"I_mirror",title:$title,body:$body,labels:[{name:"type: story"},{name:"bug"}],state:"open",state_reason:null}' > "$test_dir/mirror-base.json"
 
 reset() {
@@ -305,6 +305,47 @@ run
 assert_calls 'all(.[]; (.endpoint | endswith("/sub_issues") | not) and (.endpoint != "repos/grauzone-dev/planning/issues/50"))' '404 source parent'
 
 reset
+existing
+project_matches
+printf 'null\n' > "$FIXTURES/source-parent.json"
+printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
+run
+assert_summary updated
+assert_calls 'any(.[]; .method == "DELETE" and .endpoint == "repos/grauzone-dev/planning/issues/50/sub_issue" and .payload == {sub_issue_id:420}) and ([.[] | select(.method == "DELETE")] | length == 1)' 'removed source parent detaches mirror using database id'
+: > "$CALLS"
+DRY_RUN=1 run
+assert_summary updated
+assert_calls 'all(.[]; .method == "GET" and .endpoint != "graphql")' 'parent removal dry run makes no writes'
+[[ $(cat "$test_dir/output") == *'DRY RUN: DELETE repos/grauzone-dev/planning/issues/50/sub_issue'*'"sub_issue_id": 420'* ]]
+
+reset
+existing
+project_matches
+printf 'null\n' > "$FIXTURES/source-parent.json"
+run
+assert_summary unchanged
+assert_calls 'all(.[]; .method == "GET") and any(.[]; .endpoint == "repos/grauzone-dev/planning/issues/42/parent")' 'both parents absent is unchanged'
+
+reset
+existing
+project_matches
+printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
+printf '{"number":5,"repository_url":"https://api.github.com/repos/other/repo"}\n' > "$FIXTURES/source-parent.json"
+run
+assert_summary unchanged
+assert_calls 'all(.[]; .method != "DELETE")' 'external source parent preserves existing mirror parent'
+
+reset
+existing
+project_matches
+printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
+printf '{"total_count":0,"items":[]}\n' > "$FIXTURES/search-parent.json"
+run
+assert_summary unchanged
+[[ $(cat "$test_dir/error") == *'source parent #5 has no mirror'* ]]
+assert_calls 'all(.[]; .method != "DELETE")' 'parent lacking mirror preserves existing mirror parent'
+
+reset
 DRY_RUN=1 run
 assert_calls 'all(.[]; .method == "GET" and .endpoint != "graphql")' 'dry run creates no writes'
 [[ $(cat "$test_dir/output") == *'set Status to Backlog'* ]]
@@ -339,5 +380,36 @@ jq '.pull_request={url:"https://example.test/pr/10"}' "$test_dir/source-base.jso
 run
 [[ $(cat "$test_dir/output") == 'source #10 -> skipped (pull request)' ]]
 assert_calls 'length == 1' 'pull requests skipped'
+
+for association in OWNER MEMBER COLLABORATOR; do
+  reset
+  existing
+  project_matches
+  printf '{"number":50,"id":500}\n' > "$FIXTURES/mirror-parent.json"
+  jq --arg association "$association" '.author_association=$association' "$test_dir/source-base.json" > "$FIXTURES/source.json"
+  run
+  assert_summary unchanged
+done
+for association in NONE CONTRIBUTOR FIRST_TIMER FIRST_TIME_CONTRIBUTOR MANNEQUIN owner unknown ''; do
+  reset
+  jq --arg association "$association" '.author_association=$association' "$test_dir/source-base.json" > "$FIXTURES/source.json"
+  run
+  [[ $(cat "$test_dir/output") == 'source #10 -> skipped (author not eligible)' ]]
+  assert_calls 'length == 1 and .[0].method == "GET" and .[0].endpoint == "repos/grauzone-dev/sandboxed-agents/issues/10"' 'ineligible author skips before lookup'
+done
+reset
+jq 'del(.author_association)' "$test_dir/source-base.json" > "$FIXTURES/source.json"
+run
+[[ $(cat "$test_dir/output") == 'source #10 -> skipped (author not eligible)' ]]
+assert_calls 'length == 1 and .[0].method == "GET" and .[0].endpoint == "repos/grauzone-dev/sandboxed-agents/issues/10"' 'missing author association skips before lookup'
+reset
+jq '.author_association=null' "$test_dir/source-base.json" > "$FIXTURES/source.json"
+run
+[[ $(cat "$test_dir/output") == 'source #10 -> skipped (author not eligible)' ]]
+assert_calls 'length == 1' 'null author association skips before lookup'
+
+workflow=$(< "$root/.github/workflows/mirror-issues.yml")
+[[ $workflow == *$'concurrency:\n  group: mirror-issues\n  cancel-in-progress: false\n  queue: max\n'* ]]
+[[ $workflow == *'if: github.event_name == '\''workflow_dispatch'\'' || contains(fromJSON('\''["OWNER", "MEMBER", "COLLABORATOR"]'\''), github.event.issue.author_association)'* ]]
 
 printf 'All mirror issue tests passed.\n'

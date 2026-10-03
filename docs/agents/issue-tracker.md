@@ -1,6 +1,6 @@
 # Issue tracker: GitHub issues, mirrored to the planning project
 
-Issues and specs for this repo live as GitHub issues in `grauzone-dev/sandboxed-agents`. Create, read, edit, comment on, label and close them here with the `gh` CLI; `gh` infers this repo from the clone, so issue commands need no `-R`. A workflow keeps a one-way mirror of each issue in the planning repo `grauzone-dev/planning`, where the mirrors are managed in the GitHub Project **Product Backlog** (`https://github.com/users/grauzone-dev/projects/1`). See [Mirror in the planning repo](#mirror-in-the-planning-repo).
+Issues and specs for this repo live as GitHub issues in `grauzone-dev/sandboxed-agents`. Create, read, edit, comment on, label and close them here with the `gh` CLI; `gh` infers this repo from the clone, so issue commands need no `-R`. A workflow keeps a one-way mirror of each eligible issue in the planning repo `grauzone-dev/planning`, where the mirrors are managed in the GitHub Project **Product Backlog** (`https://github.com/users/grauzone-dev/projects/1`). See [Mirror in the planning repo](#mirror-in-the-planning-repo).
 
 The installed `gh` may have no `gh project` command. Project operations below use `gh api graphql`, which works on every version and needs the `project` token scope.
 
@@ -71,9 +71,9 @@ List children with `gh api repos/grauzone-dev/sandboxed-agents/issues/<parent>/s
 
 `.github/workflows/mirror-issues.yml` runs `.github/scripts/mirror-issue.sh` when an issue is opened, edited, closed, reopened, labeled or unlabeled. A manual `workflow_dispatch` run resyncs the issue given in its optional `issue` input, or all issues without it.
 
-- **Who is mirrored**: only issues whose author is `OWNER`, `MEMBER` or `COLLABORATOR`. Issues from outside contributors get no mirror.
+- **Who is mirrored**: only issues whose author is `OWNER`, `MEMBER` or `COLLABORATOR`. Issues from outside contributors get no mirror, also on a manual run.
 - **Mirror body**: the lines `Repo: grauzone-dev/sandboxed-agents` and `Source: grauzone-dev/sandboxed-agents#<n>`, then the source body with bare `#<n>` references rewritten to `grauzone-dev/sandboxed-agents#<n>`. The `Source:` line is how the mirror is identified; never edit or remove it.
-- **Copied on every run**: title, body, labels that exist in both repos, open/closed state with close reason, and the parent link. Comments, assignees and blocking dependencies are not mirrored.
+- **Copied on every run**: title, body, labels that exist in both repos, open/closed state with close reason, and the parent link. When the source has no parent, the mirror's parent link is removed; when the source parent has no mirror or lives in another repo, the mirror's parent link is left as it is. Comments, assignees and blocking dependencies are not mirrored.
 - **Project**: the workflow adds the mirror to Product Backlog, sets Work Item from the `type: …` label, and sets Status to Backlog when it creates the mirror.
 - **Pointer back**: on creation the workflow comments on the source issue `Mirrored to grauzone-dev/planning#<m> for planning.`
 - **Edit the source, not the mirror.** The next sync overwrites any change to a mirror's title, body, labels or state. On the mirror, only its project fields are set by hand: Status after creation, Priority, Estimate and Sprint.

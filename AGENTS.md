@@ -11,7 +11,7 @@ At the start of every session, before starting or delegating any task, load and 
 
 ### Issue tracker
 
-Issues and specs live in this repo as Epics, Features, Stories and Tasks. Run `gh issue` commands here without `-R`, and reference issues from commits and PRs as `#<number>`. A specification is a Feature, an implementation ticket is a Story, and a wayfinder map is a Story with Task children; each new issue is linked to its parent as a sub-issue. A workflow mirrors each issue one way into `grauzone-dev/planning` and the GitHub Project **Product Backlog**; edit only the source issue, and set only project fields such as Status on the mirror. Before creating or reading tickets, publishing specifications, changing hierarchy, triaging, wayfinding, or completing work, use the type roles, mirror rules, state mappings, and verification status in `docs/agents/issue-tracker.md`.
+Issues and specs live in this repo as Epics, Features, Stories and Tasks. Run `gh issue` commands here without `-R`, and reference issues from commits and PRs as `#<number>`. A specification is a Feature, an implementation ticket is a Story, and a wayfinder map is a Story with Task children; each new issue that has a parent is linked to it as a sub-issue. A workflow mirrors each eligible issue one way into `grauzone-dev/planning` and the GitHub Project **Product Backlog**; edit only the source issue, and set only project fields such as Status on the mirror. Before creating or reading tickets, publishing specifications, changing hierarchy, triaging, wayfinding, or completing work, use the type roles, mirror rules, state mappings, and verification status in `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

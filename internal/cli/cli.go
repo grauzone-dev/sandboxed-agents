@@ -290,6 +290,10 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 			return sandbox.List(context.Background(), group, run, invocation.Stdout)
 		}},
 		removeCommand(&group, run),
+		{Name: "integrations", Commands: []Command{
+			integrationCommand("config", &group, run),
+			integrationCommand("login", &group, run),
+		}},
 		lifecycleCommand(sandbox.Start, &group, run),
 		lifecycleCommand(sandbox.Stop, &group, run),
 		lifecycleCommand(sandbox.Restart, &group, run),

@@ -47,6 +47,7 @@ func NewWithOptions(version string, run process.Runner, options Options) *Manage
 	m := &Manager{version: version, run: run, commands: make(map[string]Command), options: options}
 	m.Register("sessions", listSessions)
 	m.Register("agents", m.agents)
+	m.Register("integrations", configureIntegration)
 	return m
 }
 

@@ -23,6 +23,7 @@ Value formats (every value must be greater than zero; no sign, no exponent):
 
 The limits are set when the sandbox is created and recorded on its container.
 up never changes them: on an existing sandbox, a limit that differs from the
-recorded value makes up fail without starting it. To change a limit, run
-sandboxed-agents remove NAME, then sandboxed-agents up NAME with the new value.
+recorded value makes up fail without starting it. Omit the option to start the
+sandbox unchanged. To change a limit, run sandboxed-agents remove NAME, which
+keeps the sandbox's volumes, then sandboxed-agents up NAME with the new value.
 `

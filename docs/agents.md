@@ -89,6 +89,8 @@ The manager serializes changes to the agent installations with one lock, the fil
 | 6. Running state | The sandbox is stopped. The message names `sandboxed-agents start NAME`, and nothing starts on its own. |
 | 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. `agents enable` issues no further call into the sandbox. |
 
+This version has no `check NAME` yet; the check of one sandbox comes with #20. Until then, `sandboxed-agents check` without a name checks only the host prerequisites and does not diagnose a sandbox or its manager. `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
+
 An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. If npm or another step of the installation fails, `agents enable` reports the failure, leaves the selection unchanged, and exits with status 1.
 
 ## Catalog data format
@@ -149,4 +151,4 @@ Offline tests cover the behavior on this page ([Test seams](development.md#test-
 
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
-The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Neither is a change of identity inside a sandbox. No test runs npm against the registry, starts a real container, or signs in to an agent. Nothing on this page has been confirmed on a live host; a real npm install belongs to the live suite (#24).
+The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Neither is a change of identity inside a sandbox. No test runs npm against the registry, starts a real container, or signs in to an agent. Nothing on this page has been confirmed on a live host. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet.

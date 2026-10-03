@@ -120,7 +120,7 @@ func collectListObjects(ctx context.Context, group string, run process.Runner) (
 		if !ok {
 			continue
 		}
-		name, relevant := listSandboxName(base, containerPrefix, group, record.Labels)
+		name, relevant := strings.CutPrefix(base, containerPrefix+group+".")
 		if !relevant {
 			continue
 		}

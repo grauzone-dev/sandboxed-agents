@@ -135,7 +135,8 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
   - `volumes only` for each nonempty subset of volumes, including sandbox names that end in `.workspace`, `.home`, `.ssh`, or `.backup` or contain more dots, with the workspace kind `volume` only when the workspace volume exists and the existing volume names in `VOLUMES`;
   - `update interrupted` when only the backup container remains;
   - the group `team-a` on the Linux and the Windows fixture. On Windows the machine is selected first, and every later call carries `--connection` without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY`;
-  - an owned container that was renamed with Podman, listed under its `sandbox-name` label.
+  - an owned container that was renamed with Podman, listed under its `sandbox-name` label;
+  - in `default` and in `team-a`, volumes under another group's prefix (`sandboxed-agents.other.…`) that carry the current group as owner get no row and no `volume inspect` call. Beside them, an owned home volume and a foreign workspace volume under the current group's names give one `owner conflict` row that names both volumes.
 
   The precedence tests check only the start of the sandbox's row: the name, the state, the workspace kind, and the three `-` placeholders. They cover `owner conflict` for an empty or other owner on the container, each volume, or the backup container, with and without a container, ahead of `update interrupted`, which is also shown with a container. They also cover `owner conflict` for a foreign container or a single foreign volume without a backup container. The precedence tests also check that no row names the backup container.
 

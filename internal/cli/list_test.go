@@ -135,6 +135,39 @@ func TestListFindsOwnedContainersAfterTheirPodmanNameChanges(t *testing.T) {
 	}
 }
 
+func TestListIncludesVolumesOnlyUnderTheCurrentControllerGroupsPodmanNames(t *testing.T) {
+	for _, group := range []string{"default", "team-a"} {
+		t.Run(group, func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			t.Setenv("SANDBOXED_AGENTS_GROUP", group)
+			home := map[string]any{"Name": "sandboxed-agents." + group + ".agent01.home", "Labels": map[string]string{"io.github.sandboxed-agents.owner": group}}
+			workspace := map[string]any{"Name": "sandboxed-agents." + group + ".agent01.workspace", "Labels": map[string]string{"io.github.sandboxed-agents.owner": "foreign"}}
+			fakes.Script("podman",
+				testutil.Response{Stdout: `[]`},
+				listJSONResponse([]map[string]any{
+					{"Name": "sandboxed-agents.other.agent01.ssh", "Labels": map[string]string{"io.github.sandboxed-agents.owner": group}},
+					{"Name": "sandboxed-agents.other.hidden.workspace", "Labels": map[string]string{"io.github.sandboxed-agents.owner": group}},
+					workspace,
+					home,
+				}),
+				listJSONResponse([]map[string]any{home}),
+				listJSONResponse([]map[string]any{workspace}),
+			)
+			stdout, stderr, status := runCLI(t, "sandbox-host", "list")
+			for _, call := range fakes.Calls("podman") {
+				if len(call.Args) == 3 && call.Args[0] == "volume" && call.Args[1] == "inspect" && strings.HasPrefix(call.Args[2], "sandboxed-agents.other.") {
+					t.Errorf("inspected a volume outside the current group's Podman names: %v", call.Args)
+				}
+			}
+			want := "NAME STATE WORKSPACE PORT TOOLCHAINS AGENTS VOLUMES agent01 owner conflict volume - - - sandboxed-agents." + group + ".agent01.home,sandboxed-agents." + group + ".agent01.workspace"
+			if status != 0 || stderr != "" || strings.Join(strings.Fields(stdout), " ") != want {
+				t.Fatalf("status=%d stdout=%q stderr=%q want=%q", status, stdout, stderr, want)
+			}
+			assertListReadOnly(t, fakes, false)
+		})
+	}
+}
+
 func TestListShowsAHeaderWhenNoSandboxesExist(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	fakes.Script("podman", testutil.Response{Stdout: `[]`}, testutil.Response{Stdout: `[]`})

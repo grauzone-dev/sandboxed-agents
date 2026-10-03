@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
@@ -26,17 +27,17 @@ type volume struct {
 }
 
 type Up struct {
-	name         string
-	container    string
-	backup       string
-	volumes      []volume
-	assetHash    string
-	run          process.Runner
-	streams      process.Streams
-	exists       bool
-	backupExists bool
-	owner        string
-	running      bool
+	name             string
+	container        string
+	backup           string
+	volumes          []volume
+	assetHash        string
+	run              process.Runner
+	streams          process.Streams
+	containerExists  bool
+	backupExists     bool
+	containerOwner   string
+	containerRunning bool
 }
 
 func NewUp(name, assetHash string, run process.Runner, streams process.Streams) *Up {
@@ -52,19 +53,19 @@ func NewUp(name, assetHash string, run process.Runner, streams process.Streams) 
 	}
 }
 
-func (up *Up) Read(ctx context.Context) error {
+func (up *Up) CheckSandbox(ctx context.Context) error {
 	var err error
-	up.exists, err = up.objectExists(ctx, "container", up.container)
+	up.containerExists, err = up.objectExists(ctx, "container", up.container)
 	if err != nil {
 		return err
 	}
-	if up.exists {
+	if up.containerExists {
 		record, err := up.inspectContainer(ctx, up.container)
 		if err != nil {
 			return err
 		}
-		up.owner = record.Config.Labels[OwnerLabel]
-		up.running = record.State.Running
+		up.containerOwner = record.Config.Labels[OwnerLabel]
+		up.containerRunning = record.State.Running
 	}
 	for index := range up.volumes {
 		up.volumes[index].exists, err = up.objectExists(ctx, "volume", up.volumes[index].name)
@@ -72,20 +73,14 @@ func (up *Up) Read(ctx context.Context) error {
 			return err
 		}
 		if up.volumes[index].exists {
-			var records []struct {
-				Name   string
-				Labels map[string]string
-			}
-			if err := up.inspect(ctx, "volume", up.volumes[index].name, &records); err != nil {
+			record, err := up.inspectVolume(ctx, up.volumes[index].name)
+			if err != nil {
 				return err
 			}
-			if len(records) != 1 || records[0].Name != up.volumes[index].name {
-				return fmt.Errorf("invalid podman volume inspect response for %s", up.volumes[index].name)
-			}
-			up.volumes[index].owner = records[0].Labels[OwnerLabel]
+			up.volumes[index].owner = record.Labels[OwnerLabel]
 		}
 	}
-	if !up.exists {
+	if !up.containerExists {
 		return up.checkSandboxOwner()
 	}
 	return nil
@@ -93,7 +88,7 @@ func (up *Up) Read(ctx context.Context) error {
 
 func (up *Up) checkSandboxOwner() error {
 	var conflicts []string
-	if up.exists && up.owner != defaultGroup {
+	if up.containerExists && up.containerOwner != defaultGroup {
 		conflicts = append(conflicts, up.container)
 	}
 	for _, volume := range up.volumes {
@@ -140,15 +135,21 @@ func (up *Up) CheckInterruptedUpdate() error {
 }
 
 func (up *Up) Apply(ctx context.Context) error {
-	if up.exists {
-		if !up.running {
-			if err := up.command(ctx, "start", up.container); err != nil {
-				return err
-			}
+	if !up.containerExists {
+		if err := up.createSandbox(ctx); err != nil {
+			return err
 		}
-		_, err := fmt.Fprintf(up.streams.Stdout, "Sandbox %s is running.\n", up.name)
-		return err
 	}
+	if !up.containerExists || !up.containerRunning {
+		if err := up.runPodman(ctx, "start", up.container); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(up.streams.Stdout, "Sandbox %s is running.\n", up.name)
+	return err
+}
+
+func (up *Up) createSandbox(ctx context.Context) error {
 	image := images.BaseTag(up.assetHash)
 	exists, err := up.objectExists(ctx, "image", image)
 	if err != nil {
@@ -162,7 +163,7 @@ func (up *Up) Apply(ctx context.Context) error {
 	for _, volume := range up.volumes {
 		verb := "Adopted"
 		if !volume.exists {
-			if err := up.command(ctx, "volume", "create", "--label", OwnerLabel+"="+defaultGroup, volume.name); err != nil {
+			if err := up.runPodman(ctx, "volume", "create", "--label", OwnerLabel+"="+defaultGroup, volume.name); err != nil {
 				return err
 			}
 			verb = "Created"
@@ -184,14 +185,10 @@ func (up *Up) Apply(ctx context.Context) error {
 		args = append(args, "--mount", "type=volume,source="+volume.name+",target="+volume.target)
 	}
 	args = append(args, image)
-	if err := up.command(ctx, args...); err != nil {
+	if err := up.runPodman(ctx, args...); err != nil {
 		return err
 	}
-	if err := up.command(ctx, "start", up.container); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(up.streams.Stdout, "Sandbox %s is running.\n", up.name)
-	return err
+	return nil
 }
 
 func (up *Up) objectExists(ctx context.Context, kind, name string) (bool, error) {
@@ -210,7 +207,7 @@ func (up *Up) objectExists(ctx context.Context, kind, name string) (bool, error)
 	}
 }
 
-func (up *Up) command(ctx context.Context, args ...string) error {
+func (up *Up) runPodman(ctx context.Context, args ...string) error {
 	status, err := up.run(ctx, process.Request{Name: "podman", Args: args, Streams: up.streams})
 	if err != nil {
 		return fmt.Errorf("start podman %s: %w", args[0], err)
@@ -249,6 +246,31 @@ func (up *Up) inspect(ctx context.Context, kind, name string, record any) error 
 	}
 	if err := json.Unmarshal(output.Bytes(), record); err != nil {
 		return fmt.Errorf("decode podman %s inspect %s: %w", kind, name, err)
+	}
+	return nil
+}
+
+type volumeRecord struct {
+	Name   string
+	Labels map[string]string
+}
+
+func (up *Up) inspectVolume(ctx context.Context, name string) (volumeRecord, error) {
+	var records []volumeRecord
+	if err := up.inspect(ctx, "volume", name, &records); err != nil {
+		return volumeRecord{}, err
+	}
+	if len(records) != 1 || records[0].Name != name {
+		return volumeRecord{}, fmt.Errorf("invalid podman volume inspect response for %s", name)
+	}
+	return records[0], nil
+}
+
+var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+func ValidateName(name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("invalid sandbox name %q; names must match %s", name, namePattern.String())
 	}
 	return nil
 }

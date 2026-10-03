@@ -22,13 +22,14 @@ import (
 const MinimumPodmanVersion = "4.4.0"
 
 type Host struct {
-	Platform string
-	UID      int
-	Username string
-	LookPath func(string) (string, error)
-	ReadFile func(string) ([]byte, error)
-	Writable func(string) bool
-	Run      process.Runner
+	Platform         string
+	UID              int
+	Username         string
+	LookPath         func(string) (string, error)
+	ReadFile         func(string) ([]byte, error)
+	Writable         func(string) bool
+	Run              process.Runner
+	SSHPortAvailable func(int) (bool, error)
 }
 
 func LocalHost() Host {

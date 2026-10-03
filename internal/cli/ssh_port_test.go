@@ -23,8 +23,7 @@ func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			create := fakes.Calls("podman")[len(fakes.Calls("podman"))-2].Args
-			port := assertAllocatedSSHPort(t, create)
-			assertSSHPortAllocationOrder(t, port)
+			assertAllocatedSSHPort(t, create)
 			assertNoSSH(t, fakes)
 		})
 	}
@@ -104,23 +103,6 @@ func assertAllocatedSSHPort(t *testing.T, create []string) int {
 	}
 	assertSSHPublication(t, create, port)
 	return port
-}
-
-func assertSSHPortAllocationOrder(t *testing.T, selected int, reserved ...int) {
-	t.Helper()
-	for port := 2222; port < selected; port++ {
-		if slices.Contains(reserved, port) {
-			continue
-		}
-		listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
-		}
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-		t.Fatalf("allocated SSH port %d while lower unrecorded port %d is available", selected, port)
-	}
 }
 
 func TestStartAndRestartRefuseAnUnavailableRecordedSSHPort(t *testing.T) {
@@ -295,7 +277,6 @@ func TestUpSkipsListenersAndRecordedSSHPortsAcrossControllerGroups(t *testing.T)
 				if selected == busy || selected == reserved {
 					t.Fatalf("selected SSH port %d; busy=%d reserved=%d", selected, busy, reserved)
 				}
-				assertSSHPortAllocationOrder(t, selected, reserved)
 				for _, call := range calls {
 					if slices.Contains(call.Args, "sandboxed-agents.other.agent01") || slices.Contains(call.Args, "unrelated-service") {
 						t.Fatalf("allocation changed or inspected unrelated container: %v", call.Args)
@@ -417,7 +398,6 @@ func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 			}
 			calls := fakes.Calls("podman")
 			first := assertAllocatedSSHPort(t, calls[len(calls)-2].Args)
-			assertSSHPortAllocationOrder(t, first)
 			responses = upObjectResponses(nil, false, nil, nil)
 			responses[len(responses)-1] = testutil.Response{Stdout: fmt.Sprintf(`[{"Names":["sandboxed-agents.default.agent01"],"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":%q},"State":"exited"}]`, strconv.Itoa(first))}
 			responses = append(responses, make([]testutil.Response, 6)...)
@@ -431,7 +411,6 @@ func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 			if second == first {
 				t.Fatalf("second sandbox reused recorded SSH port %d", first)
 			}
-			assertSSHPortAllocationOrder(t, second, first)
 			assertNoSSH(t, fakes)
 		})
 	}
@@ -659,4 +638,90 @@ func TestListShowsToolchainsAndRecordedSSHPortTogether(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestUpAllocatesTheFirstFreeSSHPortWithControlledHost(t *testing.T) {
+	for _, test := range []struct {
+		fixture   string
+		inventory string
+		want      int
+	}{
+		{"ssh-ports-free", "[]", 2222},
+		{"ssh-ports-busy", `[{"Names":["sandboxed-agents.other.stopped"],"Labels":{"io.github.sandboxed-agents.owner":"other","io.github.sandboxed-agents.ssh-port":"2223"},"State":"exited"}]`, 2224},
+		{"ssh-ports-last", "[]", 65535},
+	} {
+		t.Run(test.fixture, func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			responses := upObjectResponses(nil, false, nil, nil)
+			responses[len(responses)-1] = testutil.Response{Stdout: test.inventory}
+			responses = append(responses, make([]testutil.Response, 6)...)
+			fakes.Script("podman", responses...)
+			stdout, stderr, status := runCLI(t, test.fixture, "up", "agent01")
+			if status != 0 || stderr != "" {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			calls := fakes.Calls("podman")
+			create := calls[len(calls)-2].Args
+			if port := assertAllocatedSSHPort(t, create); port != test.want {
+				t.Fatalf("allocated SSH port %d; want %d", port, test.want)
+			}
+			assertNoSSH(t, fakes)
+		})
+	}
+}
+
+func TestUpRetainsTheFirstAllocatedSSHPortWithControlledHost(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := append(upObjectResponses(nil, false, nil, nil), make([]testutil.Response, 6)...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "ssh-ports-free", "up", "agent01")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	first := assertAllocatedSSHPort(t, calls[len(calls)-2].Args)
+	if first != 2222 {
+		t.Fatalf("first SSH port=%d; want 2222", first)
+	}
+	responses = upObjectResponses(nil, false, nil, nil)
+	responses[len(responses)-1] = testutil.Response{Stdout: fmt.Sprintf(`[{"Names":["sandboxed-agents.default.agent01"],"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":%q},"State":"exited"}]`, strconv.Itoa(first))}
+	responses = append(responses, make([]testutil.Response, 6)...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status = runCLI(t, "ssh-ports-free", "up", "agent02")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls = fakes.Calls("podman")
+	if second := assertAllocatedSSHPort(t, calls[len(calls)-2].Args); second != 2223 {
+		t.Fatalf("second SSH port=%d; want 2223", second)
+	}
+	assertNoSSH(t, fakes)
+}
+
+func TestUpRefusesSSHPortProbeErrorsBeforeCreation(t *testing.T) {
+	for _, option := range []string{"", "--port=2300"} {
+		t.Run(option, func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			fakes.Script("podman", upObjectResponses(nil, false, nil, nil)...)
+			args := []string{"up", "agent01", "--with=native"}
+			if option != "" {
+				args = append(args, option)
+			}
+			stdout, stderr, status := runCLI(t, "ssh-ports-error", args...)
+			if status == 0 || !strings.Contains(stderr, "fixture socket lookup failed") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			assertSSHReadOnly(t, fakes)
+		})
+	}
+}
+
+func TestUpRefusesExhaustedSSHPortsWithControlledHost(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	fakes.Script("podman", upObjectResponses(nil, false, nil, nil)...)
+	stdout, stderr, status := runCLI(t, "ssh-ports-exhausted", "up", "agent01", "--with=native")
+	if status == 0 || !strings.Contains(stderr, "no free SSH port") || !strings.Contains(stderr, "2222 through 65535") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	assertSSHReadOnly(t, fakes)
 }

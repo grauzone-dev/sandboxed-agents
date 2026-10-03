@@ -211,7 +211,7 @@ A container that `up` creates mounts its three named volumes, or with `WORKSPACE
 A sandbox created by this version does not yet offer:
 
 - an SSH setup on the host, that is, an authorized key, a pinned host key, and a host entry (#19). Its SSH server runs, but the executable authorizes no key in it, so a sandbox with a new home volume has no authorized key;
-- installed agents (#69).
+- agents chosen when the sandbox is created (#69). A sandbox with a new home volume has no agent, while an adopted home volume keeps the agents installed in it; `sandboxed-agents agents enable NAME AGENT` installs one into the running sandbox ([Agents](agents.md)).
 
 `up` opens no SSH connection to the sandbox and neither reads nor writes any file in your SSH directory; only the opt-in SSH setup (#19) will. On Windows, the preflight runs its read-only machine checks through `podman machine ssh`. These checks run in the Podman machine, not in the sandbox.
 

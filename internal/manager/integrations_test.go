@@ -39,7 +39,7 @@ func TestGitIdentitySetsTheAgentGlobalNameAndEmailWithoutPrompting(t *testing.T)
 }
 
 func TestGitIdentityRejectsIncompleteInputBeforeAnyWrite(t *testing.T) {
-	for _, input := range []string{"", "Typed Name\n", "Typed Name\nunterminated", "Name\x00\nemail@example.org\n", "Name\nemail\x00\n"} {
+	for _, input := range []string{"", "\nemail@example.org\n", "Typed Name\n", "Typed Name\nunterminated", "Name\x00\nemail@example.org\n", "Name\nemail\x00\n"} {
 		t.Run(input, func(t *testing.T) {
 			run := func(context.Context, process.Request) (int, error) {
 				t.Fatal("incomplete prompt input wrote configuration")
@@ -83,6 +83,7 @@ func TestGitIdentityNormalizesProcessFailuresAndStopsWriting(t *testing.T) {
 
 func TestManagerRejectsUndeliveredIntegrationWorkflowsWithoutProcesses(t *testing.T) {
 	for _, args := range [][]string{
+		{"config", "git", "identity", "--name=", "--email=E"},
 		{}, {"config"}, {"login", "github"}, {"login", "git"}, {"config", "github"}, {"config", "git", "credentials"}, {"config", "git", "identity", "--unknown"}, {"config", "git", "identity", "--name=N\x00", "--email=E"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

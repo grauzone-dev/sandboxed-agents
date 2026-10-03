@@ -65,6 +65,8 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 		{[]string{"config", "a/b", "git"}, "invalid sandbox name"},
 		{[]string{"config", "agent01", "git", "--unknown"}, "unexpected argument or option"},
 		{[]string{"config", "agent01", "git", "--name"}, "missing value for --name"},
+		{[]string{"config", "agent01", "git", "--name=", "--email=E"}, "missing value for --name"},
+		{[]string{"config", "agent01", "git", "--name", "", "--email=E"}, "missing value for --name"},
 		{[]string{"config", "agent01", "git", "--email", "--name", "N"}, "missing value for --email"},
 		{[]string{"config", "agent01", "git", "--name", "N", "--name", "M"}, "duplicate option"},
 		{[]string{"config", "agent01", "git", "identity", "extra"}, "unexpected argument or option"},

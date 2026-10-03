@@ -39,11 +39,11 @@ sandboxed-agents integrations config NAME git [identity] [--name N] [--email E]
 
 The command writes the commit name and email to the global Git configuration of the user `agent` in the sandbox. Since `identity` is the only config workflow of `git`, `integrations config NAME git` runs it as well. Once `credentials` is added (#48), the workflow name becomes required.
 
-Each option is given as `--name N` or `--name=N`, at most once. A value given as a separate word must not start with `--`, and no value may contain a NUL character.
+Each option is given as `--name N` or `--name=N`, at most once. A value given as a separate word must not start with `--`, and no value may contain a NUL character. The name must not be empty, because Git refuses to commit with an empty author name: `--name=` and `--name ''` fail as a missing value for `--name` before Podman is called.
 
 ### Prompts
 
-With both options given, the command needs no terminal and does not prompt. With one or both missing, it needs standard input and standard output to be a terminal. It then prompts for each missing value, with `Git commit name:` and `Git commit email:`, and sets what you enter. All missing values are read before Git is called, so input that ends early or contains a NUL character changes nothing.
+With both options given, the command needs no terminal and does not prompt. With one or both missing, it needs standard input and standard output to be a terminal. It then prompts for each missing value, with `Git commit name:` and `Git commit email:`, and sets what you enter. All missing values are read before Git is called, so input that ends early, contains a NUL character, or leaves the name empty fails and changes nothing.
 
 Without a terminal, a command with a missing option fails, says that it needs a terminal or both options, and changes nothing. Pass `--name` and `--email` explicitly in scripts.
 

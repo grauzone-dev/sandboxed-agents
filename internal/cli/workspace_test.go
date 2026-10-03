@@ -378,7 +378,7 @@ func TestListShowsABoundWorkspaceFromItsRecordedKind(t *testing.T) {
 func TestUpQuotesWorkspacePathsInThePodmanMountGrammar(t *testing.T) {
 	fakes := linuxHost(t)
 	root := workspaceFixture(t)
-	directory := filepath.Join(root, "project,with\"quotes\nand=values")
+	directory := filepath.Join(root, "project,with\"quotes\r\nand=values")
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -661,6 +661,18 @@ func TestUpNamesAnUnresolvableWorkspaceSymlink(t *testing.T) {
 	}
 	if len(fakes.Calls("podman")) != 0 {
 		t.Fatal("unresolved workspace called Podman")
+	}
+	assertNoSSH(t, fakes)
+}
+
+func TestUpNamesTheUnsupportedWorkspaceHostWithoutCallingItWindows(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	stdout, stderr, status := runCLI(t, "unsupported-preflight", "up", "agent01", "/project")
+	if status == 0 || stdout != "" || !strings.Contains(stderr, "darwin") || strings.Contains(stderr, "Windows") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if len(fakes.Calls("podman")) != 0 {
+		t.Fatal("unsupported host called Podman")
 	}
 	assertNoSSH(t, fakes)
 }

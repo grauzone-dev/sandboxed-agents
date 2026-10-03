@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,9 +48,15 @@ func runCLI(t *testing.T, fixture string, args ...string) (string, string, int) 
 
 func runCLIAt(t *testing.T, directory, fixture string, args ...string) (string, string, int) {
 	t.Helper()
+	return runCLIWithInput(t, directory, fixture, nil, args...)
+}
+
+func runCLIWithInput(t *testing.T, directory, fixture string, input io.Reader, args ...string) (string, string, int) {
+	t.Helper()
 	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestCLIProcess$", "--"}, args...)...)
 	command.Dir = directory
 	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE="+fixture)
+	command.Stdin = input
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	status := 0

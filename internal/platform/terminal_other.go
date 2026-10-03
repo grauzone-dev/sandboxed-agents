@@ -2,8 +2,8 @@
 
 package platform
 
-import "os"
+import "io"
 
-func IsTerminal(*os.File) bool {
+func IsTerminal(io.Reader) bool {
 	return false
 }

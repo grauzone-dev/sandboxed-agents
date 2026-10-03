@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -31,20 +30,15 @@ func shellCommand(group *string, run process.Runner) Command {
 			if len(invocation.Args) > 1 {
 				return unexpectedArgument(invocation.Args[1])
 			}
-			shell = sandbox.NewShell(invocation.Args[0], *group, run, process.Streams{Stdin: os.Stdin, Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			shell = sandbox.NewShell(invocation.Args[0], *group, run, process.Streams{Stdin: invocation.Stdin, Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Sandbox:           func(*Invocation) error { return shell.CheckContainer(ctx) },
 		Owner:             func(*Invocation) error { return shell.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return shell.CheckInterruptedUpdate() },
-		Running: func(invocation *Invocation) error {
-			if !shell.Running() {
-				return fmt.Errorf(shellStoppedFormat, invocation.Args[0])
-			}
-			return nil
-		},
-	}, Action: func(*Invocation) error {
-		status, err := shell.Open(ctx, platform.IsTerminal(os.Stdin))
+		Running:           func(*Invocation) error { return shell.CheckRunning() },
+	}, Action: func(invocation *Invocation) error {
+		status, err := shell.Open(ctx, platform.IsTerminal(invocation.Stdin))
 		if err != nil {
 			return err
 		}

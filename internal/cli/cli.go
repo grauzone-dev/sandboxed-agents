@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 type Invocation struct {
 	Args   []string
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -81,7 +83,7 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 	if selected == nil || selected.Action == nil {
 		return tree.failure(stderr, path, errors.New("missing command"), true)
 	}
-	invocation := &Invocation{Args: args, Stdout: stdout, Stderr: stderr}
+	invocation := &Invocation{Args: args, Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}
 	if tree.Usage != nil {
 		if err := tree.Usage(invocation); err != nil {
 			return tree.failure(stderr, path, err, true)
@@ -221,7 +223,7 @@ func lifecycleCommand(action sandbox.LifecycleAction, group *string, run process
 			lifecycle = sandbox.NewLifecycle(invocation.Args[0], *group, action, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
-		Sandbox:           func(*Invocation) error { return lifecycle.CheckSandbox(ctx) },
+		Sandbox:           func(*Invocation) error { return lifecycle.CheckContainer(ctx) },
 		Owner:             func(*Invocation) error { return lifecycle.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return lifecycle.CheckInterruptedUpdate() },
 		Preconditions:     func(*Invocation) error { return lifecycle.CheckManager(ctx) },

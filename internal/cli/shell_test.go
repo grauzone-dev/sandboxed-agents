@@ -1,35 +1,17 @@
 package cli_test
 
 import (
-	"bytes"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
-
-func TestShellOpensAsAgentWithoutSSH(t *testing.T) {
-	fakes := testutil.NewFakePrograms(t)
-	owned := "default"
-	fakes.Script("podman", append(sandboxObjectResponses(&owned, true, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, nil), testutil.Response{})...)
-	stdout, stderr, status := runCLI(t, "sandbox-host", "shell", "agent01")
-	if status != 0 || stdout != "" || stderr != "" {
-		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
-	}
-	calls := fakes.Calls("podman")
-	want := []string{"exec", "--interactive", "--user=1000:1000", "--workdir=/workspace", "sandboxed-agents.default.agent01", "/bin/bash"}
-	if len(calls) != 10 || !reflect.DeepEqual(calls[len(calls)-1].Args, want) {
-		t.Fatalf("calls=%v want final call=%v", calls, want)
-	}
-	if len(fakes.Calls("ssh")) != 0 || len(fakes.Calls("ssh-keygen")) != 0 {
-		t.Fatal("shell called SSH")
-	}
-}
 
 func TestShellPassesInputOutputAndExitStatusWithoutATerminal(t *testing.T) {
 	for _, fixture := range []string{"sandbox-host", "windows"} {
@@ -37,9 +19,9 @@ func TestShellPassesInputOutputAndExitStatusWithoutATerminal(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/status-%d", fixture, code), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				input := "printf 'hello\\n'\nprintf 'diagnostic\\n' >&2\nexit 7\n"
-				responses := shellResponses(fixture, true, nil)
+				responses := shellResponses(fixture)
 				fakes.Script("podman", append(responses, testutil.Response{WantStdin: input, Stdout: "hello\n", Stderr: "diagnostic\n", ExitCode: code})...)
-				stdout, stderr, status := runShellCLI(t, fixture, nil, input)
+				stdout, stderr, status := runCLIWithInput(t, "", fixture, strings.NewReader(input), "shell", "agent01")
 				if status != code || stdout != "hello\n" || stderr != "diagnostic\n" {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -58,8 +40,8 @@ func TestShellUsesATerminalAndPreservesExitStatus(t *testing.T) {
 		for _, code := range []int{0, 7} {
 			t.Run(fmt.Sprintf("%s/status-%d", fixture, code), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
-				fakes.Script("podman", append(shellResponses(fixture, true, nil), testutil.Response{Stdout: "interactive output\n", Stderr: "interactive error\n", ExitCode: code})...)
-				stdout, stderr, status := runShellCLI(t, fixture, shellTerminal(t), "")
+				fakes.Script("podman", append(shellResponses(fixture), testutil.Response{Stdout: "interactive output\n", Stderr: "interactive error\n", ExitCode: code})...)
+				stdout, stderr, status := runCLIWithInput(t, "", fixture, shellTerminal(t), "shell", "agent01")
 				if status != code || stdout != "interactive output\n" || stderr != "interactive error\n" {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -168,7 +150,7 @@ func TestShellLeavesSSHAndHostStateUntouched(t *testing.T) {
 						}
 					}
 				}
-				fakes.Script("podman", append(shellResponses(fixture, true, nil), testutil.Response{})...)
+				fakes.Script("podman", append(shellResponses(fixture), testutil.Response{})...)
 				stdout, stderr, status := runCLI(t, fixture, "shell", "agent01")
 				if status != 0 || stdout != "" || stderr != "" {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -200,9 +182,7 @@ func TestShellLeavesSSHAndHostStateUntouched(t *testing.T) {
 						t.Fatalf("created host state: entries=%v err=%v", entries, err)
 					}
 				}
-				if len(fakes.Calls("ssh")) != 0 || len(fakes.Calls("ssh-keygen")) != 0 {
-					t.Fatal("shell called SSH")
-				}
+				assertNoSSH(t, fakes)
 			})
 		}
 	}
@@ -213,7 +193,7 @@ func TestShellOpensOnlyInTheSelectedControllerGroup(t *testing.T) {
 		t.Run(fixture, func(t *testing.T) {
 			t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
 			fakes := testutil.NewFakePrograms(t)
-			responses := shellResponses(fixture, true, nil)
+			responses := shellResponses(fixture)
 			for index := range responses {
 				responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, ".default.", ".team-a.")
 				responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"default"`, `"team-a"`)
@@ -239,47 +219,51 @@ func TestShellOpensOnlyInTheSelectedControllerGroup(t *testing.T) {
 
 func TestShellOpensAfterUpWithoutSSHSetup(t *testing.T) {
 	for _, fixture := range []string{"linux-preflight", "windows"} {
-		t.Run(fixture, func(t *testing.T) {
-			var fakes *testutil.FakePrograms
-			if fixture == "linux-preflight" {
-				fakes = linuxHost(t)
-			} else {
-				fakes = testutil.NewFakePrograms(t)
-			}
-			responses := upObjectResponses(nil, false, nil, nil)
-			if fixture == "windows" {
-				responses = append(healthyWindowsPodman(), responses[1:]...)
-			}
-			responses = append(responses, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{})
-			fakes.Script("podman", responses...)
-			stdout, stderr, status := runCLI(t, fixture, "up", "agent01")
-			if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
-				t.Fatalf("up status=%d stdout=%q stderr=%q", status, stdout, stderr)
-			}
-			before := len(fakes.Calls("podman"))
-			shellFixture := fixture
-			if fixture == "linux-preflight" {
-				shellFixture = "sandbox-host"
-			}
-			fakes.Script("podman", append(shellResponses(shellFixture, true, nil), testutil.Response{})...)
-			stdout, stderr, status = runCLI(t, shellFixture, "shell", "agent01")
-			if status != 0 || stdout != "" || stderr != "" {
-				t.Fatalf("shell status=%d stdout=%q stderr=%q", status, stdout, stderr)
-			}
-			calls := shellOperationCalls(t, shellFixture, fakes.Calls("podman")[before:])
-			if len(calls) != 10 || calls[len(calls)-1].Args[0] != "exec" {
-				t.Fatalf("shell calls=%v", calls)
-			}
-			if len(fakes.Calls("ssh")) != 0 || len(fakes.Calls("ssh-keygen")) != 0 {
-				t.Fatal("up or shell called SSH")
-			}
-		})
+		for _, terminal := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/terminal-%t", fixture, terminal), func(t *testing.T) {
+				var fakes *testutil.FakePrograms
+				if fixture == "linux-preflight" {
+					fakes = linuxHost(t)
+				} else {
+					fakes = testutil.NewFakePrograms(t)
+				}
+				responses := upObjectResponses(nil, false, nil, nil)
+				if fixture == "windows" {
+					responses = append(healthyWindowsPodman(), responses[1:]...)
+				}
+				responses = append(responses, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{})
+				fakes.Script("podman", responses...)
+				stdout, stderr, status := runCLI(t, fixture, "up", "agent01")
+				if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
+					t.Fatalf("up status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				before := len(fakes.Calls("podman"))
+				shellFixture := fixture
+				if fixture == "linux-preflight" {
+					shellFixture = "sandbox-host"
+				}
+				fakes.Script("podman", append(shellResponses(shellFixture), testutil.Response{})...)
+				var input io.Reader
+				if terminal {
+					input = shellTerminal(t)
+				}
+				stdout, stderr, status = runCLIWithInput(t, "", shellFixture, input, "shell", "agent01")
+				if status != 0 || stdout != "" || stderr != "" {
+					t.Fatalf("shell status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				calls := shellOperationCalls(t, shellFixture, fakes.Calls("podman")[before:])
+				if len(calls) != 10 || calls[len(calls)-1].Args[0] != "exec" || slices.Contains(calls[len(calls)-1].Args, "--tty") != terminal {
+					t.Fatalf("shell calls=%v", calls)
+				}
+				assertNoSSH(t, fakes)
+			})
+		}
 	}
 }
 
-func shellResponses(fixture string, running bool, backup *string) []testutil.Response {
+func shellResponses(fixture string) []testutil.Response {
 	owned := "default"
-	responses := sandboxObjectResponses(&owned, running, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, backup)
+	responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, nil)
 	if fixture == "windows" {
 		responses = append(healthyWindowsPodman()[1:3:3], responses...)
 	}
@@ -295,26 +279,4 @@ func shellOperationCalls(t *testing.T, fixture string, calls []testutil.Call) []
 		return windowsOperationCalls(t, calls[2:], "podman-machine-default")
 	}
 	return calls
-}
-
-func runShellCLI(t *testing.T, fixture string, stdin *os.File, input string) (string, string, int) {
-	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestCLIProcess$", "--", "shell", "agent01")
-	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE="+fixture)
-	if stdin != nil {
-		command.Stdin = stdin
-	} else {
-		command.Stdin = strings.NewReader(input)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	status := 0
-	if err := command.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			status = exit.ExitCode()
-		} else {
-			t.Fatal(err)
-		}
-	}
-	return stdout.String(), stderr.String(), status
 }

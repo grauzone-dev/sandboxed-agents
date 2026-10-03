@@ -226,7 +226,7 @@ Root in the container is root only inside the sandbox's user namespace: it maps 
 
 ## SSH server
 
-Every sandbox runs an SSH server (sshd), so that editors and desktop UIs can connect to it. It is reachable only from your own machine: its port is published on `127.0.0.1` and on no other address.
+Every sandbox runs an SSH server (sshd), the endpoint that editors and desktop UIs connect to. It is reachable only from your own machine: its port is published on `127.0.0.1` and on no other address. Signing in needs a key authorized for the user `agent` in the sandbox. The executable authorizes no client key, so a sandbox with a new home volume has none; the opt-in SSH setup that does this comes with #19 ([Host keys and sign-in](#host-keys-and-sign-in)).
 
 ### Port
 

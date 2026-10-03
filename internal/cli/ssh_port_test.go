@@ -23,7 +23,8 @@ func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			create := fakes.Calls("podman")[len(fakes.Calls("podman"))-2].Args
-			assertAllocatedSSHPort(t, create)
+			port := assertAllocatedSSHPort(t, create)
+			assertSSHPortAllocationOrder(t, port)
 			assertNoSSH(t, fakes)
 		})
 	}
@@ -103,6 +104,23 @@ func assertAllocatedSSHPort(t *testing.T, create []string) int {
 	}
 	assertSSHPublication(t, create, port)
 	return port
+}
+
+func assertSSHPortAllocationOrder(t *testing.T, selected int, reserved ...int) {
+	t.Helper()
+	for port := 2222; port < selected; port++ {
+		if slices.Contains(reserved, port) {
+			continue
+		}
+		listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("allocated SSH port %d while lower unrecorded port %d is available", selected, port)
+	}
 }
 
 func TestStartAndRestartRefuseAnUnavailableRecordedSSHPort(t *testing.T) {
@@ -277,6 +295,7 @@ func TestUpSkipsListenersAndRecordedSSHPortsAcrossControllerGroups(t *testing.T)
 				if selected == busy || selected == reserved {
 					t.Fatalf("selected SSH port %d; busy=%d reserved=%d", selected, busy, reserved)
 				}
+				assertSSHPortAllocationOrder(t, selected, reserved)
 				for _, call := range calls {
 					if slices.Contains(call.Args, "sandboxed-agents.other.agent01") || slices.Contains(call.Args, "unrelated-service") {
 						t.Fatalf("allocation changed or inspected unrelated container: %v", call.Args)
@@ -398,6 +417,7 @@ func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 			}
 			calls := fakes.Calls("podman")
 			first := assertAllocatedSSHPort(t, calls[len(calls)-2].Args)
+			assertSSHPortAllocationOrder(t, first)
 			responses = upObjectResponses(nil, false, nil, nil)
 			responses[len(responses)-1] = testutil.Response{Stdout: fmt.Sprintf(`[{"Names":["sandboxed-agents.default.agent01"],"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":%q},"State":"exited"}]`, strconv.Itoa(first))}
 			responses = append(responses, make([]testutil.Response, 6)...)
@@ -411,6 +431,7 @@ func TestUpAllocatesDifferentSSHPortsAfterTheFirstSandboxStops(t *testing.T) {
 			if second == first {
 				t.Fatalf("second sandbox reused recorded SSH port %d", first)
 			}
+			assertSSHPortAllocationOrder(t, second, first)
 			assertNoSSH(t, fakes)
 		})
 	}

@@ -19,7 +19,7 @@ A coding CLI from the agent catalog that is installed into a sandbox's home data
 _Avoid_: Assistant, bot, model
 
 **Agent session**:
-A persistent terminal session running one agent in a sandbox, which the user can detach from and reattach to.
+A persistent terminal session running one agent in a sandbox, which the user can detach from and reattach to. It ends when its agent exits, so a running agent session always means a running agent.
 _Avoid_: Agent run (a run is a one-shot command that ends with its terminal)
 
 **Integration**:
@@ -42,11 +42,14 @@ The container filesystem a sandbox is created from: the base contents every sand
 ### Ownership
 
 **Controller group**:
-The namespace an installed executable manages. The default group is `default`; an environment variable selects another. It does not depend on where the executable is installed.
+The namespace an installed executable manages. The default group is `default`; an environment variable selects another. It does not depend on where the executable is installed. Two controller groups can each hold a sandbox of the same name.
 _Avoid_: Controller, owner path, installation
 
 **Owner**:
 The controller group recorded on a sandbox and its volumes. The executable lists and changes only objects whose owner is its own controller group.
+
+**Backup container**:
+The previous container of a sandbox, kept under its own name while `update` replaces it and removed once the new container is ready. It is not a sandbox and never appears in `list`.
 
 ### Host boundaries
 

@@ -39,10 +39,14 @@ sandboxed-agents agents enable NAME AGENT
 When the agent is not enabled yet, the manager installs the version of the agent's npm package that is `latest` at that moment:
 
 ```sh
-npm install --global --prefix /home/agent/.local PACKAGE@latest
+npm install --global --prefix /home/agent/.local --cache /home/agent/.local/cache/sandboxed-agents/npm PACKAGE@latest
 ```
 
-It reads the installed version from the package's `package.json` under `/home/agent/.local/lib/node_modules`, records the agent in the agent selection, `/home/agent/.local/state/sandboxed-agents/selection.json`, prints `Agent AGENT is enabled (version VERSION).`, and exits with status 0. Enabling an agent leaves the other contents of the home volume unchanged.
+`--cache` moves npm's cache from its default `~/.npm` to a directory of its own under `/home/agent/.local`. Options on the command line take priority over npm's environment variables and `.npmrc` files ([npm config, `cache`](https://docs.npmjs.com/cli/v11/using-npm/config/#cache)).
+
+It reads the installed version from the package's `package.json` under `/home/agent/.local/lib/node_modules`, records the agent in the agent selection, `/home/agent/.local/state/sandboxed-agents/selection.json`, prints `Agent AGENT is enabled (version VERSION).`, and exits with status 0.
+
+The installation, the npm cache, and the manager's own state in `/home/agent/.local/state/sandboxed-agents` all lie below `/home/agent/.local`. The manager removes no existing file of the home volume, credentials included. npm and the package's install scripts run as `agent`, UID and GID 1000, like any other work of that user, so they can still write elsewhere in the home volume; what they create belongs to `agent`.
 
 When the agent is already enabled, `agents enable` runs no installation and leaves the selection as it is. It prints the same line with the installed version and exits with status 0. It does not move the agent to a newer version.
 

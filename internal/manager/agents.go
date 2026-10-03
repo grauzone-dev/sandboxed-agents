@@ -54,7 +54,9 @@ type selectedAgent struct {
 }
 
 func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams, run process.Runner) error {
-	state := filepath.Join(m.options.Home, ".local", "state", "sandboxed-agents")
+	prefix := filepath.Join(m.options.Home, ".local")
+	cache := filepath.Join(prefix, "cache", "sandboxed-agents", "npm")
+	state := filepath.Join(prefix, "state", "sandboxed-agents")
 	if err := os.MkdirAll(state, 0700); err != nil {
 		return fmt.Errorf("create agent state: %w", err)
 	}
@@ -75,7 +77,7 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 	}
 	_, enabled := selection[entry.Name]
 	if !enabled {
-		code, err := run(ctx, process.Request{Name: "/usr/bin/npm", Args: []string{"install", "--global", "--prefix", filepath.Join(m.options.Home, ".local"), entry.Install.Package + "@latest"}, User: &agentIdentity, Dir: m.options.Home, Env: agentEnvironment(m.options.Home), Streams: streams})
+		code, err := run(ctx, process.Request{Name: "/usr/bin/npm", Args: []string{"install", "--global", "--prefix", prefix, "--cache", cache, entry.Install.Package + "@latest"}, User: &agentIdentity, Dir: m.options.Home, Env: agentEnvironment(m.options.Home), Streams: streams})
 		if err != nil {
 			return fmt.Errorf("install %s: %w", entry.Name, err)
 		}

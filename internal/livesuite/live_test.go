@@ -183,7 +183,7 @@ func TestSelectedImagePartRebuildsOnceAndRecordsItsOutcome(t *testing.T) {
 			fakes.Script("podman", testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: status}, testutil.Response{Stdout: "[]"})
 			err := livesuite.Run(context.Background(), config)
 			if (err == nil) != (status == 0) {
-				t.Fatalf("error=%v status=%d", err, status)
+				t.Fatalf("error=%v status=%d calls=%v", err, status, fakes.Calls("podman"))
 			}
 			builds := 0
 			for _, call := range fakes.Calls("podman") {

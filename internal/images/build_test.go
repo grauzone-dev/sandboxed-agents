@@ -46,11 +46,11 @@ func TestEnsureUsesCurrentToolchainImageWithoutBuilding(t *testing.T) {
 			return 0, nil
 		}
 	}
-	tag, err := images.Ensure(context.Background(), "abc123", native, run, process.Streams{})
+	reference, err := images.Ensure(context.Background(), "abc123", native, run, process.Streams{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tag != "localhost/sandboxed-agents:toolchains-native-abc123" {
-		t.Fatalf("tag = %q", tag)
+	if reference != "sha256:native" {
+		t.Fatalf("image reference = %q", reference)
 	}
 }

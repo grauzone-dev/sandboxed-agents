@@ -11,6 +11,8 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
+var sandboxVolumeRoles = []string{"workspace", "home", "ssh"}
+
 func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
 	fakes := linuxHost(t)
 	fakes.Script("podman",
@@ -52,28 +54,20 @@ func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
 	if calls := fakes.Calls("podman"); !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls=%v want=%v", calls, want)
 	}
-	for _, role := range []string{"workspace", "home", "ssh"} {
+	for _, role := range sandboxVolumeRoles {
 		if !strings.Contains(stdout, "Created volume sandboxed-agents.default.agent01."+role) {
 			t.Fatalf("missing volume output: %q", stdout)
 		}
 	}
-	if len(fakes.Calls("ssh")) != 0 {
-		t.Fatal("up attempted SSH")
-	}
+	assertUpNoSSH(t, fakes)
 }
 
 func TestUpResumesAnOwnedSandboxWithoutChangingItsConfiguration(t *testing.T) {
 	for _, running := range []bool{false, true} {
 		t.Run(map[bool]string{false: "stopped", true: "running"}[running], func(t *testing.T) {
 			fakes := linuxHost(t)
-			responses := []testutil.Response{
-				{Stdout: "podman version 5.0.0\n"}, {},
-				{Stdout: fmt.Sprintf(`[{"Name":"sandboxed-agents.default.agent01","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default"}},"State":{"Running":%t}}]`, running)},
-			}
-			for _, role := range []string{"workspace", "home", "ssh"} {
-				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: fmt.Sprintf(`[{"Name":"sandboxed-agents.default.agent01.%s","Labels":{"io.github.sandboxed-agents.owner":"default"}}]`, role)})
-			}
-			responses = append(responses, testutil.Response{ExitCode: 1})
+			owned := "default"
+			responses := upObjectResponses(&owned, running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 			if !running {
 				responses = append(responses, testutil.Response{})
 			}
@@ -101,9 +95,7 @@ func TestUpResumesAnOwnedSandboxWithoutChangingItsConfiguration(t *testing.T) {
 			if !reflect.DeepEqual(calls, want) {
 				t.Fatalf("calls=%v want=%v", calls, want)
 			}
-			if len(fakes.Calls("ssh")) != 0 {
-				t.Fatal("up attempted SSH")
-			}
+			assertUpNoSSH(t, fakes)
 		})
 	}
 }
@@ -112,16 +104,14 @@ func TestUpAdoptsKeptVolumesAndCreatesOnlyMissingOnes(t *testing.T) {
 	for mask := 1; mask < 8; mask++ {
 		t.Run(fmt.Sprintf("kept-%03b", mask), func(t *testing.T) {
 			fakes := linuxHost(t)
-			responses := []testutil.Response{{Stdout: "podman version 5.0.0\n"}, {ExitCode: 1}}
-			roles := []string{"workspace", "home", "ssh"}
+			kept := map[string]string{}
+			roles := sandboxVolumeRoles
 			for index, role := range roles {
 				if mask&(1<<index) != 0 {
-					responses = append(responses, testutil.Response{}, testutil.Response{Stdout: fmt.Sprintf(`[{"Name":"sandboxed-agents.default.agent01.%s","Labels":{"io.github.sandboxed-agents.owner":"default"}}]`, role)})
-				} else {
-					responses = append(responses, testutil.Response{ExitCode: 1})
+					kept[role] = "default"
 				}
 			}
-			responses = append(responses, testutil.Response{ExitCode: 1}, testutil.Response{})
+			responses := append(upObjectResponses(nil, false, kept, nil), testutil.Response{})
 			for index := range roles {
 				if mask&(1<<index) == 0 {
 					responses = append(responses, testutil.Response{})
@@ -161,9 +151,7 @@ func TestUpAdoptsKeptVolumesAndCreatesOnlyMissingOnes(t *testing.T) {
 			if !reflect.DeepEqual(created, wantCreated) {
 				t.Fatalf("created=%v want=%v", created, wantCreated)
 			}
-			if len(fakes.Calls("ssh")) != 0 {
-				t.Fatal("up attempted SSH")
-			}
+			assertUpNoSSH(t, fakes)
 		})
 	}
 }
@@ -178,7 +166,7 @@ func upObjectResponses(containerOwner *string, running bool, volumes map[string]
 	} else {
 		responses = append(responses, testutil.Response{}, container("sandboxed-agents.default.agent01", *containerOwner))
 	}
-	for _, role := range []string{"workspace", "home", "ssh"} {
+	for _, role := range sandboxVolumeRoles {
 		if owner, present := volumes[role]; present {
 			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: fmt.Sprintf(`[{"Name":"sandboxed-agents.default.agent01.%s","Labels":{"io.github.sandboxed-agents.owner":%q}}]`, role, owner)})
 		} else {
@@ -193,6 +181,13 @@ func upObjectResponses(containerOwner *string, running bool, volumes map[string]
 	return responses
 }
 
+func assertUpNoSSH(t *testing.T, fakes *testutil.FakePrograms) {
+	t.Helper()
+	if len(fakes.Calls("ssh")) != 0 {
+		t.Fatal("up attempted SSH")
+	}
+}
+
 func assertUpReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
 	t.Helper()
 	for _, call := range fakes.Calls("podman") {
@@ -205,9 +200,7 @@ func assertUpReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
 		}
 		t.Fatalf("refused up changed state: %v", args)
 	}
-	if len(fakes.Calls("ssh")) != 0 {
-		t.Fatal("up attempted SSH")
-	}
+	assertUpNoSSH(t, fakes)
 }
 
 func TestUpRefusesEveryForeignObjectBeforeAnInterruptedUpdate(t *testing.T) {
@@ -314,9 +307,7 @@ func TestUpReportsPreflightBeforeForeignObjectsAndBackup(t *testing.T) {
 	if calls := fakes.Calls("podman"); !reflect.DeepEqual(calls, []testutil.Call{{Args: []string{"--version"}}}) {
 		t.Fatalf("calls=%v", calls)
 	}
-	if len(fakes.Calls("ssh")) != 0 {
-		t.Fatal("up attempted SSH")
-	}
+	assertUpNoSSH(t, fakes)
 }
 
 func TestUpBuildsOnlyAnAbsentSharedBaseImage(t *testing.T) {
@@ -380,9 +371,7 @@ func TestUpBuildsOnlyAnAbsentSharedBaseImage(t *testing.T) {
 			if create[0] != "create" || create[len(create)-1] != tag {
 				t.Fatalf("create=%v", create)
 			}
-			if len(fakes.Calls("ssh")) != 0 {
-				t.Fatal("up attempted SSH")
-			}
+			assertUpNoSSH(t, fakes)
 		})
 	}
 }
@@ -416,9 +405,7 @@ func TestUpAcceptsCommandNamesAndKeepsVolumeNamesUnique(t *testing.T) {
 			if created != 3 {
 				t.Fatalf("created=%d", created)
 			}
-			if len(fakes.Calls("ssh")) != 0 {
-				t.Fatal("up attempted SSH")
-			}
+			assertUpNoSSH(t, fakes)
 		})
 	}
 }
@@ -483,9 +470,7 @@ func TestUpStopsAfterImageAndCreationFailures(t *testing.T) {
 					t.Fatalf("build context remains: %v", err)
 				}
 			}
-			if len(fakes.Calls("ssh")) != 0 {
-				t.Fatal("up attempted SSH")
-			}
+			assertUpNoSSH(t, fakes)
 		})
 	}
 }

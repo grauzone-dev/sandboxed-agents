@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
@@ -146,14 +145,16 @@ func noArguments(invocation *Invocation) error {
 	if len(invocation.Args) == 0 {
 		return nil
 	}
-	message := "unexpected argument"
-	if strings.HasPrefix(invocation.Args[0], "-") {
-		message = "unknown option"
-	}
-	return fmt.Errorf("%s %q", message, invocation.Args[0])
+	return unexpectedArgument(invocation.Args[0])
 }
 
-var sandboxName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+func unexpectedArgument(arg string) error {
+	message := "unexpected argument"
+	if strings.HasPrefix(arg, "-") {
+		message = "unknown option"
+	}
+	return fmt.Errorf("%s %q", message, arg)
+}
 
 func upCommand(assetHash string, host preflight.Host) Command {
 	ctx := context.Background()
@@ -163,17 +164,17 @@ func upCommand(assetHash string, host preflight.Host) Command {
 			if len(invocation.Args) == 0 {
 				return errors.New("missing sandbox name; use sandboxed-agents up NAME")
 			}
-			if !sandboxName.MatchString(invocation.Args[0]) {
-				return fmt.Errorf("invalid sandbox name %q; names must match %s", invocation.Args[0], sandboxName.String())
-			}
-			if err := noArguments(&Invocation{Args: invocation.Args[1:]}); err != nil {
+			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
+			}
+			if len(invocation.Args) > 1 {
+				return unexpectedArgument(invocation.Args[1])
 			}
 			up = sandbox.NewUp(invocation.Args[0], assetHash, host.Run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Preflight:         func(invocation *Invocation) error { return preflight.Run(ctx, host, invocation.Stdout) },
-		Sandbox:           func(*Invocation) error { return up.Read(ctx) },
+		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
 	}, Action: func(*Invocation) error { return up.Apply(ctx) }}

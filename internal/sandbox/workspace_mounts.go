@@ -45,7 +45,7 @@ func (host WorkspaceHost) mounts() ([]hostMount, error) {
 func mountedHostPath(path string, mounts []hostMount) (hostMount, string, error) {
 	var selected hostMount
 	for _, mount := range mounts {
-		if pathContains(mount.target, path) && len(mount.target) > len(selected.target) {
+		if pathContains(mount.target, path) && len(mount.target) >= len(selected.target) {
 			selected = mount
 		}
 	}

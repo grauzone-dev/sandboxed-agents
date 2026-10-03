@@ -108,7 +108,7 @@ The workspace bind is the only host path that any Podman call of the executable 
 
 Before the preflight and without any Podman call, `up` refuses a `WORKSPACE` and exits with status 1 in these cases:
 
-- **Unresolvable path.** A path in the workspace or in a protected host path cannot be resolved, for example because of more than 255 symlinks or a missing permission, or `/proc/self/mountinfo` cannot be read or parsed or has no mount for a path. `up` then cannot rule out a protected host path. The message names the path.
+- **Unresolvable path.** A path in the workspace or in a protected host path cannot be resolved, for example because of a symlink loop or more than 255 symlinks or a missing permission, `/proc/self/mountinfo` cannot be read or parsed or has no mount for a path, or the [hard link search](#workspace-guards) cannot read the workspace. `up` then cannot rule out a protected host path. The message names the path, such as the looping symlink, and the underlying error.
 - **Unusable.** `WORKSPACE` as given cannot be opened, for example because it or one of its components does not exist or is a file, as in `missing/..` or `file/child`. The message names the resolved path and the underlying error, and the resolved path need not exist.
 - **Not a directory.** `WORKSPACE` names a file or anything else that is not a directory. The message names the resolved path.
 - **Protected host path.** The workspace equals a protected host path, lies inside one, or contains one. The message names the workspace and the resolved protected host path.
@@ -128,9 +128,13 @@ Each protected host path is resolved like the workspace, so a workspace that rea
 
 Beyond symlinks, `up` detects these aliases:
 
-- **Bind mounts.** `up` reads the mount table from `/proc/self/mountinfo` and maps the workspace, every mount below it, and each protected host path to its file system and the path within it. A workspace that reaches a protected host path through another mount of the same file system is refused.
+- **Bind mounts.** `up` reads the mount table from `/proc/self/mountinfo` and maps the workspace, every mount below it, and each protected host path to its file system and the path within it. When several mounts share a target, the later record, the one that is visible, counts. A workspace that reaches a protected host path through another mount of the same file system is refused.
 - **Same directory or file.** A workspace that is the same directory as a protected host path or one of its parents, or the reverse, is refused, whatever paths lead to them.
-- **Hard links.** When a protected file, such as the executable, has more than one hard link, `up` searches the workspace, without following symlinks, for a link to it and refuses the workspace when it finds one. Later Stories add protected host paths, such as the npm launcher and its shims (#61).
+- **Hard links.** When a protected file, such as the executable, has more than one hard link, `up` searches the whole workspace, without following symlinks, for a link to it and refuses the workspace when it finds one.
+
+The hard link search fails closed. When the executable has more than one hard link, every directory in the workspace must be readable to rule out a link to it. An unreadable subtree, even one without such a link, refuses the workspace before any Podman call as an unresolvable path; the message names the executable and the file system error, such as `permission denied`. Skipping the subtree would be unsafe: an agent could later make its own unreadable directory readable and reach a link hidden there. With a single hard link, `up` does not search the workspace, and an unreadable subtree does not matter.
+
+Later Stories add protected host paths, such as the npm launcher and its shims (#61).
 
 ### Workspace volumes beside a bind
 

@@ -125,11 +125,11 @@ func resolveHostPath(path string) (string, error) {
 		}
 		links++
 		if links > 255 {
-			return "", os.ErrInvalid
+			return candidate, os.ErrInvalid
 		}
 		target, err := os.Readlink(candidate)
 		if err != nil {
-			return "", err
+			return candidate, err
 		}
 		if filepath.IsAbs(target) {
 			resolved = filepath.VolumeName(target) + string(filepath.Separator)
@@ -149,7 +149,13 @@ func (up *Up) checkWorkspace() error {
 	if up.workspace == "" {
 		return nil
 	}
-	recorded := up.container + ".workspace"
+	recorded := "volume"
+	for _, volume := range up.volumes {
+		if volume.target == "/workspace" {
+			recorded = volume.name
+			break
+		}
+	}
 	if up.containerLabels[WorkspaceKindLabel] == "bind" {
 		recorded = "bind"
 		for _, mount := range up.containerMounts {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ type Command struct {
 	Checks   Checks
 	Prepare  Handler
 	Action   Handler
+	Help     Handler
 }
 
 type Tree struct {
@@ -78,6 +80,12 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 		return tree.failure(stderr, path, errors.New("missing command"), true)
 	}
 	invocation := &Invocation{Args: args, Stdout: stdout, Stderr: stderr}
+	if selected.Help != nil && slices.Contains(args, "--help") {
+		if err := selected.Help(invocation); err != nil {
+			return tree.failure(stderr, path, err, true)
+		}
+		return 0
+	}
 	if selected.Checks.Usage != nil {
 		if err := selected.Checks.Usage(invocation); err != nil {
 			return tree.failure(stderr, path, err, true)
@@ -150,17 +158,31 @@ func upCommand(assetHash string, run process.Runner, check Handler) Command {
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			if len(invocation.Args) > 1 {
-				return unexpectedArgument(invocation.Args[1])
+			limits, err := sandbox.ParseResourceLimits(invocation.Args[1:])
+			if err != nil {
+				return err
 			}
-			up = sandbox.NewUp(invocation.Args[0], assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			up = sandbox.NewUp(invocation.Args[0], assetHash, limits, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Preflight:         check,
 		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
-	}, Action: func(*Invocation) error { return up.Apply(ctx) }}
+		Preconditions:     func(*Invocation) error { return up.CheckResourceLimits() },
+	}, Action: func(*Invocation) error { return up.Apply(ctx) }, Help: func(invocation *Invocation) error {
+		args := slices.DeleteFunc(slices.Clone(invocation.Args), func(arg string) bool { return arg == "--help" })
+		if len(args) > 0 {
+			if err := sandbox.ValidateName(args[0]); err != nil {
+				return err
+			}
+			if _, err := sandbox.ParseResourceLimits(args[1:]); err != nil {
+				return err
+			}
+		}
+		_, err := io.WriteString(invocation.Stdout, upHelp)
+		return err
+	}}
 }
 
 func lifecycleCommand(action sandbox.LifecycleAction, run process.Runner) Command {

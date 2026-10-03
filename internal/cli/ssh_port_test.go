@@ -28,21 +28,7 @@ func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			create := fakes.Calls("podman")[len(fakes.Calls("podman"))-2].Args
-			if !slices.Contains(create, "io.github.sandboxed-agents.ssh-port=2222") {
-				t.Fatalf("missing SSH port label: %v", create)
-			}
-			var published []string
-			for i, arg := range create {
-				if arg == "--publish" || arg == "-p" {
-					published = append(published, create[i+1])
-				}
-				if strings.HasPrefix(arg, "--publish=") {
-					published = append(published, strings.TrimPrefix(arg, "--publish="))
-				}
-			}
-			if !slices.Equal(published, []string{"127.0.0.1:2222:22"}) {
-				t.Fatalf("published=%v", published)
-			}
+			assertSSHPublication(t, create, 2222)
 			assertNoSSH(t, fakes)
 		})
 	}
@@ -118,15 +104,7 @@ func TestStartAndRestartRefuseAnUnavailableRecordedSSHPort(t *testing.T) {
 				fakes, fixture := resourceLimitHost(t, host.windows)
 				owned := "default"
 				responses := upObjectResponses(&owned, false, nil, nil)
-				if host.windows {
-					responses = append([]testutil.Response{healthyWindowsPodman()[0]}, responses[1:]...)
-				}
-				scriptResourceLimitObjects(t, fakes, false, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
-				if host.windows {
-					fakes.Script("podman", append(healthyWindowsPodman()[1:3], responses[1:]...)...)
-				} else {
-					fakes.Script("podman", responses[1:]...)
-				}
+				scriptLifecycleObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
 				_, stderr, status := runCLI(t, fixture, command, "agent01")
 				if status == 0 || !strings.Contains(stderr, strconv.Itoa(port)) || !strings.Contains(stderr, "unavailable") {
 					t.Fatalf("status=%d stderr=%q", status, stderr)
@@ -381,13 +359,10 @@ func TestRunningSandboxKeepsItsSSHListenerWhenUpOrStartAlreadyHolds(t *testing.T
 				fakes, fixture := resourceLimitHost(t, host.windows)
 				owned := "default"
 				responses := upObjectResponses(&owned, true, nil, nil)
-				scriptResourceLimitObjects(t, fakes, host.windows && command == "up", responses, map[string]string{"ssh-port": strconv.Itoa(port)})
-				if command == "start" {
-					if host.windows {
-						fakes.Script("podman", append(healthyWindowsPodman()[1:3], responses[1:]...)...)
-					} else {
-						fakes.Script("podman", responses[1:]...)
-					}
+				if command == "up" {
+					scriptResourceLimitObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
+				} else {
+					scriptLifecycleObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
 				}
 				stdout, stderr, status := runCLI(t, fixture, command, "agent01")
 				if status != 0 || stderr != "" || !strings.Contains(stdout, "is running") {
@@ -504,11 +479,7 @@ func TestUpStartAndRestartRefuseInvalidRecordedSSHPorts(t *testing.T) {
 					if command == "up" {
 						scriptResourceLimitObjects(t, fakes, host.windows, responses, nil)
 					} else {
-						responses = responses[1:]
-						if host.windows {
-							responses = append(healthyWindowsPodman()[1:3], responses...)
-						}
-						fakes.Script("podman", responses...)
+						scriptLifecycleObjects(t, fakes, host.windows, responses, nil)
 					}
 					stdout, stderr, status := runCLI(t, fixture, command, "agent01")
 					if status == 0 || !strings.Contains(stderr, "recorded SSH port") || !strings.Contains(stderr, "remove agent01") || !strings.Contains(stderr, "up agent01") {
@@ -533,12 +504,8 @@ func TestRestartRefusesAnSSHPortStillUnavailableAfterStopping(t *testing.T) {
 			fakes, fixture := resourceLimitHost(t, host.windows)
 			owned := "default"
 			responses := upObjectResponses(&owned, true, nil, nil)
-			scriptResourceLimitObjects(t, fakes, false, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
-			responses = append(responses[1:], testutil.Response{Stdout: "[]"}, testutil.Response{})
-			if host.windows {
-				responses = append(healthyWindowsPodman()[1:3], responses...)
-			}
-			fakes.Script("podman", responses...)
+			responses = append(responses, testutil.Response{Stdout: "[]"}, testutil.Response{})
+			scriptLifecycleObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
 			stdout, stderr, status := runCLI(t, fixture, "restart", "agent01")
 			if status == 0 || !strings.Contains(stderr, strconv.Itoa(port)) || !strings.Contains(stderr, "unavailable") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)

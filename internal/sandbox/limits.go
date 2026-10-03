@@ -28,13 +28,14 @@ type ResourceLimits struct {
 	limits []resourceLimit
 }
 
-func ParseResourceLimits(args []string) (ResourceLimits, error) {
+func ParseUpOptions(args []string) (ResourceLimits, int, error) {
 	limits := ResourceLimits{limits: []resourceLimit{
 		{option: "--memory", label: MemoryLabel, value: "8589934592", parse: canonicalMemory},
 		{option: "--cpus", label: CPUsLabel, value: "4", parse: canonicalCPUs},
 		{option: "--pids-limit", label: PIDsLimitLabel, value: "2048", parse: canonicalPIDs},
 		{option: "--shm-size", label: ShmSizeLabel, value: "1073741824", parse: canonicalShmSize},
 	}}
+	portOption := resourceLimit{option: "--port", parse: canonicalSSHPort}
 	for index := 0; index < len(args); index++ {
 		option, value, inline := strings.Cut(args[index], "=")
 		var limit *resourceLimit
@@ -44,30 +45,45 @@ func ParseResourceLimits(args []string) (ResourceLimits, error) {
 				break
 			}
 		}
+		if option == portOption.option {
+			limit = &portOption
+		}
 		if limit == nil {
 			kind := limitsUnexpectedArgument
 			if strings.HasPrefix(args[index], "-") {
 				kind = limitsUnknownOption
 			}
-			return ResourceLimits{}, fmt.Errorf(limitsArgumentError, kind, args[index])
+			return ResourceLimits{}, 0, fmt.Errorf(limitsArgumentError, kind, args[index])
 		}
 		if limit.provided {
-			return ResourceLimits{}, fmt.Errorf(limitsDuplicateError, option)
+			return ResourceLimits{}, 0, fmt.Errorf(limitsDuplicateError, option)
 		}
 		if !inline {
 			index++
 			if index == len(args) {
-				return ResourceLimits{}, fmt.Errorf(limitsMissingValueError, option)
+				return ResourceLimits{}, 0, fmt.Errorf(limitsMissingValueError, option)
 			}
 			value = args[index]
 		}
 		canonical, err := limit.parse(value)
 		if err != nil {
-			return ResourceLimits{}, fmt.Errorf(limitsInvalidValueError, option, value)
+			if limit == &portOption {
+				return ResourceLimits{}, 0, fmt.Errorf("invalid value %q for --port; use a whole number from 1 through 65535", value)
+			}
+			return ResourceLimits{}, 0, fmt.Errorf(limitsInvalidValueError, option, value)
 		}
 		limit.value, limit.given, limit.provided = canonical, value, true
 	}
-	return limits, nil
+	port := 0
+	if portOption.provided {
+		port, _ = strconv.Atoi(portOption.value)
+	}
+	return limits, port, nil
+}
+
+func canonicalSSHPort(value string) (string, error) {
+	port, err := parseSSHPort(value)
+	return strconv.Itoa(port), err
 }
 
 var (

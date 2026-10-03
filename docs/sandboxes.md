@@ -210,7 +210,7 @@ A container that `up` creates mounts its three named volumes, or with `WORKSPACE
 
 A sandbox created by this version does not yet offer:
 
-- an SSH setup on the host, that is, an authorized key, a pinned host key, and a host entry (#19). Its SSH server runs, but no key can sign in yet;
+- an SSH setup on the host, that is, an authorized key, a pinned host key, and a host entry (#19). Its SSH server runs, but the executable authorizes no key in it, so a sandbox with a new home volume has no authorized key;
 - installed agents (#69).
 
 `up` opens no SSH connection to the sandbox and neither reads nor writes any file in your SSH directory; only the opt-in SSH setup (#19) will. On Windows, the preflight runs its read-only machine checks through `podman machine ssh`. These checks run in the Podman machine, not in the sandbox.
@@ -258,7 +258,7 @@ The image contains no host keys. The first start of a sandbox therefore generate
 
 The configuration in the image allows only public-key authentication, only for the user `agent`, and no root login. Passwords, keyboard-interactive authentication, and agent forwarding are disabled. sshd uses PAM for the account and session of `agent`, and it serves SFTP. TCP forwarding is not disabled. Authorized keys are read from `~/.ssh/authorized_keys` of `agent`, in the home volume.
 
-No key is authorized yet: authorizing a key dedicated to the sandbox, pinning its host key, and writing a host entry are the SSH setup, which comes with #19. Until then, nothing can sign in.
+The executable authorizes no key yet: authorizing a key dedicated to the sandbox, pinning its host key, and writing a host entry are the SSH setup, which comes with #19. A sandbox with a new home volume therefore has no authorized key.
 
 ## Existing sandboxes
 

@@ -49,12 +49,8 @@ func TestUpAndStartLeaveTheUsersSSHDirectoryUntouched(t *testing.T) {
 					} else {
 						owned := "default"
 						responses := upObjectResponses(&owned, false, nil, nil)
-						scriptResourceLimitObjects(t, fakes, false, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
-						responses = append(responses[1:], testutil.Response{})
-						if host.windows {
-							responses = append(healthyWindowsPodman()[1:3], responses...)
-						}
-						fakes.Script("podman", responses...)
+						responses = append(responses, testutil.Response{})
+						scriptLifecycleObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": strconv.Itoa(port)})
 					}
 					stdout, stderr, status := runCLI(t, fixture, args...)
 					if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running.") {

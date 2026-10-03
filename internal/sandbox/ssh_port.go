@@ -57,21 +57,13 @@ func requireSSHPort(port int) error {
 }
 
 func reservedSSHPorts(ctx context.Context, run process.Runner) (map[int]bool, error) {
-	var containers []listContainer
-	if err := queryPodmanJSON(ctx, run, []string{"ps", "--all", "--format", "json"}, "ps", &containers); err != nil {
+	containers, err := queryContainers(ctx, run)
+	if err != nil {
 		return nil, err
 	}
-	if containers == nil {
-		return nil, fmt.Errorf("invalid podman ps response")
-	}
 	ports := make(map[int]bool)
-	seen := make(map[string]bool)
 	for _, container := range containers {
-		if len(container.Names) != 1 || container.Names[0] == "" || seen[container.Names[0]] {
-			return nil, fmt.Errorf("invalid podman ps response")
-		}
 		name := container.Names[0]
-		seen[name] = true
 		if !strings.HasPrefix(name, containerPrefix) && !strings.HasPrefix(name, backupPrefix) && (container.Labels[OwnerLabel] == "" || container.Labels[NameLabel] == "") {
 			continue
 		}
@@ -127,39 +119,4 @@ func (up *Up) CheckSSHPort(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("no free SSH port on 127.0.0.1 from 2222 through 65535")
-}
-
-func ParseUpOptions(args []string) (ResourceLimits, int, error) {
-	var limitArgs []string
-	var port int
-	provided := false
-	for index := 0; index < len(args); index++ {
-		option, value, inline := strings.Cut(args[index], "=")
-		if option != "--port" {
-			limitArgs = append(limitArgs, args[index])
-			if !inline && (option == "--memory" || option == "--cpus" || option == "--pids-limit" || option == "--shm-size") && index+1 < len(args) {
-				index++
-				limitArgs = append(limitArgs, args[index])
-			}
-			continue
-		}
-		if provided {
-			return ResourceLimits{}, 0, fmt.Errorf("option %q is given more than once", option)
-		}
-		provided = true
-		if !inline {
-			index++
-			if index == len(args) {
-				return ResourceLimits{}, 0, fmt.Errorf("missing value for option %s", option)
-			}
-			value = args[index]
-		}
-		var err error
-		port, err = parseSSHPort(value)
-		if err != nil {
-			return ResourceLimits{}, 0, fmt.Errorf("invalid value %q for --port; use a whole number from 1 through 65535", value)
-		}
-	}
-	limits, err := ParseResourceLimits(limitArgs)
-	return limits, port, err
 }

@@ -240,6 +240,29 @@ func (state *sandboxObjects) inspect(ctx context.Context, kind, name string, rec
 	return queryPodmanJSON(ctx, state.run, []string{kind, "inspect", name}, kind+" inspect "+name, record)
 }
 
+type listContainer struct {
+	Names  []string
+	Labels map[string]string
+}
+
+func queryContainers(ctx context.Context, run process.Runner) ([]listContainer, error) {
+	var containers []listContainer
+	if err := queryPodmanJSON(ctx, run, []string{"ps", "--all", "--format", "json"}, "ps", &containers); err != nil {
+		return nil, err
+	}
+	if containers == nil {
+		return nil, fmt.Errorf("invalid podman ps response")
+	}
+	seen := make(map[string]bool)
+	for _, container := range containers {
+		if len(container.Names) != 1 || container.Names[0] == "" || seen[container.Names[0]] {
+			return nil, fmt.Errorf("invalid podman ps response")
+		}
+		seen[container.Names[0]] = true
+	}
+	return containers, nil
+}
+
 func queryPodmanJSON(ctx context.Context, run process.Runner, args []string, operation string, records any) error {
 	var output, diagnostic bytes.Buffer
 	status, err := run(ctx, process.Request{Name: "podman", Args: args, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})

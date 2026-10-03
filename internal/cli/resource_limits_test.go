@@ -56,6 +56,16 @@ func resourceLimitHost(t *testing.T, windows bool) (*testutil.FakePrograms, stri
 
 func scriptResourceLimitObjects(t *testing.T, fakes *testutil.FakePrograms, windows bool, responses []testutil.Response, labels map[string]string) {
 	t.Helper()
+	responses = withRecordedContainerLabels(t, responses, labels)
+	if windows {
+		responses = append(healthyWindowsPodman(), responses[1:]...)
+	}
+	fakes.Script("podman", responses...)
+}
+
+func withRecordedContainerLabels(t *testing.T, responses []testutil.Response, labels map[string]string) []testutil.Response {
+	t.Helper()
+	responses = slices.Clone(responses)
 	if labels != nil {
 		var records []struct {
 			Name   string
@@ -74,8 +84,14 @@ func scriptResourceLimitObjects(t *testing.T, fakes *testutil.FakePrograms, wind
 		}
 		responses[resourceContainerInspectResponse].Stdout = string(encoded)
 	}
+	return responses
+}
+
+func scriptLifecycleObjects(t *testing.T, fakes *testutil.FakePrograms, windows bool, responses []testutil.Response, labels map[string]string) {
+	t.Helper()
+	responses = withRecordedContainerLabels(t, responses, labels)[1:]
 	if windows {
-		responses = append(healthyWindowsPodman(), responses[1:]...)
+		responses = append(healthyWindowsPodman()[1:3], responses...)
 	}
 	fakes.Script("podman", responses...)
 }

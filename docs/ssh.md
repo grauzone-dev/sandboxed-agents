@@ -2,7 +2,7 @@
 
 `sandboxed-agents shell NAME` opens a shell in the sandbox `NAME`. It works without any SSH setup: the shell is opened through `podman exec` (ADR-0002), not over SSH.
 
-This version has no SSH access to a sandbox. The SSH server and its loopback port come with #18, and the opt-in SSH setup on the host with #19. This page describes only `shell`.
+Every sandbox runs an SSH server, published only on a loopback port of your machine ([SSH server](sandboxes.md#ssh-server)). The executable authorizes no key in it yet: authorizing a key dedicated to the sandbox, pinning the host key, and writing a host entry are the opt-in SSH setup, which comes with #19. This page describes only `shell`.
 
 ## Open a shell
 

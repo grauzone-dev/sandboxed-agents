@@ -506,3 +506,60 @@ func TestCheckDoesNotInferMissingDelegationFromRootfulMode(t *testing.T) {
 		t.Fatalf("rootful machine must not run a rootless delegation probe: %v", calls)
 	}
 }
+
+func TestWindowsBuildRetainsPreflightAndRemovesContext(t *testing.T) {
+	for _, buildStatus := range []int{0, 42} {
+		t.Run(fmt.Sprint(buildStatus), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			captured := filepath.Join(t.TempDir(), "captured")
+			responses := append(healthyWindowsPodman(), testutil.Response{Stdout: "build log\n", ExitCode: buildStatus, CaptureBuildContext: captured})
+			fakes.Script("podman", responses...)
+			stdout, stderr, status := runCLIAt(t, t.TempDir(), "windows-build", "build")
+			calls := fakes.Calls("podman")
+			if len(calls) != 8 {
+				t.Fatalf("Windows build calls=%v stdout=%q stderr=%q", calls, stdout, stderr)
+			}
+			assertReadOnlyPodmanCalls(t, calls[:7])
+			args := calls[7].Args
+			if len(args) < 5 || !reflect.DeepEqual(args[:4], []string{"build", "--pull=always", "--no-cache", "--tag"}) {
+				t.Fatalf("Windows build args=%v", args)
+			}
+			version, versionErr, versionStatus := runCLI(t, "windows-build", "version")
+			if versionStatus != 0 || versionErr != "" {
+				t.Fatalf("version status=%d stderr=%q", versionStatus, versionErr)
+			}
+			hash := strings.TrimSpace(strings.Split(version, "assets ")[1])
+			if len(hash) != 64 || args[4] != "localhost/sandboxed-agents:base-"+hash {
+				t.Fatalf("Windows build tag=%q version=%q", args[4], version)
+			}
+			if buildStatus == 0 {
+				if status != 0 || stderr != "" || !strings.Contains(stdout, "Built image "+args[4]) {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+			} else if status == 0 || !strings.Contains(stderr, "podman build failed with exit status 42") || strings.Contains(stdout, "Built image") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			directory := args[len(args)-1]
+			if _, err := os.Stat(directory); !os.IsNotExist(err) {
+				t.Fatalf("Windows build context remains: %q err=%v", directory, err)
+			}
+			checkBaseContext(t, captured)
+		})
+	}
+}
+
+func TestWindowsBuildStopsWhenPreflightFails(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := healthyWindowsPodman()
+	responses[0].Stdout = "podman version 4.9.9\n"
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "windows-build", "build")
+	if status == 0 || stderr == "" || !strings.Contains(stdout, "missing: Podman client 5.0.0") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	if len(calls) != 7 {
+		t.Fatalf("failed preflight build calls=%v", calls)
+	}
+	assertReadOnlyPodmanCalls(t, calls)
+}

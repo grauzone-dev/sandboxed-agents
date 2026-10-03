@@ -72,7 +72,11 @@ func TestCLIProcess(t *testing.T) {
 				case "windows-unknown":
 					host = platform.Host{OS: "windows"}
 				}
-				os.Exit(cli.RunWithWindowsHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", host))
+				hash := "fixture-assets"
+				if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "windows-build" {
+					hash = assets.Hash()
+				}
+				os.Exit(cli.RunWithWindowsHost(args, os.Stdout, os.Stderr, "v1.2.3", hash, host))
 			}
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "nested" {
 				tree := cli.Tree{Name: "sandboxed-agents", Commands: []cli.Command{

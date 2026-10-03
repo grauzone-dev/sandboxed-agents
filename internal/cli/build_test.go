@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -109,7 +110,7 @@ func checkBaseContext(t *testing.T, directory string) {
 			if err != nil {
 				return err
 			}
-			if info.Mode().Perm()&0111 == 0 {
+			if runtime.GOOS != "windows" && info.Mode().Perm()&0111 == 0 {
 				t.Fatal("materialized manager is not executable")
 			}
 			return nil

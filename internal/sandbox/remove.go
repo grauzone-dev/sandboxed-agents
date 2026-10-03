@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -105,7 +106,11 @@ func (remove *Remove) CheckManager(ctx context.Context) error {
 	if !remove.containerRunning {
 		return nil
 	}
-	remove.sessions, remove.sessionsKnown = querySessions(ctx, remove.container, remove.run)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var err error
+	remove.sessions, err = RunningSessions(ctx, remove.container, remove.run)
+	remove.sessionsKnown = err == nil
 	if !remove.sessionsKnown && !remove.force {
 		return errors.New("the sandbox manager did not answer, so running agent sessions cannot be ruled out; nothing was removed; use --force to remove the sandbox anyway")
 	}

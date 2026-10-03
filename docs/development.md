@@ -99,7 +99,27 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
   - an unknown sandbox is refused with only read-only lookups. Usage errors, including a repeated option and `--volumes=true`, call neither `podman` nor `ssh`.
 
   Most `remove` tests also assert that `ssh` was never called. No offline test checks the session query against a real manager.
-- **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start. The `sessions list` tests inject a runner that fails the test when it is called. They check that the query prints `[]` and starts no process, and that invalid usage, such as `sessions` alone, another subcommand, an extra argument, or an unknown option, fails with nothing on standard output.
+- **Sandbox lifecycle.** `stop`, `start`, and `restart` tests drive the public CLI as a subprocess against the native fake `podman` and `ssh` programs. The commands run no preflight and need no host fixture, so these tests run on the Linux and the Windows CI job alike. A test scripts the fake `podman` answers for `exists`, the JSON of `inspect`, including the owner labels and the running state of the container, and the output and exit status of `podman exec` for the session query.
+
+  The tests compare the complete list of Podman calls in these cases. The lookups are the `exists` calls of the container, the three volumes, and the backup container, and an `inspect` call for each object that exists:
+  - `stop` on a running sandbox: the lookups, the `exec` call of `/usr/local/bin/sandboxed-agents-manager sessions list` in the sandbox's container, and `stop`; on a stopped sandbox, only the lookups;
+  - `start` on a stopped sandbox: the lookups and `start`; on a running sandbox, only the lookups;
+  - `restart` on a running sandbox: the lookups, the `exec` call, `stop`, and `start`; on a stopped sandbox, the lookups and `start`, with no `exec` and no `stop`;
+  - `stop` and `restart` with `--force`, with the same calls as without it when the manager reports no running session.
+
+  The session tests check the `exec` call and, with `--force`, that exactly `stop`, or `stop` and `start` for `restart`, follow it; a refusal issues no call after `exec`:
+  - a manager that reports two running sessions makes `stop` and `restart` refuse and name each session; with `--force` they name both as ended;
+  - a manager without an answer: `exec` exits non-zero, or prints nothing, text that is not JSON, `null`, an object, an array followed by more text, or an element whose `name` or `agent` is missing, whitespace-only, or not a string, also after a valid element. Without `--force`, `stop` and `restart` refuse, say that running sessions cannot be ruled out, and name `--force`. With `--force` they say that the ended sessions cannot be named and name none.
+
+  The refusals before the session query assert the error message, the exit status, and that every recorded call is a `container` or `volume` `exists` or `inspect` call:
+  - an unknown sandbox name, for each command;
+  - kept volumes without a container, for every nonempty subset of the three volumes and each command: the message names `up NAME`. With one of those volumes carrying an empty, missing, or other owner, the message reports the owner conflict and does not name `up NAME`;
+  - owner conflicts with an empty, missing, or other owner on the container, on each volume, with and without the container, and on the backup container, and a backup container with the current owner, whose message names `update NAME`. These cases run for each command on a running and on a stopped sandbox, so they include `stop` on a stopped sandbox and `start` on a running one;
+  - order of checks: a running sandbox whose manager would report running sessions is refused for an owner conflict, with and without `--force`, or for a backup container, and is never queried;
+  - failed `exists` lookups of the container, a volume, and the backup container, and `inspect` output that is not JSON, empty, or for another object.
+
+  Failures of `podman stop` and `podman start`, including each step of `restart`, check the error message, the last call, and that the command did not report the sandbox's state. Only a `restart` whose `start` fails has already reported the ended sessions. Usage errors and invalid names check that neither `podman` nor `ssh` was called: a missing name, an invalid name, `--force` in place of the name, a second `--force`, `--force` given to `start`, an unknown option, and an extra argument. Every lifecycle test also asserts that `ssh` was never called. No offline test starts a real container.
+- **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start. The `sessions list` tests inject a runner that fails the test when it is called. They check that the query prints `[]`, exits with status 0, and starts no process; that invalid usage, such as `sessions` alone, another subcommand, an extra argument, or an unknown option, prints the usage message on standard error, nothing on standard output, and exits non-zero; and that a failing standard output makes it exit non-zero.
 - **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks, its preparation, and its action in order. The executable has no debug commands for this.
 
 ### Host preflight tests

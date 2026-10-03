@@ -12,13 +12,9 @@ import (
 )
 
 func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:2222")
-	if err != nil {
-		t.Skipf("port 2222 unavailable: %v", err)
-	}
-	listener.Close()
 	for _, host := range resourceLimitHosts {
 		t.Run(host.name, func(t *testing.T) {
+			port := firstFreeSSHPort(t)
 			fakes, fixture := resourceLimitHost(t, host.windows)
 			responses := upObjectResponses(nil, false, nil, nil)
 			responses = append(responses, make([]testutil.Response, 6)...)
@@ -28,7 +24,7 @@ func TestUpPublishesOnlyLoopbackSSHAndRecordsItsPort(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			create := fakes.Calls("podman")[len(fakes.Calls("podman"))-2].Args
-			assertSSHPublication(t, create, 2222)
+			assertSSHPublication(t, create, port)
 			assertNoSSH(t, fakes)
 		})
 	}

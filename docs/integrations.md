@@ -57,9 +57,9 @@ The global Git configuration of `agent` lives in the sandbox's home volume. The 
 
 The name and email come only from the options you pass and the values you type. The command imports no host Git configuration and no host credentials:
 
-- It forwards no Git-related host variable. The environment of its Podman calls leaves out every variable whose name starts with `GIT_`, and `EMAIL`. The `podman exec` call of the workflow sets only `HOME=/home/agent` in the container, and the manager runs Git with a fixed `HOME`, `USER`, `LOGNAME`, and `PATH`.
+- It forwards no Git-related host variable into the sandbox. The Podman calls that look up the sandbox, query the manager, and run the workflow leave out every variable whose name starts with `GIT_`, and `EMAIL`. The `podman exec` call of the workflow sets only `HOME=/home/agent` in the container, and the manager runs Git with a fixed `HOME`, `USER`, `LOGNAME`, and `PATH`.
 - It reads `SANDBOXED_AGENTS_GROUP` to select the [controller group](sandboxes.md#controller-groups), as every command does.
-- On Windows, it selects the Podman machine before its first Podman call, as `start` does ([Target on Windows](sandboxes.md#target-on-windows)).
+- On Windows, it selects the Podman machine before its first lookup of the sandbox, as `start` does ([Target on Windows](sandboxes.md#target-on-windows)). The selection runs only the read-only queries `podman machine list` and `podman machine inspect`, under the environment rule of every Windows Podman call: `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` are removed. The Git-related filter above does not apply to these queries.
 
 The result is the same whether or not the host has a Git configuration or Git-related variables.
 

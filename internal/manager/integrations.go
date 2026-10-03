@@ -3,6 +3,7 @@ package manager
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-func configureIntegration(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
+func runIntegrationWorkflow(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
 	if len(args) == 0 {
 		return fmt.Errorf(integrations.UnknownKind, "")
 	}
@@ -19,9 +20,13 @@ func configureIntegration(ctx context.Context, args []string, streams process.St
 	if err != nil {
 		return err
 	}
+	return setGitIdentity(ctx, request, streams, run)
+}
+
+func setGitIdentity(ctx context.Context, request integrations.Request, streams process.Streams, run process.Runner) error {
 	if request.NeedsTerminal() {
 		if streams.Stdin == nil {
-			return fmt.Errorf("%s", integrations.NeedsTerminal)
+			return errors.New(integrations.NeedsTerminal)
 		}
 		reader := bufio.NewReader(streams.Stdin)
 		for _, field := range []struct {
@@ -29,8 +34,8 @@ func configureIntegration(ctx context.Context, args []string, streams process.St
 			prompt string
 			target **string
 		}{
-			{"--name", integrations.NamePrompt, &request.Name},
-			{"--email", integrations.EmailPrompt, &request.Email},
+			{"--name", integrations.NamePrompt, &request.CommitName},
+			{"--email", integrations.EmailPrompt, &request.CommitEmail},
 		} {
 			if *field.target != nil {
 				continue
@@ -50,8 +55,8 @@ func configureIntegration(ctx context.Context, args []string, streams process.St
 		}
 	}
 	for _, value := range []struct{ key, value string }{
-		{"user.name", *request.Name},
-		{"user.email", *request.Email},
+		{"user.name", *request.CommitName},
+		{"user.email", *request.CommitEmail},
 	} {
 		status, err := run(ctx, process.Request{
 			Name: "git", Args: []string{"config", "--global", "--replace-all", "--", value.key, value.value},

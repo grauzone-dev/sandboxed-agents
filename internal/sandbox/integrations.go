@@ -10,12 +10,12 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-type Integration struct {
+type IntegrationWorkflow struct {
 	*sandboxObjects
 	request integrations.Request
 }
 
-func NewIntegration(name, group string, request integrations.Request, run process.Runner, streams process.Streams) *Integration {
+func NewIntegrationWorkflow(name, group string, workflow integrations.Request, run process.Runner, streams process.Streams) *IntegrationWorkflow {
 	cleanRun := func(ctx context.Context, request process.Request) (int, error) {
 		if request.Name == "podman" {
 			environment := request.Env
@@ -33,31 +33,24 @@ func NewIntegration(name, group string, request integrations.Request, run proces
 		}
 		return run(ctx, request)
 	}
-	return &Integration{sandboxObjects: newSandboxObjects(name, group, cleanRun, streams), request: request}
+	return &IntegrationWorkflow{sandboxObjects: newSandboxObjects(name, group, cleanRun, streams), request: workflow}
 }
 
-func (integration *Integration) CheckSandbox(ctx context.Context) error {
-	if err := integration.sandboxObjects.CheckSandbox(ctx); err != nil {
-		return err
-	}
-	return integration.requireContainer()
-}
-
-func (integration *Integration) CheckRunning() error {
+func (integration *IntegrationWorkflow) CheckRunning() error {
 	if !integration.containerRunning {
 		return fmt.Errorf(integrations.StoppedSandbox, integration.name)
 	}
 	return nil
 }
 
-func (integration *Integration) CheckManager(ctx context.Context) error {
+func (integration *IntegrationWorkflow) CheckManager(ctx context.Context) error {
 	if _, err := RunningSessions(ctx, integration.container, integration.run); err != nil {
 		return fmt.Errorf(integrations.ManagerUnavailable, integration.name)
 	}
 	return nil
 }
 
-func (integration *Integration) Apply(ctx context.Context) error {
+func (integration *IntegrationWorkflow) Apply(ctx context.Context) error {
 	args := []string{"exec", "--user=1000:1000", "--env", "HOME=/home/agent"}
 	if integration.request.NeedsTerminal() {
 		args = append(args, "-it")

@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/integrations"
@@ -13,7 +13,7 @@ import (
 
 func integrationCommand(kind string, group *string, run process.Runner) Command {
 	ctx := context.Background()
-	var state *sandbox.Integration
+	var state *sandbox.IntegrationWorkflow
 	var request integrations.Request
 	return Command{Name: kind, Checks: Checks{
 		Usage: func(invocation *Invocation) error {
@@ -28,17 +28,17 @@ func integrationCommand(kind string, group *string, run process.Runner) Command 
 			if err != nil {
 				return err
 			}
-			state = sandbox.NewIntegration(invocation.Args[0], *group, request, run, process.Streams{Stdin: os.Stdin, Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			state = sandbox.NewIntegrationWorkflow(invocation.Args[0], *group, request, run, process.Streams{Stdin: os.Stdin, Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
-		Sandbox:           func(*Invocation) error { return state.CheckSandbox(ctx) },
+		Sandbox:           func(*Invocation) error { return state.CheckContainer(ctx) },
 		Owner:             func(*Invocation) error { return state.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return state.CheckInterruptedUpdate() },
 		Running:           func(*Invocation) error { return state.CheckRunning() },
 		Preconditions:     func(*Invocation) error { return state.CheckManager(ctx) },
 		Terminal: func(*Invocation) error {
 			if request.NeedsTerminal() && (!platform.IsTerminal(os.Stdin) || !platform.IsTerminal(os.Stdout)) {
-				return fmt.Errorf("%s", integrations.NeedsTerminal)
+				return errors.New(integrations.NeedsTerminal)
 			}
 			return nil
 		},

@@ -2,13 +2,9 @@
 
 `sandboxed-agents` runs each sandbox as a rootless Podman container. This page lists what a host needs and describes `sandboxed-agents check`, the preflight that reports missing prerequisites before a sandbox or image is built.
 
-The preflight is currently implemented for Linux only. On any other operating system, `check` reports one unmet item and checks nothing else:
+`check` detects the host operating system and runs the [Linux](#linux) or the [Windows](#windows) preflight. Windows hosts run Podman in a WSL2 machine. On any other operating system, `check` reports that no preflight is available for that system yet. It checks nothing else and exits with a nonzero status.
 
-```text
-MISSING: Linux host: check currently supports Linux hosts only
-```
-
-Windows hosts, which run Podman in a WSL2 machine, get their own preflight in a separate Story.
+`sandboxed-agents build` already runs the same preflight for the host before it writes the build context, and it stops if the preflight fails. Later Stories will make up and update run the preflight as well. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host). The temporary build context that `build` creates and removes is part of the build, not of the preflight.
 
 ## Run the check
 
@@ -16,14 +12,10 @@ Windows hosts, which run Podman in a WSL2 machine, get their own preflight in a 
 sandboxed-agents check
 ```
 
-`check` takes no arguments or options. It prints one line per prerequisite:
+`check` takes no arguments or options, so it doesn't take a sandbox name yet. It checks every prerequisite in one run and prints one line per prerequisite. The status words depend on the host:
 
-```text
-OK: podman
-MISSING: pasta: install pasta (the passt package) and make sure it is on PATH
-```
-
-If any prerequisite is missing, `check` prints `sandboxed-agents: host prerequisites are missing` on standard error and exits with status 1. When every prerequisite is met, it exits with status 0.
+- On Linux, each line starts with `OK:` or `MISSING:`.
+- On Windows, each line starts with `ok:`, `missing:`, or `unknown:`. `unknown:` means the prerequisite could not be checked.
 
 An extra word on the command line is a usage error. A word starting with `-` is reported as an unknown option, any other word as an unexpected argument. In both cases the usage line follows, nothing is checked, and the exit status is 1:
 
@@ -32,7 +24,18 @@ sandboxed-agents: unknown option "--json"
 Usage: sandboxed-agents check
 ```
 
-## What the check does to the host
+## Linux
+
+On Linux, `check` prints lines such as:
+
+```text
+OK: podman
+MISSING: pasta: install pasta (the passt package) and make sure it is on PATH
+```
+
+If any prerequisite is missing, `check` prints `sandboxed-agents: host prerequisites are missing` on standard error and exits with status 1. When every prerequisite is met, it exits with status 0.
+
+### What the check does to the host
 
 The check reads files and looks up programs. It may also query account data through `getent` (see [Prerequisites](#prerequisites)). It runs every program directly, without a shell. It does not create, change, or remove host files, and it never runs `sudo`. It tests write permission on cgroup control files by asking the kernel (`access(2)`) without writing to them. It opens no SSH connection.
 
@@ -45,7 +48,7 @@ The check reads files and looks up programs. It may also query account data thro
 
 If the administrator has enabled Podman pre-exec hooks, `podman --version` runs those as well. Podman 4.4.0 and 5.0.0 offer no option that skips this initialization. These are Podman's own side effects of an informational query, not changes made by `sandboxed-agents`. The project accepts them as the one permitted exception to a read-only preflight.
 
-## Prerequisites
+### Prerequisites
 
 Each row is one line of `check` output. **Name** is the name the check prints, and **Remedy** is the text it prints after a `MISSING` name.
 
@@ -85,7 +88,7 @@ To add subordinate ranges, run `usermod --add-subuids FIRST-LAST USER` and `user
 
 `ssh` and `ssh-keygen` are needed by `sandboxed-agents` itself, not by Podman (ADR-0002).
 
-### cgroup controller delegation
+#### cgroup controller delegation
 
 Rootless Podman can apply `--memory`, `--cpus`, and `--pids-limit` only when the cgroup v2 controllers `memory`, `cpu`, and `pids` are delegated to the user. Podman documents `--memory` and `--cpus` as unsupported on rootless cgroup v1 ([`--memory`](https://github.com/containers/podman/blob/v5.0.0/docs/source/markdown/options/memory.md#L15), [`--cpus`](https://github.com/containers/podman/blob/v5.0.0/docs/source/markdown/options/cpus.container.md#L15), v5.0.0).
 
@@ -117,7 +120,7 @@ Then log out and back in. You can check the result with:
 cat "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
 ```
 
-## Why Podman 4.4.0
+### Why Podman 4.4.0
 
 Each sandbox uses these Podman options:
 
@@ -128,15 +131,15 @@ Each sandbox uses these Podman options:
 | `--security-opt=no-new-privileges` | before 4.4.0 | [podman-run(1) v4.4, `--security-opt`](https://docs.podman.io/en/v4.4/markdown/podman-run.1.html) |
 | `--memory`, `--cpus`, `--pids-limit`, `--shm-size` | before 4.4.0 | [podman-run(1) v4.4](https://docs.podman.io/en/v4.4/markdown/podman-run.1.html) |
 
-Pasta sets the floor, so 4.4.0 is the earliest release that supports every option. Podman 5.0.0 did not add pasta. It changed the *default* rootless network tool from slirp4netns to pasta ([5.0.0 release notes](https://github.com/containers/podman/blob/v5.0.0/RELEASE_NOTES.md#L41)). `sandboxed-agents` selects pasta explicitly, so it does not depend on that default and does not require 5.0.0.
+Pasta sets the floor, so 4.4.0 is the earliest release that supports every option. Podman 5.0.0 did not add pasta. It changed the *default* rootless network tool from slirp4netns to pasta ([5.0.0 release notes](https://github.com/containers/podman/blob/v5.0.0/RELEASE_NOTES.md#L41)). `sandboxed-agents` selects pasta explicitly, so a Linux host does not depend on that default and does not need 5.0.0. Windows hosts need 5.0.0 for the reasons in [Why Podman 5.0.0](#why-podman-500).
 
 `--no-map-gw` keeps the container from reaching the host through the gateway address. Podman passes it to pasta by default unless `--map-gw` is given ([network option, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/docs/source/markdown/options/network.md#L41-L55)). It is not a firewall against other host addresses the container can route to.
 
 The floor describes feature support only. Whether a 4.4.x release still receives security fixes depends on your distribution.
 
-## Limits of the check
+### Limits of the check
 
-The check confirms host configuration. It does not start a container, so a host that passes can still fail when a sandbox starts. Nothing in this page has been confirmed by starting a container on a live host.
+The check confirms host configuration. It does not start a container, so a host that passes can still fail when a sandbox starts. Nothing in this section has been confirmed by starting a container on a live host.
 
 The check does not:
 
@@ -149,9 +152,52 @@ The check does not:
 - **Check the pasta version** or whether pasta accepts the options Podman passes.
 - **Check a remote Podman.** If `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or a `containers.conf` connection points Podman at another machine, the check still describes only the local host.
 
+## Windows
+
+The Windows preflight never installs, configures, or starts anything. It queries the Podman client and the Podman machine. On a running machine, it also runs read-only commands through Podman machine SSH as the non-root machine user. It never runs `ssh-keygen` and does not perform SSH setup.
+
+`check` exits with status 0 when every required prerequisite is confirmed. It exits with a nonzero status when any required prerequisite is missing or unknown. If the Podman connection doesn't respond in time, the check reports a timeout and exits with a nonzero status.
+
+### Required prerequisites
+
+| Prerequisite | Requirement |
+| --- | --- |
+| Operating system | Windows 11 x64 workstation, build 22000 or later. ARM64 running x64 emulation is not supported. |
+| Podman client | 5.0.0 or later |
+| Podman machine | Running, on WSL2, rootless, Podman 5.0.0 or later |
+| cgroups | cgroups v2 with the `cpu`, `memory`, and `pids` controllers delegated |
+| OpenSSH | `ssh` and `ssh-keygen` on `PATH`. Preflight checks only that they are present. |
+
+If the Podman machine is stopped, preflight reports the running machine as missing. It reports the machine version and cgroups as unknown, because only a running machine provides them. Rootless mode is read from machine inspect, which also works on a stopped machine. If inspect shows a stopped machine as rootful, preflight reports rootless mode as missing. If no Podman machine exists, preflight reports the machine version, rootless mode, and cgroups as unknown.
+
+#### cgroup delegation in the Podman machine
+
+`podman info` lists the cgroup controllers that are available, but that doesn't show whether they are delegated to the user. On a running rootless WSL2 machine, preflight therefore also checks delegation as the non-root SSH user. It reads `Delegate`, `ActiveState`, and `ControlGroup` for `user@<UID>.service` and confirms that `cpu`, `memory`, and `pids` are available in the cgroup of `user@<UID>.service`. It then uses file tests to confirm that this cgroup directory is writable and searchable, and that its `cgroup.procs`, `cgroup.threads`, and `cgroup.subtree_control` files are writable ([kernel delegation model](https://docs.kernel.org/admin-guide/cgroup-v2.html#model-of-delegation), [systemd cgroup delegation](https://systemd.io/CGROUP_DELEGATION/)). These checks only read and never write to or change any cgroup. Preflight skips them on machines known to be rootful or not to use WSL2. In that case it reports delegation as unknown, unless `podman info` already shows that cgroups v2 or one of these controllers is missing. These delegation checks have not yet been run on a live Windows host.
+
+### Automount root
+
+The automount root is not a prerequisite. Preflight reads it so that later commands can use it. On a running machine, preflight reads `/etc/wsl.conf` through Podman machine SSH and changes nothing. If no root is set, preflight uses the WSL default `/mnt/` ([WSL configuration](https://learn.microsoft.com/en-us/windows/wsl/wsl-config)). A custom root is returned as found, and only the later workspace bind checks can reject it. If automount is turned off or the configuration can't be read, the root is reported as unknown, but the check doesn't fail because of it. Preflight never reads the automount root when no machine is running.
+
+### Why Podman 5.0.0
+
+The client and the machine both need Podman 5.0.0 or later. The sources below confirm that Podman 5.0.0 provides everything a sandbox on Windows needs. They do not show that 5.0.0 is the first release to support each option.
+
+- The [5.0.0 `podman run` reference](https://docs.podman.io/en/v5.0.0/markdown/podman-run.1.html) documents every option a sandbox needs: `--userns=keep-id` with `uid`/`gid`, `no-new-privileges`, `--network=pasta:--no-map-gw`, `--memory`, `--cpus`, `--pids-limit`, and `--shm-size`.
+- The [5.0.0 release notes](https://github.com/containers/podman/releases/tag/v5.0.0) make pasta the default rootless network.
+- The [5.0.0 WSL machine image](https://github.com/containers/podman-machine-wsl-os/releases/tag/v20240319175608) ships the `passt` package, version `0^20240220.g1e6f92b-1.fc39`, so pasta is available inside the machine.
+- [`pkg/machine/config.go` at v5.0.0](https://github.com/containers/podman/blob/v5.0.0/pkg/machine/config.go) defines the `Rootful` field, which machine inspect reports.
+
+The resource options (`--memory`, `--cpus`, `--pids-limit`) only work when cgroups v2 delegates their controllers. Preflight checks that delegation as a separate prerequisite.
+
+### Verification status
+
+The 5.0.0 floor was confirmed by reviewing versioned upstream documentation and source and the WSL machine image's package list. Offline tests run the preflight logic against simulated process results. These tests don't verify sandbox options or image builds on a live Windows host, and no test has been run yet against a live Windows host or a live Podman machine.
+
 ## Sources
 
-- Podman: [4.4.0 release](https://github.com/containers/podman/releases/tag/v4.4.0), [5.0.0 release](https://github.com/containers/podman/releases/tag/v5.0.0), [podman-run(1) v4.4](https://docs.podman.io/en/v4.4/markdown/podman-run.1.html), [troubleshooting §26, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/troubleshooting.md#L694-L737)
+- Podman: [4.4.0 release](https://github.com/containers/podman/releases/tag/v4.4.0), [5.0.0 release](https://github.com/containers/podman/releases/tag/v5.0.0), [podman-run(1) v4.4](https://docs.podman.io/en/v4.4/markdown/podman-run.1.html), [podman-run(1) v5.0.0](https://docs.podman.io/en/v5.0.0/markdown/podman-run.1.html), [troubleshooting §26, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/troubleshooting.md#L694-L737)
 - `podman --version` start-up: [root.go](https://github.com/containers/podman/blob/v5.0.0/cmd/podman/root.go#L90-L100), [registry/config.go](https://github.com/containers/podman/blob/v5.0.0/cmd/podman/registry/config.go#L80-L169), [homedir_unix.go](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/pkg/homedir/homedir_unix.go#L107-L175), [default.go](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/common/pkg/config/default.go#L496-L520), [storage options.go](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/types/options.go#L288-L307), [pre-exec hooks](https://github.com/containers/podman/blob/v5.0.0/pkg/rootless/rootless_linux.c#L255-L269), all at v5.0.0
-- Linux kernel: [cgroup v2 delegation, v6.8](https://www.kernel.org/doc/html/v6.8/admin-guide/cgroup-v2.html#delegation)
+- Podman machine on Windows: [WSL machine image v20240319175608](https://github.com/containers/podman-machine-wsl-os/releases/tag/v20240319175608), [`pkg/machine/config.go`, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/pkg/machine/config.go)
+- WSL: [WSL configuration](https://learn.microsoft.com/en-us/windows/wsl/wsl-config)
+- Linux kernel: [cgroup v2 delegation, v6.8](https://www.kernel.org/doc/html/v6.8/admin-guide/cgroup-v2.html#delegation), [model of delegation](https://docs.kernel.org/admin-guide/cgroup-v2.html#model-of-delegation)
 - systemd: [Control Group APIs and Delegation](https://systemd.io/CGROUP_DELEGATION/)

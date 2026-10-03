@@ -64,9 +64,9 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
 
 ### Test seams
 
-- **CLI boundary.** Tests run the public CLI as a separate process. `testutil.NewFakePrograms` places native fake `podman`, `ssh`, and `getent` programs first on `PATH`. A test scripts their output and exit statuses with `Script` and asserts the exact calls they recorded with `Calls`. For host preflight tests, the test binary enters the CLI through `cli.RunWithHost` with a read-only host adapter, which supplies fixture files, user identity, and write permissions in place of the real host. The tests still drive the public CLI as a subprocess with the fake programs. They assert that `podman` received only `--version`, that `ssh` was never called, and that the account lookup sent exactly one `getent passwd UID` query, without `MALLOC_TRACE`, `LD_DEBUG`, `LD_DEBUG_OUTPUT`, `LD_PROFILE`, or `LD_PROFILE_OUTPUT` in its environment.
+- **CLI boundary.** Tests run the public CLI as a separate process. `testutil.NewFakePrograms` places native fake `podman`, `ssh`, `ssh-keygen`, and `getent` programs first on `PATH`. A test scripts their output and exit statuses with `Script` and asserts the exact calls they recorded with `Calls`. For host preflight, see [Host preflight tests](#host-preflight-tests).
 - **Image build.** Build tests run `sandboxed-agents build` from an empty working directory, with the real embedded assets, against the fake `podman`. The fake copies the build context while the build runs. The tests check that context: the recipe files have LF line endings and the manager is an executable static Linux amd64 binary. They also assert the following:
-  - the exact `podman build` call, with its tag, labels, and context directory, and no other Podman call besides the preflight's `--version`;
+  - the exact `podman build` call, with its tag, labels, and context directory, and no Podman call besides the preflight's own calls (on Linux, only `--version`);
   - removal of the temporary context directory after a successful and after a failed build;
   - the same tag from two controller groups;
   - usage errors before the preflight, a stop after a failed preflight, and a stop when the context directory cannot be created.
@@ -90,6 +90,13 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
   Every `up` test also asserts that `ssh` was never called. No offline test starts a real container.
 - **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start.
 - **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks, its preparation, and its action in order. The executable has no debug commands for this.
+
+### Host preflight tests
+
+`check` and `build` both run the preflight that matches the host operating system. `build` runs it at the preflight step, before it writes the build context. Each preflight is public, so later commands can also run it at that step. The `check` action runs the preflight on its own and reports the results.
+
+- **Linux.** `preflight.Check(ctx, preflight.Host)` returns one result per prerequisite. The test binary enters the CLI through `cli.RunWithHost` with a read-only host adapter, which supplies fixture files, user identity, and write permissions in place of the real host. The tests still drive the public CLI as a subprocess with the fake programs. They assert that `podman` received only `--version`, that `ssh` was never called, and that the account lookup sent exactly one `getent passwd UID` query, without `MALLOC_TRACE`, `LD_DEBUG`, `LD_DEBUG_OUTPUT`, `LD_PROFILE`, or `LD_PROFILE_OUTPUT` in its environment. These tests are in `preflight_test.go`.
+- **Windows.** `preflight.CheckWindows(ctx, platform.Host, process.Runner)` returns a `Report` with the status of each prerequisite. It also returns the automount root in `Report.AutomountRoot` for later commands. The test binary enters the CLI through `cli.RunWithWindowsHost` with a Windows host identity fixture. The tests run the fake `podman`, `ssh`, and `ssh-keygen` programs as real processes, not as in-process stubs. These tests are in `windows_preflight_test.go`. None of them verify a live Windows host or a live Podman machine.
 
 ### Order of checks
 

@@ -145,7 +145,11 @@ func TestUpStartsExistingSandboxWithEquivalentResourceOptions(t *testing.T) {
 					}
 					calls := fakes.Calls("podman")
 					if !running {
-						if !slices.Equal(calls[len(calls)-1].Args, []string{"start", "sandboxed-agents.default.agent01"}) {
+						last := calls[len(calls)-1:]
+						if windows {
+							last = windowsOperationCalls(t, last, "podman-machine-default")
+						}
+						if !slices.Equal(last[0].Args, []string{"start", "sandboxed-agents.default.agent01"}) {
 							t.Fatalf("calls=%v", calls)
 						}
 						calls = calls[:len(calls)-1]
@@ -244,7 +248,11 @@ func assertResourceLimitCallsReadOnly(t *testing.T, calls []testutil.Call, windo
 		t.Fatalf("missing preflight calls: %v", calls)
 	}
 	assertReadOnlyPodmanCalls(t, calls[:preflightCalls])
-	for _, call := range calls[preflightCalls:] {
+	operations := calls[preflightCalls:]
+	if windows {
+		operations = windowsOperationCalls(t, operations, "podman-machine-default")
+	}
+	for _, call := range operations {
 		if len(call.Args) != 3 || (call.Args[0] != "container" && call.Args[0] != "volume") || (call.Args[1] != "exists" && call.Args[1] != "inspect") {
 			t.Fatalf("changed sandbox: %v", call)
 		}

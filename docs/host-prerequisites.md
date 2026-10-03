@@ -150,11 +150,11 @@ The check does not:
 - **Prove user namespaces are allowed.** It does not read `user.max_user_namespaces` or `kernel.unprivileged_userns_clone`, and it does not evaluate AppArmor or SELinux policy. "Rootless" means only that you are not root.
 - **Prove a future cgroup write succeeds.** The write-permission test is taken at one moment. The check does not test the cgroup manager Podman uses, or controllers enabled further down the delegated subtree. A delegated cgroup that is not the user manager and not a parent of the current cgroup is not found.
 - **Check the pasta version** or whether pasta accepts the options Podman passes.
-- **Check a remote Podman.** If `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or a `containers.conf` connection points Podman at another machine, the check still describes only the local host.
+- **Check a remote Podman.** If `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or a `containers.conf` connection points Podman at another machine, the check still describes only the local host. On Linux, `build`, `up`, and the other commands call `podman` without naming a connection, so their calls go wherever that setting points.
 
 ## Windows
 
-The Windows preflight never installs, configures, or starts anything. It queries the Podman client and the Podman machine. On a running machine, it also runs read-only commands through Podman machine SSH as the non-root machine user. It never runs `ssh-keygen` and does not perform SSH setup.
+The Windows preflight never installs, configures, or starts anything. It queries the Podman client and the [selected Podman machine](#selected-podman-machine). On a running machine, it also runs read-only commands through Podman machine SSH as the non-root machine user. It never runs `ssh-keygen` and does not perform SSH setup.
 
 `check` exits with status 0 when every required prerequisite is confirmed. It exits with a nonzero status when any required prerequisite is missing or unknown. If the Podman connection doesn't respond in time, the check reports a timeout and exits with a nonzero status.
 
@@ -168,11 +168,33 @@ The Windows preflight never installs, configures, or starts anything. It queries
 | cgroups | cgroups v2 with the `cpu`, `memory`, and `pids` controllers delegated |
 | OpenSSH | `ssh` and `ssh-keygen` on `PATH`. Preflight checks only that they are present. |
 
-If the Podman machine is stopped, preflight reports the running machine as missing. It reports the machine version and cgroups as unknown, because only a running machine provides them. Rootless mode is read from machine inspect, which also works on a stopped machine. If inspect shows a stopped machine as rootful, preflight reports rootless mode as missing. If no Podman machine exists, preflight reports the machine version, rootless mode, and cgroups as unknown.
+If the selected Podman machine is stopped, preflight reports the running machine as missing. It reports the machine version and cgroups as unknown, because only a running machine provides them. Rootless mode is read from machine inspect, which also works on a stopped machine. If inspect shows a stopped machine as rootful, preflight reports rootless mode as missing. If no Podman machine exists, preflight reports the machine version, rootless mode, and cgroups as unknown.
 
 #### cgroup delegation in the Podman machine
 
 `podman info` lists the cgroup controllers that are available, but that doesn't show whether they are delegated to the user. On a running rootless WSL2 machine, preflight therefore also checks delegation as the non-root SSH user. It reads `Delegate`, `ActiveState`, and `ControlGroup` for `user@<UID>.service` and confirms that `cpu`, `memory`, and `pids` are available in the cgroup of `user@<UID>.service`. It then uses file tests to confirm that this cgroup directory is writable and searchable, and that its `cgroup.procs`, `cgroup.threads`, and `cgroup.subtree_control` files are writable ([kernel delegation model](https://docs.kernel.org/admin-guide/cgroup-v2.html#model-of-delegation), [systemd cgroup delegation](https://systemd.io/CGROUP_DELEGATION/)). These checks only read and never write to or change any cgroup. Preflight skips them on machines known to be rootful or not to use WSL2. In that case it reports delegation as unknown, unless `podman info` already shows that cgroups v2 or one of these controllers is missing. These delegation checks have not yet been run on a live Windows host.
+
+### Selected Podman machine
+
+The Windows preflight checks one Podman machine, the selected machine, and every command sends its sandbox and image operations to that machine only. The queries that select it, `podman machine list` and `podman machine inspect`, and `podman --version` run in the local Podman client and name no connection.
+
+The machine is selected from `podman machine list`. It is the one machine marked as the default. If no machine is marked as the default and exactly one machine exists, it is that machine. With several machines and no default, or with more than one default, no machine is selected: preflight reports the machine prerequisites as unknown and fails. It never picks one of them. A machine name that starts with `-` or contains a line break or a NUL character is not used either, and the running machine is then reported as unknown. Preflight reads `podman machine inspect` for the selected machine.
+
+These Podman calls name the machine with `--connection NAME`, where `NAME` is the machine name:
+
+- the preflight's version and info queries;
+- after a passing preflight, every call of `build` and `up`: the lookups, the image build, the volume and container calls, and the start;
+- every call of `start`, `stop`, `restart`, and `remove` after their selection, including the session query to the in-container manager.
+
+The preflight's read-only commands inside the machine use `podman machine ssh NAME`, which names the machine directly instead of through `--connection`.
+
+`start`, `stop`, `restart`, and `remove` run no preflight. On Windows they select the machine with the same rule, through `podman machine list` and `podman machine inspect`, after the usage and name checks and before their first lookup of the sandbox. They stop without looking at the sandbox when no machine can be selected, when the machine list or inspect output cannot be read, when the selected machine's name starts with `-` or contains a line break or a NUL character, or when the selected machine is not running, does not use WSL2, is rootful, or does not report whether it is rootful ([Sandboxes](sandboxes.md#target-on-windows)).
+
+No command starts a machine. When a call to the selected machine fails, the command stops and does not retry it against another connection.
+
+On Windows, the executable removes `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` from the environment of every Podman call it makes, the preflight's queries included. A call that names the selected machine also takes priority over the default connection: Podman resolves `--connection` before `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and the default ([root.go, v5.0.0](https://raw.githubusercontent.com/containers/podman/v5.0.0/cmd/podman/root.go)). None of these settings therefore redirects a call to another endpoint.
+
+**Limit.** `--connection NAME` names an entry in the Podman connection configuration of your Windows user. The executable selects the machine by this name and does not verify which endpoint the entry reaches. A program that runs as your user can change the connection configuration, the machine list, or the machine itself, and target binding is no protection against it. Target binding keeps all calls of one command on the machine that the command checked or selected; a change made to that machine during the command is not detected.
 
 ### Automount root
 
@@ -191,12 +213,13 @@ The resource options (`--memory`, `--cpus`, `--pids-limit`) only work when cgrou
 
 ### Verification status
 
-The 5.0.0 floor was confirmed by reviewing versioned upstream documentation and source and the WSL machine image's package list. Offline tests run the preflight logic against simulated process results. These tests don't verify sandbox options or image builds on a live Windows host, and no test has been run yet against a live Windows host or a live Podman machine.
+The 5.0.0 floor was confirmed by reviewing versioned upstream documentation and source and the WSL machine image's package list. Offline tests run the preflight logic against simulated process results. These tests don't verify sandbox options or image builds on a live Windows host, and no test has been run yet against a live Windows host or a live Podman machine. Offline tests check that each call names the selected machine and that `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` are absent from its environment. That `--connection` takes priority over a different default connection has been confirmed only by reading Podman's source, not on a live host.
 
 ## Sources
 
 - Podman: [4.4.0 release](https://github.com/containers/podman/releases/tag/v4.4.0), [5.0.0 release](https://github.com/containers/podman/releases/tag/v5.0.0), [podman-run(1) v4.4](https://docs.podman.io/en/v4.4/markdown/podman-run.1.html), [podman-run(1) v5.0.0](https://docs.podman.io/en/v5.0.0/markdown/podman-run.1.html), [troubleshooting §26, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/troubleshooting.md#L694-L737)
 - `podman --version` start-up: [root.go](https://github.com/containers/podman/blob/v5.0.0/cmd/podman/root.go#L90-L100), [registry/config.go](https://github.com/containers/podman/blob/v5.0.0/cmd/podman/registry/config.go#L80-L169), [homedir_unix.go](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/pkg/homedir/homedir_unix.go#L107-L175), [default.go](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/common/pkg/config/default.go#L496-L520), [storage options.go](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/types/options.go#L288-L307), [pre-exec hooks](https://github.com/containers/podman/blob/v5.0.0/pkg/rootless/rootless_linux.c#L255-L269), all at v5.0.0
+- Podman connection priority: [root.go, v5.0.0](https://raw.githubusercontent.com/containers/podman/v5.0.0/cmd/podman/root.go)
 - Podman machine on Windows: [WSL machine image v20240319175608](https://github.com/containers/podman-machine-wsl-os/releases/tag/v20240319175608), [`pkg/machine/config.go`, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/pkg/machine/config.go)
 - WSL: [WSL configuration](https://learn.microsoft.com/en-us/windows/wsl/wsl-config)
 - Linux kernel: [cgroup v2 delegation, v6.8](https://www.kernel.org/doc/html/v6.8/admin-guide/cgroup-v2.html#delegation), [model of delegation](https://docs.kernel.org/admin-guide/cgroup-v2.html#model-of-delegation)

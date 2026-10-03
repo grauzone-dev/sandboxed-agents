@@ -23,7 +23,7 @@ func TestRemoveKeepsVolumesOfAStoppedSandbox(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
 	fakes.Script("podman", append(removeObjectResponses(&owned, false, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, nil), testutil.Response{})...)
-	stdout, stderr, status := runCLI(t, "production", "remove", "agent01")
+	stdout, stderr, status := runCLI(t, "sandbox-host", "remove", "agent01")
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "agent01") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
@@ -50,7 +50,7 @@ func TestRemoveDeletesOnlyOwnedVolumesWhenAsked(t *testing.T) {
 				mutations++
 			}
 			fakes.Script("podman", append(responses, make([]testutil.Response, mutations)...)...)
-			stdout, stderr, status := runCLI(t, "production", "remove", "agent01", "--volumes")
+			stdout, stderr, status := runCLI(t, "sandbox-host", "remove", "agent01", "--volumes")
 			if (status == 0) != (foreignOwner == owned) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -90,7 +90,7 @@ func TestRemoveHandlesEverySubsetOfKeptVolumes(t *testing.T) {
 				if deleteVolumes {
 					args = append(args, "--volumes")
 				}
-				stdout, stderr, status := runCLI(t, "production", args...)
+				stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 				if status != 0 || stderr != "" {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -149,7 +149,7 @@ func TestRemoveRefusesForeignObjectsAndInterruptedUpdates(t *testing.T) {
 						if deleteVolumes {
 							args = append(args, "--volumes")
 						}
-						stdout, stderr, status := runCLI(t, "production", args...)
+						stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 						if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, name) || !strings.Contains(stderr, "Podman") || strings.Contains(stderr, "interrupted update") {
 							t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 						}
@@ -173,7 +173,7 @@ func TestRemoveRefusesForeignObjectsAndInterruptedUpdates(t *testing.T) {
 				if deleteVolumes {
 					args = append(args, "--volumes")
 				}
-				stdout, stderr, status := runCLI(t, "production", args...)
+				stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 				if status == 0 || !strings.Contains(stderr, "update agent01") || !strings.Contains(stderr, "interrupted update") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -186,7 +186,7 @@ func TestRemoveRefusesForeignObjectsAndInterruptedUpdates(t *testing.T) {
 func TestRemoveRejectsUnknownSandboxesAndUsage(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	fakes.Script("podman", removeObjectResponses(nil, false, nil, nil)...)
-	stdout, stderr, status := runCLI(t, "production", "remove", "agent01", "--volumes", "--force")
+	stdout, stderr, status := runCLI(t, "sandbox-host", "remove", "agent01", "--volumes", "--force")
 	if status == 0 || !strings.Contains(stderr, "agent01") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
@@ -194,7 +194,7 @@ func TestRemoveRejectsUnknownSandboxesAndUsage(t *testing.T) {
 	for _, args := range [][]string{{"remove"}, {"remove", "-x"}, {"remove", "a/b"}, {"remove", "agent01", "extra"}, {"remove", "agent01", "--unknown"}, {"remove", "agent01", "--force", "--force"}, {"remove", "agent01", "--volumes", "--volumes"}, {"remove", "agent01", "--volumes=true"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
-			stdout, stderr, status := runCLI(t, "production", args...)
+			stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 			if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -247,11 +247,11 @@ func TestRemoveGuardsRunningSessionsAndStopsBeforeRemoving(t *testing.T) {
 				if force {
 					args = append(args, "--force")
 				}
-				stdout, stderr, status := runCLI(t, "production", args...)
+				stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 				if (status == 0) != allowed {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				query := testutil.Call{Args: []string{"exec", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"}}
+				query := testutil.Call{Args: []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"}}
 				want := []testutil.Call{query}
 				if allowed {
 					want = append(want, testutil.Call{Args: []string{"stop", "sandboxed-agents.default.agent01"}}, testutil.Call{Args: []string{"rm", "sandboxed-agents.default.agent01"}})
@@ -312,7 +312,7 @@ func TestRemovePreservesABoundWorkspaceAndHandlesItsUnusedVolume(t *testing.T) {
 			if deleteVolumes {
 				args = append(args, "--volumes")
 			}
-			stdout, stderr, status := runCLI(t, "production", args...)
+			stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 			if status != 0 || stderr != "" {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -372,7 +372,7 @@ func TestRefusedRemoveLeavesTheHostSSHSetupUntouched(t *testing.T) {
 				responses = append(responses, testutil.Response{ExitCode: 1})
 			}
 			fakes.Script("podman", responses...)
-			_, stderr, status := runCLI(t, "production", "remove", "agent01")
+			_, stderr, status := runCLI(t, "sandbox-host", "remove", "agent01")
 			if status == 0 {
 				t.Fatalf("refusal expected: %q", stderr)
 			}
@@ -411,7 +411,7 @@ func TestRemoveStopsOnPodmanFailuresBeforeDeletingAnythingElse(t *testing.T) {
 				}
 			}
 			fakes.Script("podman", responses...)
-			stdout, stderr, status := runCLI(t, "production", "remove", "agent01", "--volumes")
+			stdout, stderr, status := runCLI(t, "sandbox-host", "remove", "agent01", "--volumes")
 			if status == 0 {
 				t.Fatalf("failure expected stdout=%q stderr=%q", stdout, stderr)
 			}
@@ -431,7 +431,7 @@ func TestRemoveReportsForeignVolumesBeforeAnInterruptedUpdateEvenWithVolumes(t *
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
 	fakes.Script("podman", removeObjectResponses(&owned, true, map[string]string{"workspace": "foreign", "home": owned}, &owned)...)
-	stdout, stderr, status := runCLI(t, "production", "remove", "agent01", "--volumes", "--force")
+	stdout, stderr, status := runCLI(t, "sandbox-host", "remove", "agent01", "--volumes", "--force")
 	if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, "sandboxed-agents.default.agent01.workspace") || strings.Contains(stderr, "interrupted update") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
@@ -449,7 +449,7 @@ func TestRemoveNamesEveryForeignObjectIncludingTheBackup(t *testing.T) {
 			if deleteVolumes {
 				args = append(args, "--volumes")
 			}
-			stdout, stderr, status := runCLI(t, "production", args...)
+			stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 			if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, "Podman") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -476,7 +476,7 @@ func TestRemoveVolumesDoesNotReadStandardInputOrPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLIProcess$", "--", "remove", "agent01", "--volumes")
-	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE=production")
+	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE=sandbox-host")
 	command.Stdin = input
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout

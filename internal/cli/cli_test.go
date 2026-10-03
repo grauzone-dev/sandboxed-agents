@@ -60,6 +60,9 @@ func TestCLIProcess(t *testing.T) {
 	for index, arg := range os.Args {
 		if arg == "--" {
 			args := os.Args[index+1:]
+			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "sandbox-host" {
+				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", preflight.Host{Platform: "linux", Run: platform.Run}))
+			}
 			if strings.HasPrefix(os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE"), "windows") {
 				host := platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
 				switch os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") {

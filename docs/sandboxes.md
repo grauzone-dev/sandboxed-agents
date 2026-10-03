@@ -39,7 +39,7 @@ A sandbox name matches `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`: it starts with a letter o
 ### What `up` does
 
 1. It checks the command line, the sandbox name, and the format of each limit option.
-2. It runs the preflight and prints its lines. On Linux, the preflight's only Podman call is `podman --version`. If a prerequisite is missing, `up` reports `host prerequisites are missing` and exits with status 1. On Windows, the preflight runs read-only queries of the Podman client and the selected Podman machine, including commands in the machine through `podman machine ssh`. If a required prerequisite is missing or could not be checked, `up` exits with status 1. When the preflight fails, `up` stops before it looks up, creates, or changes any sandbox object.
+2. It runs the preflight and prints its lines. On Linux, the preflight's only Podman call is `podman --version`. If a prerequisite is missing, `up` reports `host prerequisites are missing` and exits with status 1. On Windows, the preflight runs read-only queries of the Podman client and the [selected Podman machine](host-prerequisites.md#selected-podman-machine), including commands in the machine through `podman machine ssh`. If a required prerequisite is missing or could not be checked, `up` exits with status 1. Every later Podman call of `up` names that machine with `--connection`, without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY` in its environment, so neither these settings nor another default connection redirect it. When the preflight fails, `up` stops before it looks up, creates, or changes any sandbox object.
 3. It looks up the container and the three volumes of the sandbox by their exact Podman names (see [Podman names and labels](#podman-names-and-labels)) and reads the owner label of each one that exists. It looks at no other container or volume. When no container exists but volumes do, it checks the owners of those volumes here.
 4. It checks the owners of an existing container and its volumes, and then looks up the backup container of an interrupted update and checks its owner. It refuses to continue on an owner conflict or an interrupted update (see [Refusals](#refusals)).
 5. If the container exists, `up` compares each given limit option with the value recorded on the container and refuses on a difference. Otherwise it starts the container when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
@@ -80,7 +80,7 @@ The container and the volumes carry these labels:
 
 `up` records all four limits on every container it creates, the defaults included, so `podman container inspect` shows the values in effect under `Config.Labels`. Containers created before these labels existed carry none of them.
 
-The owner label is the authoritative check: a container or volume with a matching name but a missing or different owner label belongs to no sandbox of this controller group, and `up` neither changes nor adopts it.
+The owner label is the authoritative check: a container or volume with a matching name but a missing or different owner label belongs to no sandbox of this controller group, and `up` neither changes nor adopts it. The label authorizes a command; it does not attest how the object was configured (see [Existing sandboxes](#existing-sandboxes)).
 
 ## Container defaults
 
@@ -89,7 +89,7 @@ The owner label is the authoritative check: a container or volume with a matchin
 | Setting | Value |
 | --- | --- |
 | User namespace | `--userns=keep-id:uid=1000,gid=1000`: your host user maps to the user `agent` (UID and GID 1000) in the container |
-| Start user | `--user=0:0`: with `keep-id`, Podman starts the container as the mapped user unless `--user` is given, which would override the image's `USER root` ([podman-create(1), `--userns`](https://docs.podman.io/en/latest/markdown/podman-create.1.html#userns-mode)). The entrypoint therefore starts as root in the container, creates `/run/sshd`, and then runs `sleep infinity` as `agent` through `runuser` ([Images](images.md#base-image-contents)). Your host user still maps to `agent`; root in the container maps to an ID from your subordinate range, not to root on the host. |
+| Start user | `--user=0:0`: with `keep-id`, Podman starts the container as the mapped user unless `--user` is given, which would override the image's `USER root` ([podman-create(1), `--userns`](https://docs.podman.io/en/latest/markdown/podman-create.1.html#userns-mode)). The entrypoint therefore starts as root in the container, creates `/run/sshd`, and then runs `sleep infinity` as `agent` through `runuser` ([Images](images.md#base-image-contents)). Your host user still maps to `agent`; root in the container maps to an ID from your subordinate range, not to root on the host. See [Execution identities](#execution-identities). |
 | Privileges | `--security-opt=no-new-privileges` |
 | Network | `--network=pasta:--no-map-gw`: the container cannot reach the host through the gateway address ([Why Podman 4.4.0](host-prerequisites.md#why-podman-440)) |
 | Memory | `--memory`: 8 GiB, or the value of `--memory` |
@@ -97,7 +97,7 @@ The owner label is the authoritative check: a container or volume with a matchin
 | Processes | `--pids-limit`: 2048, or the value of `--pids-limit` |
 | Shared memory | `--shm-size`: 1 GiB, or the value of `--shm-size` |
 
-The container mounts its three named volumes and nothing else: no host path, no SSH-agent socket, no container-engine socket, and no display socket (ADR-0003). The resource limits need delegated cgroup v2 controllers, which the preflight checks.
+A container that `up` creates mounts its three named volumes and nothing else: no host path, no SSH-agent socket, no container-engine socket, and no display socket (ADR-0003). The resource limits need delegated cgroup v2 controllers, which the preflight checks.
 
 A sandbox created by this version does not yet offer:
 
@@ -107,9 +107,20 @@ A sandbox created by this version does not yet offer:
 
 `up` opens no SSH connection to the sandbox and changes no host SSH file. On Windows, the preflight runs its read-only machine checks through `podman machine ssh`. These checks run in the Podman machine, not in the sandbox.
 
+### Execution identities
+
+Two identities run in a sandbox (ADR-0006):
+
+- **Container root** runs administrative control. The entrypoint starts as root to prepare the container. The executable makes its administrative control calls to the in-container manager with `podman exec --user=0:0`, so they run as root in the container whatever the container's start user is. The [session query](#running-agent-sessions) is such a call.
+- **`agent`, UID and GID 1000,** is the required identity for agent installation and all agent work: agents, shells, toolchains used by agents, and agent sessions. The entrypoint's long-running process already runs as `agent`. Agent installation (#39), agents, agent sessions, and shells arrive with later Stories (#41, #44, #45) and are not part of this version. When they are added, they must run as UID and GID 1000 and change to that identity before an agent is installed or started or an agent session is reached.
+
+Root in the container is root only inside the sandbox's user namespace: it maps to an ID from your subordinate range, not to root or to your user on the host.
+
 ## Existing sandboxes
 
 When the container of the sandbox exists with the current owner, and no volume or backup container under its names has a missing or different owner, `up` checks the given limit options. If none is given, or each one equals the value recorded on the container, `up` starts the container if it is stopped and exits with status 0. If it already runs, `up` exits with status 0 without a change. In both cases it creates, removes, and reconfigures no container or volume, and it does not check or build the image. `up` never changes the configuration of an existing sandbox.
+
+`up`, `start`, and `restart` start an existing container of the current owner as it is. The owner label authorizes them to act on it, but it is not a record of the container's whole configuration. `up` compares only the limit options you give with the limit labels. The image, the mounts, the user, the user namespace, the network, and the security options of an existing container are not compared with the [container defaults](#container-defaults). A container that carries the current owner label but was created or changed outside `sandboxed-agents`, which needs access to your Podman, is therefore started with the configuration it has. Comparing that configuration has no Story yet.
 
 Only the options you give are compared, and they are compared by value: `--memory 8192m` equals a recorded `8589934592`, and `--cpus 1.50` equals a recorded `1.5`. A limit option that differs from the recorded value is refused (see [Refusals](#refusals)). To change a limit, run `remove NAME` and then `up NAME` with the new value; `up` adopts the kept volumes.
 
@@ -150,7 +161,7 @@ An invalid name or limit value is therefore reported ahead of a missing prerequi
 sandboxed-agents remove NAME [--volumes] [--force]
 ```
 
-`remove` deletes the container of the sandbox. A running sandbox is stopped first; you do not have to stop it yourself. Without `--volumes`, all three volumes are kept, and a later `up NAME` adopts them ([Kept volumes](#kept-volumes)). `remove` asks for no confirmation and does not read standard input. It runs no preflight. It accepts the same sandbox names as `up`, and a usage error prints a message and the usage line, calls no Podman command, and exits with status 1.
+`remove` deletes the container of the sandbox. A running sandbox is stopped first; you do not have to stop it yourself. Without `--volumes`, all three volumes are kept, and a later `up NAME` adopts them ([Kept volumes](#kept-volumes)). `remove` asks for no confirmation and does not read standard input. It runs no preflight. On Windows it first selects the Podman machine, as `stop`, `start`, and `restart` do ([Target on Windows](#target-on-windows)). It accepts the same sandbox names as `up`, and a usage error prints a message and the usage line, calls no Podman command, and exits with status 1.
 
 | Option | Effect |
 | --- | --- |
@@ -164,10 +175,10 @@ sandboxed-agents remove NAME [--volumes] [--force]
 Before it stops a running sandbox, `remove` asks the manager in the container for the running agent sessions:
 
 ```sh
-podman exec sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+podman exec --user=0:0 sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
 ```
 
-The manager answers with a JSON array of objects, one per running session, each with a non-empty `name` and a non-empty `agent` string. `remove` names each session as `AGENT/NAME`. If the query fails, returns no such array, or does not finish within 5 seconds, the manager counts as not answering. A stopped sandbox has no running sessions, so `remove` does not ask.
+On Windows, the call also names the selected Podman machine with `--connection`. The manager answers with a JSON array of objects, one per running session, each with a non-empty `name` and a non-empty `agent` string. `remove` names each session as `AGENT/NAME`. If the query fails, returns no such array, or does not finish within 5 seconds, the manager counts as not answering. A stopped sandbox has no running sessions, so `remove` does not ask.
 
 - **Sessions run.** `remove` refuses, names each running session, and names `--force`. With `--force` it removes the sandbox and names the sessions it ended.
 - **No answer.** `remove` refuses, says that running sessions cannot be ruled out, and names `--force`. With `--force` it still asks the manager. If the manager still does not answer, `remove` removes the sandbox and says that sessions that may have been running were ended and cannot be named.
@@ -217,6 +228,12 @@ sandboxed-agents restart NAME [--force]
 
 These commands act on the existing container of the sandbox `NAME` and on nothing else. `start` and `restart` start that same container again. All three keep the three volumes and the sandbox's configuration: the Podman options, the resource limits, the owner labels, and the workspace. They create, remove, and reconfigure no container or volume, and they do not check or build the image. They run no preflight and call neither `ssh` nor `podman machine ssh`.
 
+### Target on Windows
+
+On Windows, `stop`, `start`, `restart`, and `remove` first select the Podman machine by the rule of the preflight ([Selected Podman machine](host-prerequisites.md#selected-podman-machine)). They read only `podman machine list` and `podman machine inspect`, after the usage and name checks and before their first lookup of the sandbox. The command exits with status 1 and looks at no sandbox object when the machine list or inspect output cannot be read, when no machine exists, when several machines exist and not exactly one of them is the default, when the selected machine's name starts with `-` or contains a line break or a NUL character, or when the selected machine is stopped, does not use WSL2, is rootful, or does not report whether it is rootful. The message ends with the advice to run `sandboxed-agents check`, which shows which prerequisite is missing. The command never starts the machine.
+
+Every later Podman call of the command, including the session query, names the selected machine with `--connection`, without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY` in its environment, so neither these settings nor another default connection redirect it. On Linux these commands call the local `podman` as before.
+
 | Command | On a running sandbox | On a stopped sandbox |
 | --- | --- | --- |
 | `stop` | asks the manager for running agent sessions, then runs `podman stop` and prints `Sandbox NAME is stopped.` | changes nothing and prints `Sandbox NAME is stopped.` |
@@ -236,7 +253,7 @@ Each command takes exactly one sandbox name. As with `up`, the first word is alw
 
 ### What `stop`, `start`, and `restart` do
 
-1. They check the command line and the sandbox name.
+1. They check the command line and the sandbox name. On Windows, they then select the Podman machine ([Target on Windows](#target-on-windows)).
 2. They look up the container and the three volumes of the sandbox by their exact Podman names, as `up` does, and read the owner label of each one that exists and whether the container is running.
 3. When neither the container nor any of the three volumes exists, the command reports `sandbox NAME does not exist in this controller group` and exits with status 1. When no container exists but some or all of the volumes do, the name is known, but there is no container to act on: if one of those volumes has a missing or different owner, the command reports that owner conflict; otherwise it reports `sandbox NAME has no container; run sandboxed-agents up NAME, which adopts its volumes`. Either way it exits with status 1 and changes nothing.
 4. They check the owners of the container and of every existing volume, then look up the backup container and check its owner (see [Refusals](#refusals)).
@@ -252,7 +269,7 @@ If a Podman command fails, the command stops, reports the Podman command and its
 Before `stop` or `restart` stops a running container, it asks the in-container manager for the running agent sessions:
 
 ```sh
-podman exec sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+podman exec --user=0:0 sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
 ```
 
 The manager answers when this command exits with status 0 within 30 seconds and prints exactly one JSON array on standard output. Each element is an object whose `name` and `agent` are strings that are not empty or only whitespace: the name of a running agent session and the agent it runs, for example `[{"name":"main","agent":"claude"}]`. An empty array means that no agent session runs. Anything else counts as no answer, including a partly valid array.
@@ -282,8 +299,8 @@ These commands run their checks in the order described in [Development](developm
 | 7. Preconditions | `stop` and `restart` on a running sandbox without `--force`: reports that the manager did not answer |
 | 9. Session guard | `stop` and `restart` on a running sandbox without `--force`: reports the running agent sessions |
 
-The preflight (step 2), the running-state check (step 6), and the terminal check (step 8) do not apply to these commands. A sandbox with running agent sessions and an owner conflict or a backup container is therefore refused for the owner or the interrupted update, and the manager is not asked.
+The preflight (step 2), the running-state check (step 6), and the terminal check (step 8) do not apply to these commands. On Windows, the machine selection adds no step: it runs after step 1 and before step 3, and a failed selection is reported before an unknown sandbox, an owner conflict, or an interrupted update. The same holds for `remove`. A sandbox with running agent sessions and an owner conflict or a backup container is therefore refused for the owner or the interrupted update, and the manager is not asked.
 
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).

@@ -33,9 +33,10 @@ type WindowsResult struct {
 }
 
 type Report struct {
-	Results       []WindowsResult
-	AutomountRoot string
-	err           error
+	Results          []WindowsResult
+	AutomountRoot    string
+	PodmanConnection string
+	err              error
 }
 
 func (report Report) Err() error {
@@ -101,7 +102,27 @@ func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) R
 			report.err = errors.New(timeoutMessage)
 		}
 	}
+	if report.Err() == nil {
+		report.PodmanConnection = machine.Name
+	}
 	return report
+}
+
+func SelectWindowsConnection(ctx context.Context, run process.Runner) (string, error) {
+	machine := inspectMachine(ctx, run)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var report Report
+	report.add("running_machine", machine.StateKnown, machine.Running)
+	report.add("wsl2", machine.Provider != "", machine.Provider == "wsl")
+	report.add("rootless", machine.Rootful != nil, machine.Rootful != nil && !*machine.Rootful)
+	for _, result := range report.Results {
+		if result.Status != Met {
+			return "", errors.New(result.Message)
+		}
+	}
+	return machine.Name, nil
 }
 
 type machineFacts struct {
@@ -129,8 +150,10 @@ func inspectMachine(ctx context.Context, run process.Runner) machineFacts {
 	selected := -1
 	for index, machine := range machines {
 		if machine.Default {
+			if selected >= 0 {
+				return machineFacts{}
+			}
 			selected = index
-			break
 		}
 	}
 	if selected < 0 && len(machines) == 1 {
@@ -141,7 +164,7 @@ func inspectMachine(ctx context.Context, run process.Runner) machineFacts {
 	}
 	machine := machines[selected]
 	facts := machineFacts{Name: machine.Name, Provider: machine.VMType}
-	if facts.Name == "" {
+	if facts.Name == "" || strings.HasPrefix(facts.Name, "-") || strings.ContainsAny(facts.Name, "\x00\r\n") {
 		return facts
 	}
 	var inspected []struct {

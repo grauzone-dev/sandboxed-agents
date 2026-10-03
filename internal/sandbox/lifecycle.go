@@ -19,11 +19,11 @@ const (
 
 type Lifecycle struct {
 	*sandboxObjects
-	stops           bool
-	starts          bool
-	force           bool
-	sessions        []manager.Session
-	sessionsUnknown bool
+	stops         bool
+	starts        bool
+	force         bool
+	sessions      []manager.Session
+	sessionsKnown bool
 }
 
 func NewLifecycle(name string, action LifecycleAction, force bool, run process.Runner, streams process.Streams) *Lifecycle {
@@ -55,19 +55,16 @@ func (lifecycle *Lifecycle) start(ctx context.Context) error {
 	return err
 }
 
-func (lifecycle *Lifecycle) CheckSessions(ctx context.Context) error {
+func (lifecycle *Lifecycle) CheckManager(ctx context.Context) error {
 	if !lifecycle.stops || !lifecycle.containerRunning {
 		return nil
 	}
-	sessions, err := RunningSessions(ctx, lifecycle.container, lifecycle.run)
-	if err != nil {
-		if !lifecycle.force {
-			return fmt.Errorf("cannot rule out running agent sessions in sandbox %s: %s; use --force to proceed anyway", lifecycle.name, err)
-		}
-		lifecycle.sessionsUnknown = true
-		return nil
+	var err error
+	lifecycle.sessions, err = RunningSessions(ctx, lifecycle.container, lifecycle.run)
+	lifecycle.sessionsKnown = err == nil
+	if err != nil && !lifecycle.force {
+		return fmt.Errorf("cannot rule out running agent sessions in sandbox %s: %s; use --force to proceed anyway", lifecycle.name, err)
 	}
-	lifecycle.sessions = sessions
 	return nil
 }
 
@@ -77,7 +74,7 @@ func (lifecycle *Lifecycle) Apply(ctx context.Context) error {
 			return err
 		}
 		lifecycle.containerRunning = false
-		if lifecycle.sessionsUnknown {
+		if !lifecycle.sessionsKnown {
 			if _, err := fmt.Fprint(lifecycle.streams.Stdout, "Agent sessions that may have been running were ended and cannot be named.\n"); err != nil {
 				return err
 			}
@@ -103,7 +100,7 @@ func (lifecycle *Lifecycle) sessionNames() string {
 	return strings.Join(names, ", ")
 }
 
-func (lifecycle *Lifecycle) CheckSessionGuard() error {
+func (lifecycle *Lifecycle) CheckSessions() error {
 	if len(lifecycle.sessions) > 0 && !lifecycle.force {
 		return fmt.Errorf("sandbox %s has running agent sessions: %s; use --force to end them", lifecycle.name, lifecycle.sessionNames())
 	}

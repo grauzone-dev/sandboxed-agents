@@ -191,8 +191,8 @@ func lifecycleCommand(action sandbox.LifecycleAction, run process.Runner) Comman
 		Sandbox:           func(*Invocation) error { return lifecycle.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return lifecycle.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return lifecycle.CheckInterruptedUpdate() },
-		Preconditions:     func(*Invocation) error { return lifecycle.CheckSessions(ctx) },
-		SessionGuard:      func(*Invocation) error { return lifecycle.CheckSessionGuard() },
+		Preconditions:     func(*Invocation) error { return lifecycle.CheckManager(ctx) },
+		SessionGuard:      func(*Invocation) error { return lifecycle.CheckSessions() },
 	}, Action: func(*Invocation) error { return lifecycle.Apply(ctx) }}
 }
 

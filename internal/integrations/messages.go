@@ -1,0 +1,25 @@
+package integrations
+
+const (
+	MissingIntegration      = "missing integration name for %s; name one of its valid integrations"
+	UnknownIntegration      = "unknown integration %q for %s; valid integrations: %s"
+	NoIntegrations          = "unknown integration %q for %s; no valid names are available yet"
+	GitHasNoLogin           = "git has no login workflow; use integrations config NAME git; valid config workflows: %s"
+	MissingWorkflow         = "workflow name required for %s %s; valid workflows: %s"
+	UnknownWorkflow         = "unknown %s workflow %q for %s; valid workflows: %s"
+	UnknownKind             = "unknown integration command %q"
+	MissingOptionValue      = "missing value for %s"
+	DuplicateOption         = "duplicate option %q"
+	UnexpectedArgument      = "unexpected argument or option %q"
+	InvalidOptionValue      = "invalid value for %s (NUL not allowed)"
+	NeedsTerminal           = "Git identity needs a terminal when --name or --email is missing; pass both explicitly"
+	NamePrompt              = "Git commit name: "
+	EmailPrompt             = "Git commit email: "
+	PromptFailure           = "could not read %s: %w"
+	GitStartFailure         = "could not start Git configuration: %w"
+	GitFailure              = "Git configuration failed with exit status %d"
+	ManagerUnavailable      = "manager of sandbox %[1]s does not answer; run sandboxed-agents check %[1]s for diagnosis, then sandboxed-agents restart %[1]s"
+	StoppedSandbox          = "sandbox %[1]s is stopped; run sandboxed-agents start %[1]s"
+	IntegrationFailure      = "integration workflow failed with exit status %d"
+	IntegrationStartFailure = "could not start integration workflow: %w"
+)

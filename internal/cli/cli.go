@@ -219,17 +219,26 @@ func lifecycleCommand(action sandbox.LifecycleAction, run process.Runner) Comman
 }
 
 func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetHash string, host platform.Host) int {
-	return runWithCheck(args, stdout, stderr, version, assetHash, platform.Run, func(invocation *Invocation) error {
+	podman := &windowsPodman{runner: platform.Run}
+	run := platform.Run
+	if host.OS == "windows" {
+		run = podman.run
+	}
+	return runWithCheck(args, stdout, stderr, version, assetHash, run, func(invocation *Invocation) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		report := preflight.CheckWindows(ctx, host, platform.Run)
+		report := preflight.CheckWindows(ctx, host, podman.invoke)
 		for _, result := range report.Results {
 			prefix := result.Status
 			if _, err := fmt.Fprintf(invocation.Stdout, "%s: %s\n", prefix, result.Message); err != nil {
 				return err
 			}
 		}
-		return report.Err()
+		if err := report.Err(); err != nil {
+			return err
+		}
+		podman.connection = report.PodmanConnection
+		return nil
 	})
 }
 

@@ -41,7 +41,7 @@ func TestLifecycleKeepsConfigurationAndHonorsTheRequestedState(t *testing.T) {
 				if force {
 					args = append(args, "--force")
 				}
-				stdout, stderr, status := runCLI(t, "production", args...)
+				stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 				state := "running"
 				if test.command == "stop" {
 					state = "stopped"
@@ -76,7 +76,7 @@ func TestLifecycleKeepsConfigurationAndHonorsTheRequestedState(t *testing.T) {
 }
 
 func sessionQueryArgs() []string {
-	return []string{"exec", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"}
+	return []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"}
 }
 
 func TestStopAndRestartProtectRunningAgentSessions(t *testing.T) {
@@ -92,7 +92,7 @@ func TestStopAndRestartProtectRunningAgentSessions(t *testing.T) {
 				if force {
 					args = append(args, "--force")
 				}
-				stdout, stderr, status := runCLI(t, "production", args...)
+				stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 				output := stderr
 				if force {
 					output = stdout
@@ -149,7 +149,7 @@ func TestStopAndRestartRefuseWhenSessionsCannotBeDeterminedUnlessForced(t *testi
 					if force {
 						args = append(args, "--force")
 					}
-					stdout, stderr, status := runCLI(t, "production", args...)
+					stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 					calls := fakes.Calls("podman")
 					if !reflect.DeepEqual(calls[len(responses)-1].Args, sessionQueryArgs()) {
 						t.Fatalf("missing manager query: %v", calls)
@@ -181,7 +181,7 @@ func TestLifecycleNamesUnknownSandboxesAndAdoptableKeptVolumes(t *testing.T) {
 					}
 				}
 				fakes.Script("podman", sandboxObjectResponses(nil, false, volumes, nil)...)
-				stdout, stderr, status := runCLI(t, "production", command, "agent01")
+				stdout, stderr, status := runCLI(t, "sandbox-host", command, "agent01")
 				if status == 0 || stdout != "" || !strings.Contains(stderr, "agent01") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -238,7 +238,7 @@ func TestLifecycleRefusesForeignObjectsBeforeUpdateAndSessions(t *testing.T) {
 							if command != "start" {
 								args = append(args, "--force")
 							}
-							stdout, stderr, status := runCLI(t, "production", args...)
+							stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 							if status == 0 || stdout != "" || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, name) || !strings.Contains(stderr, "Podman") || !strings.Contains(stderr, "remove or rename") || strings.Contains(stderr, "up agent01") || strings.Contains(stderr, "interrupted update") || strings.Contains(stderr, "sessions") {
 								t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 							}
@@ -259,7 +259,7 @@ func TestLifecycleRefusesInterruptedUpdatesBeforeQueryingSessions(t *testing.T) 
 				fakes := testutil.NewFakePrograms(t)
 				responses := sandboxObjectResponses(&owned, running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, &owned)
 				fakes.Script("podman", append(responses, testutil.Response{Stdout: `[{"name":"coding","agent":"codex"}]`})...)
-				stdout, stderr, status := runCLI(t, "production", command, "agent01")
+				stdout, stderr, status := runCLI(t, "sandbox-host", command, "agent01")
 				if status == 0 || stdout != "" || !strings.Contains(stderr, "sandboxed-agents-backup.default.agent01") || !strings.Contains(stderr, "interrupted update") || !strings.Contains(stderr, "update agent01") || strings.Contains(stderr, "sessions") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -276,7 +276,7 @@ func TestStopAndRestartReportAnOwnerConflictBeforeRunningSessionsWithoutForce(t 
 			owned := "default"
 			responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "other", "ssh": "default"}, nil)
 			fakes.Script("podman", append(responses, testutil.Response{Stdout: `[{"name":"coding","agent":"codex"}]`})...)
-			stdout, stderr, status := runCLI(t, "production", command, "agent01")
+			stdout, stderr, status := runCLI(t, "sandbox-host", command, "agent01")
 			if status == 0 || stdout != "" || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, "sandboxed-agents.default.agent01.home") || strings.Contains(stderr, "sessions") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -294,7 +294,7 @@ func TestLifecycleRejectsUsageErrorsBeforePodman(t *testing.T) {
 		for _, args := range forms {
 			t.Run(command+"/"+strings.Join(args, " "), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
-				stdout, stderr, status := runCLI(t, "production", append([]string{command}, args...)...)
+				stdout, stderr, status := runCLI(t, "sandbox-host", append([]string{command}, args...)...)
 				if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") || len(fakes.Calls("podman")) != 0 || len(fakes.Calls("ssh")) != 0 {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
@@ -328,7 +328,7 @@ func TestLifecycleStopsAfterPodmanFailureWithoutClaimingSuccess(t *testing.T) {
 			if test.command != "start" {
 				args = append(args, "--force")
 			}
-			stdout, stderr, status := runCLI(t, "production", args...)
+			stdout, stderr, status := runCLI(t, "sandbox-host", args...)
 			calls := fakes.Calls("podman")
 			if status == 0 || !strings.Contains(stderr, "exit status 125") || strings.Contains(stdout, "Sandbox agent01 is") || len(calls) != len(responses) || !reflect.DeepEqual(calls[len(calls)-1].Args, []string{test.last, "sandboxed-agents.default.agent01"}) {
 				t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, calls)
@@ -362,7 +362,7 @@ func TestLifecycleRefusesFailedOrUnusablePodmanLookups(t *testing.T) {
 				responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 				responses[test.index] = test.response
 				fakes.Script("podman", responses...)
-				stdout, stderr, status := runCLI(t, "production", command, "agent01")
+				stdout, stderr, status := runCLI(t, "sandbox-host", command, "agent01")
 				if status == 0 || stdout != "" || !strings.Contains(stderr, test.message) || len(fakes.Calls("podman")) != test.index+1 {
 					t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
 				}
@@ -377,7 +377,7 @@ func TestStartResumesTheSameSandboxWithoutChangingConfiguration(t *testing.T) {
 	owned := "default"
 	responses := sandboxObjectResponses(&owned, false, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 	fakes.Script("podman", append(responses, testutil.Response{})...)
-	stdout, stderr, status := runCLI(t, "production", "start", "agent01")
+	stdout, stderr, status := runCLI(t, "sandbox-host", "start", "agent01")
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}

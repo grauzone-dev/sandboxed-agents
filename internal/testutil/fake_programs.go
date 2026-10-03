@@ -176,7 +176,11 @@ func runFake(state, name string, args []string) int {
 	}
 	response := responses[0]
 	if response.CaptureBuildContext != "" {
-		if name != "podman" || len(args) < 2 || args[0] != "build" {
+		operationArgs := args
+		if len(operationArgs) >= 2 && operationArgs[0] == "--connection" {
+			operationArgs = operationArgs[2:]
+		}
+		if name != "podman" || len(operationArgs) < 2 || operationArgs[0] != "build" {
 			fmt.Fprintln(os.Stderr, "expected a Podman build to capture its context")
 			return 99
 		}

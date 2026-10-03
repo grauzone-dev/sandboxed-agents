@@ -21,6 +21,8 @@ The build runs in three steps:
 
 3. It removes the temporary directory, whether the build succeeded or failed.
 
+On Windows, the build runs in the Podman machine that the preflight checked: the call is `podman --connection NAME build …`, with the name of the [selected Podman machine](host-prerequisites.md#selected-podman-machine). `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or another default connection does not redirect it. On Linux, `build` calls the local `podman` without a connection.
+
 Podman's output passes through. On success, `build` prints `Built image TAG.` and a reminder that existing sandboxes keep their image. If Podman exits with a nonzero status, `build` reports `podman build failed with exit status N` and exits non-zero.
 
 `--pull=always` and `--no-cache` make every build start from the current Debian image and current packages. The executable does not inspect, remove, or retag images. An image that an earlier build left behind stays on the host until you remove it, for example with `podman image prune`.
@@ -48,7 +50,7 @@ A build does not change existing sandboxes. They keep the image they were create
 - **Manager:** `/usr/local/bin/sandboxed-agents-manager`.
 - **Workspace:** `/workspace`, owned by `agent`.
 
-The image contains no SSH keys; host keys are removed after the OpenSSH packages are installed. Until the SSH server setup (#18), the entrypoint runs as root only to create `/run/sshd` and then runs `sleep infinity` as `agent` through `runuser`.
+The image contains no SSH keys; host keys are removed after the OpenSSH packages are installed. Until the SSH server setup (#18), the entrypoint runs as root only to create `/run/sshd` and then runs `sleep infinity` as `agent` through `runuser`. The entrypoint is not the only root process: the host executable makes its administrative control calls to the manager with `podman exec --user=0:0`, as root in the container. Agent installation and agent work, which later Stories add, are to run as `agent` ([Execution identities](sandboxes.md#execution-identities)).
 
 ### Version inventory
 

@@ -336,8 +336,8 @@ func TestPreflightMakesTheAutomountRootAvailableToCallers(t *testing.T) {
 			fakes.Script("podman", responses...)
 			host := platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22000, WindowsWorkstation: true}
 			report := preflight.CheckWindows(context.Background(), host, platform.Run)
-			if err := report.Err(); err != nil || report.AutomountRoot != test.root {
-				t.Fatalf("error=%v root=%q want=%q", err, report.AutomountRoot, test.root)
+			if err := report.Err(); err != nil || report.AutomountRoot != test.root || report.PodmanConnection != "podman-machine-default" {
+				t.Fatalf("error=%v root=%q want=%q connection=%q", err, report.AutomountRoot, test.root, report.PodmanConnection)
 			}
 		})
 	}
@@ -520,7 +520,7 @@ func TestWindowsBuildRetainsPreflightAndRemovesContext(t *testing.T) {
 				t.Fatalf("Windows build calls=%v stdout=%q stderr=%q", calls, stdout, stderr)
 			}
 			assertReadOnlyPodmanCalls(t, calls[:7])
-			args := calls[7].Args
+			args := windowsOperationCalls(t, calls[7:], "podman-machine-default")[0].Args
 			if len(args) < 5 || !reflect.DeepEqual(args[:4], []string{"build", "--pull=always", "--no-cache", "--tag"}) {
 				t.Fatalf("Windows build args=%v", args)
 			}
@@ -596,6 +596,7 @@ func TestWindowsUpRetainsSandboxFlowAndPlatformPreflight(t *testing.T) {
 				t.Fatalf("calls=%v want count=%d", calls, wantCount)
 			}
 			assertReadOnlyPodmanCalls(t, calls[:7])
+			calls = append(calls[:7:7], windowsOperationCalls(t, calls[7:], "podman-machine-default")...)
 			wantLookups := []testutil.Call{
 				{Args: []string{"container", "exists", "sandboxed-agents.default.agent01"}},
 				{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.workspace"}},

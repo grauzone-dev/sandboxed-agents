@@ -53,6 +53,9 @@ func Parse(kind string, args []string) (Request, error) {
 		if strings.ContainsRune(value, 0) {
 			return request, fmt.Errorf(InvalidOptionValue, option)
 		}
+		if option == "--name" && value == "" {
+			return request, fmt.Errorf(MissingOptionValue, option)
+		}
 		*target = &value
 	}
 	return request, nil

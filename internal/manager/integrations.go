@@ -51,6 +51,9 @@ func setGitIdentity(ctx context.Context, request integrations.Request, streams p
 			if strings.ContainsRune(line, 0) {
 				return fmt.Errorf(integrations.InvalidOptionValue, field.option)
 			}
+			if field.option == "--name" && line == "" {
+				return fmt.Errorf(integrations.MissingOptionValue, field.option)
+			}
 			*field.target = &line
 		}
 	}

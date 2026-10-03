@@ -71,6 +71,7 @@ func withRecordedContainerLabels(t *testing.T, responses []testutil.Response, la
 			Name   string
 			Config struct{ Labels map[string]string }
 			State  struct{ Running bool }
+			Mounts json.RawMessage `json:",omitempty"`
 		}
 		if err := json.Unmarshal([]byte(responses[resourceContainerInspectResponse].Stdout), &records); err != nil {
 			t.Fatal(err)

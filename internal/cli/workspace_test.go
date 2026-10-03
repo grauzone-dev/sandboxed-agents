@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -281,6 +283,7 @@ func TestUpKeepsTheRecordedWorkspaceOnAnExistingSandbox(t *testing.T) {
 						mountType = "volume"
 					}
 					responses[2].Stdout = fmt.Sprintf(`[{"Name":"sandboxed-agents.default.agent01","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.workspace-kind":%q}},"State":{"Running":%t},"Mounts":[{"Type":%q,"Source":%q,"Destination":"/workspace"}]}]`, kind, running, mountType, source)
+					responses = withRecordedContainerLabels(t, responses, map[string]string{"ssh-port": strconv.Itoa(unusedSSHPort(t))})
 					responses = append(responses, testutil.Response{})
 					fakes.Script("podman", responses...)
 					args := []string{"up", "agent01"}
@@ -365,11 +368,11 @@ func TestListShowsABoundWorkspaceFromItsRecordedKind(t *testing.T) {
 	owned := "default"
 	responses := listOneSandboxResponses("default", "agent01", &owned, true, nil, nil)
 	for index := range responses {
-		responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, `"io.github.sandboxed-agents.workspace-kind":"bind"`)
+		responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, `"io.github.sandboxed-agents.workspace-kind":"bind","io.github.sandboxed-agents.ssh-port":"2300"`)
 	}
 	fakes.Script("podman", responses...)
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
-	if status != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "agent01 running bind - - -") {
+	if status != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "agent01 running bind 2300 - - -") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 	assertListReadOnly(t, fakes, false)
@@ -680,6 +683,7 @@ func TestUpNamesTheUnsupportedWorkspaceHostWithoutCallingItWindows(t *testing.T)
 func TestUpBindsWorkspaceWithTheInspectedNativeImageAndLimits(t *testing.T) {
 	fakes := linuxHost(t)
 	directory := workspaceFixture(t)
+	port := unusedSSHPort(t)
 	responses := append(upObjectResponses(nil, false, nil, nil),
 		testutil.Response{},
 		testutil.Response{Stdout: `[{"Id":"sha256:current-base"}]`},
@@ -688,7 +692,7 @@ func TestUpBindsWorkspaceWithTheInspectedNativeImageAndLimits(t *testing.T) {
 	)
 	responses = append(responses, make([]testutil.Response, 4)...)
 	fakes.Script("podman", responses...)
-	_, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", directory, "--cpus", "2", "--with", "native")
+	_, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", directory, "--cpus", "2", "--with", "native", "--port", strconv.Itoa(port))
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stderr=%q", status, stderr)
 	}
@@ -697,6 +701,7 @@ func TestUpBindsWorkspaceWithTheInspectedNativeImageAndLimits(t *testing.T) {
 	if create[len(create)-1] != "sha256:validated-native" {
 		t.Fatalf("create did not use the inspected image: %v", create)
 	}
+	assertSSHPublication(t, create, port)
 	var mounts []string
 	for index, arg := range create {
 		if arg == "--mount" {
@@ -713,6 +718,23 @@ func TestUpBindsWorkspaceWithTheInspectedNativeImageAndLimits(t *testing.T) {
 		}
 	}
 	assertNoSSH(t, fakes)
+}
+
+func TestUpRefusesBusyExplicitSSHPortWithABoundWorkspaceBeforeSelectedImageWork(t *testing.T) {
+	fakes := linuxHost(t)
+	directory := workspaceFixture(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	fakes.Script("podman", upObjectResponses(nil, false, nil, nil)...)
+	_, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", directory, "--with", "native", "--port="+strconv.Itoa(port))
+	if status == 0 || !strings.Contains(stderr, strconv.Itoa(port)) || !strings.Contains(stderr, "unavailable") {
+		t.Fatalf("status=%d stderr=%q", status, stderr)
+	}
+	assertSSHReadOnly(t, fakes)
 }
 
 func TestUpRejectsWorkspaceAfterToolchainOptionsBeforePodman(t *testing.T) {

@@ -89,10 +89,10 @@ func buildEnvironment(target string) []string {
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
 		switch strings.ToUpper(key) {
-		case "GOOS", "GOARCH", "CGO_ENABLED", "GOAMD64", "GOPROXY", "GOSUMDB":
+		case "GOOS", "GOARCH", "CGO_ENABLED", "GOAMD64", "GOPROXY", "GOSUMDB", "GOFLAGS", "GOEXPERIMENT", "GOWORK", "GOTOOLCHAIN", "GO111MODULE":
 		default:
 			env = append(env, value)
 		}
 	}
-	return append(env, "GOOS="+target, "GOARCH=amd64", "CGO_ENABLED=0", "GOAMD64=v1", "GOPROXY=off", "GOSUMDB=off")
+	return append(env, "GOOS="+target, "GOARCH=amd64", "CGO_ENABLED=0", "GOAMD64=v1", "GOPROXY=off", "GOSUMDB=off", "GOFLAGS=", "GOEXPERIMENT=", "GOWORK=off", "GOTOOLCHAIN=local", "GO111MODULE=on")
 }

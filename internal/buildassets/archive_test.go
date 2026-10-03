@@ -102,3 +102,33 @@ func TestPackageRetainsBinaryContextBytes(t *testing.T) {
 		t.Fatalf("binary asset changed: %v", got)
 	}
 }
+
+func TestPackageNormalizesNonUTF8Text(t *testing.T) {
+	lf := fstest.MapFS{"message.txt": {Data: []byte{'c', 'a', 'f', 0xe9, '\n'}}}
+	crlf := fstest.MapFS{"message.txt": {Data: []byte{'c', 'a', 'f', 0xe9, '\r', '\n'}}}
+	first, err := buildassets.Package([]byte("manager"), lf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := buildassets.Package([]byte("manager"), crlf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("non-UTF8 text checkout changed embedded assets")
+	}
+}
+
+func TestPackageHashesNestedPlaceholderAssets(t *testing.T) {
+	original, err := buildassets.Package([]byte("manager"), fstest.MapFS{"nested/.gitkeep": {Data: []byte("one")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := buildassets.Package([]byte("manager"), fstest.MapFS{"nested/.gitkeep": {Data: []byte("two")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(original, changed) {
+		t.Fatal("nested build context asset was excluded")
+	}
+}

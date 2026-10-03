@@ -13,7 +13,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: mirror-issue-${{ github.event.issue.number || inputs.issue || 'all' }}
+  group: mirror-issues
   cancel-in-progress: false
   queue: max
 

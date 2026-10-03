@@ -1,6 +1,6 @@
 # Sandboxed agents
 
-`sandboxed-agents` runs coding agents in rootless Podman containers so that an agent's mistake stays inside one workspace. This glossary defines the language used to describe the product.
+`sandboxed-agents` runs coding agents in rootless Podman containers so that an agent's mistake stays inside one sandbox: its workspace, home data, and the credentials stored there. This glossary defines the language used to describe the product.
 
 ## Language
 

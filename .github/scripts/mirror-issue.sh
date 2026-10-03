@@ -83,6 +83,10 @@ if jq -e '.pull_request != null' <<<"$source" >/dev/null; then
   printf 'source #%s -> skipped (pull request)\n' "$number"
   exit 0
 fi
+if ! jq -e '.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"' <<<"$source" >/dev/null; then
+  printf 'source #%s -> skipped (author not eligible)\n' "$number"
+  exit 0
+fi
 content=$(jq --arg repo "$SOURCE_REPO" --arg number "$number" '
   def rewrite:
     split("\n")
@@ -166,6 +170,18 @@ if [[ $source_parent != null ]] && jq -e --arg repo "$SOURCE_REPO" '.repository_
       [[ $DRY_RUN != 1 ]] || printf 'DRY RUN: link mirror #%s to parent mirror #%s (replace_parent=%s)\n' "$mirror_number" "$parent_mirror_number" "$(jq -r '.replace_parent' <<<"$payload")"
       changed=1
     fi
+  fi
+elif [[ $source_parent == null && $created == 0 ]]; then
+  current_parent=$(parent_of "$MIRROR_REPO" "$mirror_number")
+  if [[ $current_parent != null ]]; then
+    parent_mirror_number=$(jq -r '.number' <<<"$current_parent")
+    payload=$(jq '{sub_issue_id: .id}' <<<"$mirror")
+    if [[ $DRY_RUN == 1 ]]; then
+      rest_write DELETE "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issue" "$payload"
+    else
+      rest_write DELETE "repos/$MIRROR_REPO/issues/$parent_mirror_number/sub_issue" "$payload" >/dev/null
+    fi
+    changed=1
   fi
 fi
 

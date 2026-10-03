@@ -22,10 +22,6 @@ func NewEnableAgent(name, group, agent string, run process.Runner, streams proce
 	return &EnableAgent{sandboxObjects: newSandboxObjects(name, group, run, streams), agent: agent}
 }
 
-func (enable *EnableAgent) CheckSandbox(ctx context.Context) error {
-	return enable.CheckContainer(ctx)
-}
-
 func (enable *EnableAgent) CheckRunning() error {
 	if !enable.containerRunning {
 		return fmt.Errorf("sandbox %[1]s is stopped; run sandboxed-agents start %[1]s", enable.name)

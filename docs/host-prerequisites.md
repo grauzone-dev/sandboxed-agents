@@ -4,7 +4,7 @@
 
 `check` detects the host operating system and runs the [Linux](#linux) or the [Windows](#windows) preflight. Windows hosts run Podman in a WSL2 machine. On any other operating system, `check` reports that no preflight is available for that system yet. It checks nothing else and exits with a nonzero status.
 
-`sandboxed-agents build` already runs the same preflight for the host before it writes the build context, and it stops if the preflight fails. Later Stories will make up and update run the preflight as well. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host). The temporary build context that `build` creates and removes is part of the build, not of the preflight.
+`check` only reports the host prerequisites. `sandboxed-agents build` and `sandboxed-agents up` already run the same preflight for the host. `build` runs it before it writes the build context, and `up` runs it before it looks up or creates any sandbox object. Both commands stop if a required prerequisite is missing or, on Windows, could not be checked. A later Story will make `update` run the preflight as well. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host), and it never repairs a missing prerequisite. The temporary build context that `build` creates and removes is part of the build, not of the preflight.
 
 ## Run the check
 

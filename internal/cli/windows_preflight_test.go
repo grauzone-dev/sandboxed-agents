@@ -563,3 +563,116 @@ func TestWindowsBuildStopsWhenPreflightFails(t *testing.T) {
 	}
 	assertReadOnlyPodmanCalls(t, calls)
 }
+
+func TestWindowsUpRetainsSandboxFlowAndPlatformPreflight(t *testing.T) {
+	for _, missingImage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing-image-%t", missingImage), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			version, stderr, status := runCLI(t, "windows-build", "version")
+			if status != 0 || stderr != "" {
+				t.Fatalf("version status=%d stderr=%q", status, stderr)
+			}
+			hash := strings.TrimSpace(strings.Split(version, "assets ")[1])
+			tag := "localhost/sandboxed-agents:base-" + hash
+			responses := append(healthyWindowsPodman(), upObjectResponses(nil, false, nil, nil)[1:]...)
+			captured := filepath.Join(t.TempDir(), "context")
+			if missingImage {
+				responses = append(responses, testutil.Response{ExitCode: 1}, testutil.Response{CaptureBuildContext: captured})
+			} else {
+				responses = append(responses, testutil.Response{})
+			}
+			responses = append(responses, make([]testutil.Response, 5)...)
+			fakes.Script("podman", responses...)
+			stdout, stderr, status := runCLIAt(t, t.TempDir(), "windows-build", "up", "agent01")
+			if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running.") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			calls := fakes.Calls("podman")
+			wantCount := 18
+			if missingImage {
+				wantCount++
+			}
+			if len(calls) != wantCount {
+				t.Fatalf("calls=%v want count=%d", calls, wantCount)
+			}
+			assertReadOnlyPodmanCalls(t, calls[:7])
+			wantLookups := []testutil.Call{
+				{Args: []string{"container", "exists", "sandboxed-agents.default.agent01"}},
+				{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.workspace"}},
+				{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.home"}},
+				{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.ssh"}},
+				{Args: []string{"container", "exists", "sandboxed-agents-backup.default.agent01"}},
+				{Args: []string{"image", "exists", tag}},
+			}
+			if !reflect.DeepEqual(calls[7:13], wantLookups) {
+				t.Fatalf("lookups=%v want=%v", calls[7:13], wantLookups)
+			}
+			if missingImage {
+				args := calls[13].Args
+				if len(args) < 5 || !reflect.DeepEqual(args[:5], []string{"build", "--pull=always", "--no-cache", "--tag", tag}) {
+					t.Fatalf("build args=%v", args)
+				}
+				if _, err := os.Stat(args[len(args)-1]); !os.IsNotExist(err) {
+					t.Fatalf("build context remains: %v", err)
+				}
+				checkBaseContext(t, captured)
+			}
+			for index, role := range sandboxVolumeRoles {
+				args := []string{"volume", "create", "--label", "io.github.sandboxed-agents.owner=default", "sandboxed-agents.default.agent01." + role}
+				if !reflect.DeepEqual(calls[len(calls)-5+index].Args, args) {
+					t.Fatalf("volume args=%v want=%v", calls[len(calls)-5+index].Args, args)
+				}
+			}
+			create := calls[len(calls)-2].Args
+			if len(create) < 4 || !reflect.DeepEqual(create[:3], []string{"create", "--name", "sandboxed-agents.default.agent01"}) || create[len(create)-1] != tag {
+				t.Fatalf("create args=%v", create)
+			}
+			if !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"start", "sandboxed-agents.default.agent01"}) {
+				t.Fatalf("start args=%v", calls[len(calls)-1].Args)
+			}
+			assertUpNoSSH(t, fakes)
+		})
+	}
+}
+
+func TestWindowsUpStopsBeforeSandboxChecksWhenPreflightFails(t *testing.T) {
+	for _, unknown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unknown-%t", unknown), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			responses := healthyWindowsPodman()
+			responses[0].Stdout = "podman version 4.9.9\n"
+			want := "missing: Podman client 5.0.0"
+			if unknown {
+				responses[0].ExitCode = 42
+				want = "unknown: Could not read the Podman client version"
+			}
+			fakes.Script("podman", responses...)
+			stdout, stderr, status := runCLI(t, "windows", "up", "agent01")
+			if status == 0 || stderr == "" || !strings.Contains(stdout, want) {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			calls := fakes.Calls("podman")
+			if len(calls) != 7 {
+				t.Fatalf("failed preflight calls=%v", calls)
+			}
+			assertReadOnlyPodmanCalls(t, calls)
+			assertUpNoSSH(t, fakes)
+		})
+	}
+}
+
+func TestWindowsUpRejectsUsageBeforePreflight(t *testing.T) {
+	for _, args := range [][]string{{"up"}, {"up", ".invalid"}, {"up", "agent01", "--unknown"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			stdout, stderr, status := runCLI(t, "windows-arm64", args...)
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("podman")) != 0 {
+				t.Fatal("invalid usage ran Podman")
+			}
+			assertUpNoSSH(t, fakes)
+		})
+	}
+}

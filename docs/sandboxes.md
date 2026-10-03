@@ -2,7 +2,7 @@
 
 A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists.
 
-`up` currently works on Linux hosts only. It runs the preflight first, and the preflight supports only Linux ([Host prerequisites](host-prerequisites.md)). On any other operating system it reports the missing Linux host and `up` stops before it looks up or creates anything. The preflight for Windows hosts comes with #25.
+`up` first runs the preflight for the host operating system: the Linux preflight on Linux and the Windows preflight on Windows ([Host prerequisites](host-prerequisites.md)). On any other operating system, the preflight reports that no prerequisite check is available, and `up` stops before it looks up or creates anything.
 
 In this version every sandbox belongs to the controller group `default`, and `up` uses fixed defaults. Selecting another controller group comes with #21, options that override the resource limits with #16, and binding a host directory as the workspace with #26.
 
@@ -25,7 +25,7 @@ A sandbox name matches `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`: it starts with a letter o
 ### What `up` does
 
 1. It checks the command line and the sandbox name.
-2. It runs the preflight and prints its lines. If a prerequisite is missing, `up` reports `host prerequisites are missing`, exits with status 1, and calls no Podman command other than the preflight's `podman --version`.
+2. It runs the preflight and prints its lines. On Linux, the preflight's only Podman call is `podman --version`. If a prerequisite is missing, `up` reports `host prerequisites are missing` and exits with status 1. On Windows, the preflight runs read-only queries of the Podman client and the selected Podman machine, including commands in the machine through `podman machine ssh`. If a required prerequisite is missing or could not be checked, `up` exits with status 1. When the preflight fails, `up` stops before it looks up, creates, or changes any sandbox object.
 3. It looks up the container and the three volumes of the sandbox by their exact Podman names (see [Podman names and labels](#podman-names-and-labels)) and reads the owner label of each one that exists. It looks at no other container or volume. When no container exists but volumes do, it checks the owners of those volumes here.
 4. It checks the owners of an existing container and its volumes, and then looks up the backup container of an interrupted update and checks its owner. It refuses to continue on an owner conflict or an interrupted update (see [Refusals](#refusals)).
 5. If the container exists, `up` starts it when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
@@ -85,7 +85,7 @@ A sandbox created by this version does not yet offer:
 - installed agents (#69);
 - toolchains (#28).
 
-`up` opens no SSH connection and changes no host SSH file.
+`up` opens no SSH connection to the sandbox and changes no host SSH file. On Windows, the preflight runs its read-only machine checks through `podman machine ssh`. These checks run in the Podman machine, not in the sandbox.
 
 ## Existing sandboxes
 
@@ -113,7 +113,7 @@ If a Podman lookup itself fails or returns output that `up` cannot read, `up` al
 | Step | What `up` does at this step |
 | --- | --- |
 | 1. Usage and names | reports a usage error or an invalid sandbox name, before any Podman call |
-| 2. Preflight | reports a missing host prerequisite |
+| 2. Preflight | reports a missing host prerequisite. On Windows, it also reports a required prerequisite that could not be checked. |
 | 3. Sandbox existence | looks up the container and the volumes. An unknown name is no failure: it is a sandbox to create. When only volumes of the sandbox remain, reports an owner conflict on those volumes. |
 | 4. Owner | reports an owner conflict on an existing container or its volumes, then on the backup container |
 | 5. Interrupted update | reports a backup container with the current owner |

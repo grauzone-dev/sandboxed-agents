@@ -11,16 +11,29 @@ import (
 
 type Up struct {
 	*sandboxObjects
-	assetHash    string
-	limits       ResourceLimits
-	port         int
-	toolchains   toolchains.Set
-	withProvided bool
-	workspace    string
+	assetHash        string
+	limits           ResourceLimits
+	port             int
+	toolchains       toolchains.Set
+	withProvided     bool
+	workspace        string
+	sshPortAvailable func(int) (bool, error)
 }
 
-func NewUp(name, group, assetHash string, limits ResourceLimits, port int, selection toolchains.Set, withProvided bool, run process.Runner, streams process.Streams) *Up {
-	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: limits, port: port, toolchains: selection, withProvided: withProvided}
+type UpOptions struct {
+	Limits           ResourceLimits
+	Port             int
+	Toolchains       toolchains.Set
+	WithProvided     bool
+	SSHPortAvailable func(int) (bool, error)
+}
+
+func NewUp(name, group, assetHash string, options UpOptions, run process.Runner, streams process.Streams) *Up {
+	available := options.SSHPortAvailable
+	if available == nil {
+		available = sshPortAvailable
+	}
+	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: options.Limits, port: options.Port, toolchains: options.Toolchains, withProvided: options.WithProvided, sshPortAvailable: available}
 }
 
 func (up *Up) Apply(ctx context.Context) error {

@@ -36,7 +36,7 @@ func (lifecycle *Lifecycle) start(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := requireSSHPort(port); err != nil {
+		if err := requireSSHPort(port, sshPortAvailable); err != nil {
 			return err
 		}
 		if err := lifecycle.runPodman(ctx, "start", lifecycle.container); err != nil {

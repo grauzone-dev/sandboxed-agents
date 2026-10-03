@@ -162,7 +162,12 @@ func unexpectedArgument(arg string) error {
 	return fmt.Errorf("%s %q", message, arg)
 }
 
-func upCommand(assetHash string, host sandbox.WorkspaceHost, group *string, run process.Runner, check Handler) Command {
+type sandboxHost struct {
+	workspace        sandbox.WorkspaceHost
+	sshPortAvailable func(int) (bool, error)
+}
+
+func upCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler) Command {
 	ctx := context.Background()
 	var up *sandbox.Up
 	return Command{Name: "up", Checks: Checks{
@@ -177,8 +182,8 @@ func upCommand(assetHash string, host sandbox.WorkspaceHost, group *string, run 
 			if err != nil {
 				return err
 			}
-			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, port, selection, provided, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
-			if err := up.BindWorkspace(host, workspace); err != nil {
+			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, sandbox.UpOptions{Limits: limits, Port: port, Toolchains: selection, WithProvided: provided, SSHPortAvailable: host.sshPortAvailable}, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			if err := up.BindWorkspace(host.workspace, workspace); err != nil {
 				return err
 			}
 			return nil
@@ -247,7 +252,7 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 	if host.OS == "windows" {
 		run = podman.run
 	}
-	return runWithCheck(args, stdout, stderr, version, assetHash, sandbox.WorkspaceHost{OS: host.OS, ReadFile: os.ReadFile}, run, func(invocation *Invocation) error {
+	return runWithCheck(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.OS, ReadFile: os.ReadFile}}, run, func(invocation *Invocation) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		report := preflight.CheckWindows(ctx, host, podman.invoke)
@@ -266,22 +271,22 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 }
 
 func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
-	return runWithCheck(args, stdout, stderr, version, assetHash, sandbox.WorkspaceHost{OS: host.Platform, ReadFile: host.ReadFile}, host.Run, func(invocation *Invocation) error {
+	return runWithCheck(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.Platform, ReadFile: host.ReadFile}, sshPortAvailable: host.SSHPortAvailable}, host.Run, func(invocation *Invocation) error {
 		return preflight.Run(context.Background(), host, invocation.Stdout)
 	})
 }
 
-func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, host sandbox.WorkspaceHost, run process.Runner, check Handler) int {
+func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, host sandboxHost, run process.Runner, check Handler) int {
 	return runWithCatalog(args, stdout, stderr, version, assetHash, host, run, check, agentcatalog.Embedded())
 }
 
 func RunWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host, catalog agentcatalog.Catalog) int {
-	return runWithCatalog(args, stdout, stderr, version, assetHash, sandbox.WorkspaceHost{OS: host.Platform, ReadFile: host.ReadFile}, host.Run, func(invocation *Invocation) error {
+	return runWithCatalog(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.Platform, ReadFile: host.ReadFile}, sshPortAvailable: host.SSHPortAvailable}, host.Run, func(invocation *Invocation) error {
 		return preflight.Run(context.Background(), host, invocation.Stdout)
 	}, catalog)
 }
 
-func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash string, host sandbox.WorkspaceHost, run process.Runner, check Handler, catalog agentcatalog.Catalog) int {
+func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash string, host sandboxHost, run process.Runner, check Handler, catalog agentcatalog.Catalog) int {
 	var group string
 	var buildSelection toolchains.Set
 	tree := Tree{Name: "sandboxed-agents", Usage: func(*Invocation) error {

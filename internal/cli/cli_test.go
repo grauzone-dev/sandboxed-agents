@@ -77,6 +77,9 @@ func TestCLIProcess(t *testing.T) {
 	for index, arg := range os.Args {
 		if arg == "--" {
 			args := os.Args[index+1:]
+			if fixture := os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE"); strings.HasPrefix(fixture, "ssh-ports-") {
+				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", sshPortHostFixture(fixture)))
+			}
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "sandbox-host" {
 				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", preflight.Host{Platform: "linux", Run: platform.Run}))
 			}
@@ -153,6 +156,57 @@ func TestCLIProcess(t *testing.T) {
 		}
 	}
 	t.Fatal("missing CLI arguments")
+}
+
+func sshPortHostFixture(fixture string) preflight.Host {
+	return preflight.Host{
+		Platform: "linux", UID: 1000, Username: "fixture", Run: platform.Run,
+		LookPath: func(name string) (string, error) {
+			switch name {
+			case "podman", "newuidmap", "newgidmap", "pasta", "ssh", "ssh-keygen":
+				return name, nil
+			}
+			return "", os.ErrNotExist
+		},
+		ReadFile: func(path string) ([]byte, error) {
+			switch path {
+			case "/etc/subuid", "/etc/subgid":
+				return []byte("fixture:100000:65536\n"), nil
+			case "/proc/self/cgroup":
+				return []byte("0::/\n"), nil
+			case "/proc/self/mountinfo":
+				return []byte(fmt.Sprintf("32 24 0:28 / %s rw - cgroup2 cgroup rw\n", filepath.Clean("/sys/fs/cgroup"))), nil
+			}
+			if filepath.Clean(path) == filepath.Join("/sys/fs/cgroup", "cgroup.controllers") {
+				return []byte("cpu memory pids\n"), nil
+			}
+			return nil, os.ErrNotExist
+		},
+		Writable: func(path string) bool {
+			for _, name := range []string{"", "cgroup.procs", "cgroup.subtree_control"} {
+				if filepath.Clean(path) == filepath.Join("/sys/fs/cgroup", name) {
+					return true
+				}
+			}
+			return false
+		},
+		SSHPortAvailable: func(port int) (bool, error) {
+			switch fixture {
+			case "ssh-ports-free":
+				return true, nil
+			case "ssh-ports-busy":
+				return port != 2222, nil
+			case "ssh-ports-last":
+				return port == 65535, nil
+			case "ssh-ports-exhausted":
+				return false, nil
+			case "ssh-ports-error":
+				return false, errors.New("fixture socket lookup failed")
+			default:
+				return false, fmt.Errorf("unknown SSH port fixture %q", fixture)
+			}
+		},
+	}
 }
 
 func TestInvalidUsageReportsAnError(t *testing.T) {

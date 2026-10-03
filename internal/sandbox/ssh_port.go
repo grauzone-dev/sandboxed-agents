@@ -45,8 +45,8 @@ func sshPortAvailable(port int) (bool, error) {
 	return true, nil
 }
 
-func requireSSHPort(port int) error {
-	free, err := sshPortAvailable(port)
+func requireSSHPort(port int, available func(int) (bool, error)) error {
+	free, err := available(port)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (up *Up) CheckSSHPort(ctx context.Context) error {
 		if up.containerRunning {
 			return nil
 		}
-		return requireSSHPort(port)
+		return requireSSHPort(port, up.sshPortAvailable)
 	}
 	ports, err := reservedSSHPorts(ctx, up.run)
 	if err != nil {
@@ -103,13 +103,13 @@ func (up *Up) CheckSSHPort(ctx context.Context) error {
 		if ports[up.port] {
 			return fmt.Errorf("SSH port %d is already recorded on a sandbox container", up.port)
 		}
-		return requireSSHPort(up.port)
+		return requireSSHPort(up.port, up.sshPortAvailable)
 	}
 	for port := 2222; port <= 65535; port++ {
 		if ports[port] {
 			continue
 		}
-		free, err := sshPortAvailable(port)
+		free, err := up.sshPortAvailable(port)
 		if err != nil {
 			return err
 		}

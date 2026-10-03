@@ -62,7 +62,7 @@ func TestUpBuildsOnlyTheSelectedImageOnTheCurrentBase(t *testing.T) {
 					responses = append(responses, testutil.Response{}, testutil.Response{Stdout: fmt.Sprintf(`[{"Id":"sha256:native","Labels":{"io.github.sandboxed-agents.base-image":%q}}]`, base)})
 				}
 				if imageState != "current" {
-					responses = append(responses, testutil.Response{})
+					responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"sha256:native","Labels":{"io.github.sandboxed-agents.base-image":"sha256:current-base"}}]`})
 				}
 				responses = append(responses, make([]testutil.Response, 5)...)
 				fakes.Script("podman", responses...)
@@ -102,7 +102,7 @@ func TestUpBuildsOnlyTheSelectedImageOnTheCurrentBase(t *testing.T) {
 					t.Fatalf("toolchain build is not pinned to current base: %v", builds)
 				}
 				create := calls[len(calls)-2].Args
-				if create[len(create)-1] != "localhost/sandboxed-agents:toolchains-native-fixture-assets" || !strings.Contains(strings.Join(create, " "), "--label io.github.sandboxed-agents.toolchains=native") || !strings.Contains(strings.Join(create, " "), "--memory=2147483648") {
+				if create[len(create)-1] != "sha256:native" || !strings.Contains(strings.Join(create, " "), "--label io.github.sandboxed-agents.toolchains=native") || !strings.Contains(strings.Join(create, " "), "--memory=2147483648") {
 					t.Fatalf("container arguments=%v", create)
 				}
 			})
@@ -122,6 +122,47 @@ func TestUpWithNoneCreatesASandboxFromTheBaseImage(t *testing.T) {
 	create := calls[len(calls)-2].Args
 	if create[len(create)-1] != "localhost/sandboxed-agents:base-fixture-assets" || !strings.Contains(strings.Join(create, " "), "--label io.github.sandboxed-agents.toolchains=") {
 		t.Fatalf("container arguments=%v", create)
+	}
+}
+
+func TestUpCreatesFromTheInspectedNativeImageID(t *testing.T) {
+	fakes := linuxHost(t)
+	responses := append(upObjectResponses(nil, false, nil, nil),
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:current-base"}]`},
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:validated-native","Labels":{"io.github.sandboxed-agents.base-image":"sha256:current-base"}}]`},
+	)
+	responses = append(responses, make([]testutil.Response, 5)...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", "--with", "native")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	create := calls[len(calls)-2].Args
+	if create[len(create)-1] != "sha256:validated-native" {
+		t.Fatalf("create did not pin the inspected image: %v", create)
+	}
+}
+
+func TestUpRefusesAToolchainImageReplacedDuringItsBuild(t *testing.T) {
+	fakes := linuxHost(t)
+	responses := append(upObjectResponses(nil, false, nil, nil),
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:current-base"}]`},
+		testutil.Response{ExitCode: 1}, testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:replaced-native","Labels":{"io.github.sandboxed-agents.base-image":"sha256:old-base"}}]`},
+	)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", "--with", "native")
+	if status == 0 || !strings.Contains(stderr, "changed during its build") || strings.Contains(stdout, "Sandbox agent01 is running") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	for _, call := range fakes.Calls("podman") {
+		if call.Args[0] == "create" || call.Args[0] == "start" || (call.Args[0] == "volume" && call.Args[1] == "create") {
+			t.Fatalf("provisioned from a replaced toolchain image: %v", call.Args)
+		}
 	}
 }
 

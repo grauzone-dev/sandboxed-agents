@@ -83,7 +83,7 @@ func Build(ctx context.Context, assetHash string, set toolchains.Set, run proces
 	}
 	selected := false
 	for _, job := range jobs {
-		if job.set == set {
+		if slices.Contains(job.tags, Tag(assetHash, set)) {
 			selected = true
 		}
 	}

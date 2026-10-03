@@ -11,7 +11,7 @@ import (
 )
 
 func TestToolchainSelectionRejectsUndeliveredNamesBeforeExternalCalls(t *testing.T) {
-	for _, selection := range []string{"nosuch", "dotnet", "playwright", "azure", "none,native", "native,none", "none,none", "", "native,", ",native"} {
+	for _, selection := range []string{"nosuch", "dotnet", "playwright", "azure", "none,native", "native,none", "none,none", "", "native,", ",native", " native", "native ", "native, native"} {
 		for _, command := range [][]string{{"build"}, {"up", "agent01"}} {
 			t.Run(strings.Join(command, " ")+"/"+selection, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)

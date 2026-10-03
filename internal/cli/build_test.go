@@ -14,7 +14,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
-func buildCalls(t *testing.T, fakes *testutil.FakePrograms) (string, string) {
+func buildCalls(t *testing.T, fakes *testutil.FakePrograms, expectedCalls int) (string, string) {
 	t.Helper()
 	stdout, stderr, status := runCLI(t, "linux-build", "version")
 	if status != 0 || stderr != "" {
@@ -25,10 +25,13 @@ func buildCalls(t *testing.T, fakes *testutil.FakePrograms) (string, string) {
 		t.Fatalf("invalid asset hash %q", hash)
 	}
 	calls := fakes.Calls("podman")
-	if (len(calls) != 2 && len(calls) != 3) || !reflect.DeepEqual(calls[0].Args, []string{"--version"}) {
+	if len(calls) != expectedCalls || !reflect.DeepEqual(calls[0].Args, []string{"--version"}) {
 		t.Fatalf("calls=%v", calls)
 	}
 	args := calls[1].Args
+	if expectedCalls == 3 {
+		assertImageDiscovery(t, calls[2].Args, hash)
+	}
 	if len(args) == 0 {
 		t.Fatal("empty build call")
 	}
@@ -69,7 +72,11 @@ func TestBuildRebuildsBaseAndRemovesContextOnSuccessAndFailure(t *testing.T) {
 			}
 			fakes.Script("podman", responses...)
 			stdout, stderr, exit := runCLIAt(t, t.TempDir(), "linux-build", "build")
-			tag, _ := buildCalls(t, fakes)
+			wantCalls := 2
+			if status == 0 {
+				wantCalls = 3
+			}
+			tag, _ := buildCalls(t, fakes, wantCalls)
 			if !strings.Contains(stdout, "OK: podman") || !strings.Contains(stdout, "build log\n") || !strings.Contains(stderr, "build diagnostic\n") {
 				t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
 			}

@@ -16,7 +16,7 @@ This version delivers one toolchain:
 
 The selection is a set. Order and repetition do not matter, so `--with native,native` selects the same set as `--with native`. The executable records a set in its canonical form: the names sorted and deduplicated, separated by commas, and the empty string for the base image.
 
-An unknown or undelivered name, `none` combined with another name, an empty name, or a missing value is a usage error. The message lists the valid values, which in this version are `native` and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
+An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `native` and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
 
 ## Build images
 
@@ -30,7 +30,7 @@ Every `build` rebuilds, even when images with the same tags exist, so that curre
 
 1. It rebuilds the base image from the current Debian image without the layer cache.
 2. It finds the toolchain images of the current executable: the images labelled as managed by `sandboxed-agents` with the current asset hash and a non-empty toolchain set, whichever controller group built them or uses them ([Image names and labels](#image-names-and-labels)). It rebuilds each of them under its existing tag, for the toolchain set its label records, on top of the new base image and without the layer cache. Images of other executable versions are not rebuilt.
-3. With `--with SET`, it also builds the image for that set when it was not among the existing images. An image that already existed is rebuilt only once, in step 2. `build --with none` builds what `build` without options builds.
+3. With `--with SET`, it also builds the image for that set under its canonical tag ([Image names and labels](#image-names-and-labels)) when no image found in step 2 carries that tag. An image of the set that carries only other tags is still rebuilt under those tags in step 2, and the canonical tag is built in addition; an image that already carries the canonical tag is rebuilt only once, in step 2. `build --with none` builds what `build` without options builds.
 
 Nothing about images is stored in host state; `build` finds the toolchain images through their labels each time.
 

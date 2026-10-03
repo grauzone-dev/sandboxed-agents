@@ -329,10 +329,61 @@ func TestCheckExplainsHybridCgroupHostsNeedTheUnifiedHierarchy(t *testing.T) {
 	}
 }
 
-func TestCheckUsesThePodmanAccountNameWhenPasswdLookupFails(t *testing.T) {
-	linuxHost(t)
+func TestCheckResolvesNSSAccountsByUIDWhenPasswdLookupFails(t *testing.T) {
+	fakes := linuxHost(t)
 	t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "1")
-	t.Setenv("USER", "fixture")
+	t.Setenv("USER", "unrelated-account")
+	fakes.Script("getent", testutil.Response{Stdout: "fixture:x:1000:1000:Fixture:/home/fixture:/bin/bash\n"})
+	stdout, stderr, status := runCLI(t, "linux-preflight", "check")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if got := fakes.Calls("getent"); !reflect.DeepEqual(got, []testutil.Call{{Args: []string{"passwd", "1000"}}}) {
+		t.Fatalf("account queries=%v", got)
+	}
+}
+
+func TestCheckNeverTrustsAnUnverifiedEnvironmentAccountName(t *testing.T) {
+	for _, response := range []testutil.Response{
+		{ExitCode: 2},
+		{Stdout: "fixture:x:2000:2000:Other:/home/fixture:/bin/bash\n"},
+		{Stdout: "malformed\n"},
+	} {
+		t.Run(response.Stdout, func(t *testing.T) {
+			fakes := linuxHost(t)
+			t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "1")
+			t.Setenv("USER", "fixture")
+			fakes.Script("getent", response)
+			stdout, _, status := runCLI(t, "linux-preflight", "check")
+			if status == 0 || !strings.Contains(stdout, "MISSING: subordinate UID") || !strings.Contains(stdout, "OK: subordinate GID") {
+				t.Fatalf("status=%d stdout=%q", status, stdout)
+			}
+		})
+	}
+}
+
+func TestCheckAcceptsNumericRangesWithoutAnAccountLookupTool(t *testing.T) {
+	fakes := linuxHost(t)
+	t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "1")
+	t.Setenv("USER", "unrelated-account")
+	if err := os.Remove(fakes.Getent); err != nil {
+		t.Fatal(err)
+	}
+	hostFile(t, os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"), "/etc/subuid", "1000:100000:65536\n")
+	stdout, stderr, status := runCLI(t, "linux-preflight", "check")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if len(fakes.Calls("getent")) != 0 {
+		t.Fatal("missing account lookup tool invoked")
+	}
+}
+
+func TestCheckDisablesFileTracingForTheReadOnlyAccountLookup(t *testing.T) {
+	fakes := linuxHost(t)
+	t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "1")
+	t.Setenv("MALLOC_TRACE", filepath.Join(os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"), "unexpected.trace"))
+	fakes.Script("getent", testutil.Response{Stdout: "fixture:x:1000:1000:Fixture:/home/fixture:/bin/bash\n", AbsentEnv: []string{"MALLOC_TRACE"}})
 	stdout, stderr, status := runCLI(t, "linux-preflight", "check")
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)

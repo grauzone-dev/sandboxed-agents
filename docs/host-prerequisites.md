@@ -34,7 +34,7 @@ Usage: sandboxed-agents check
 
 ## What the check does to the host
 
-The check reads files and looks up programs. It does not create, change, or remove host files, and it never runs `sudo`. It tests write permission on cgroup control files by asking the kernel (`access(2)`) without writing to them. It opens no SSH connection.
+The check reads files and looks up programs. It may also query account data through `getent` (see [Prerequisites](#prerequisites)). It runs every program directly, without a shell. It does not create, change, or remove host files, and it never runs `sudo`. It tests write permission on cgroup control files by asking the kernel (`access(2)`) without writing to them. It opens no SSH connection.
 
 **One exception.** The check runs `podman --version`, and only that: it does not call `podman info`, `build`, `create`, or any other Podman command. Even for `--version`, Podman initializes its rootless configuration and can create or adjust its own per-user directories:
 
@@ -66,7 +66,12 @@ Each row is one line of `check` output. **Name** is the name the check prints, a
 | `ssh` | `ssh` is on `PATH`. | install the OpenSSH client and make sure ssh is on PATH |
 | `ssh-keygen` | `ssh-keygen` is on `PATH`. | install the OpenSSH client and make sure ssh-keygen is on PATH |
 
-The check takes your user name from `/etc/passwd`. For an account that `/etc/passwd` does not list, such as one from SSSD, LDAP, or systemd-homed, it uses the `USER` environment variable instead. Lines keyed by your numeric UID match either way.
+To match subordinate ID lines, the check resolves your user name once from your effective UID:
+
+1. It looks up the UID in `/etc/passwd`.
+2. If the UID is not there, as for an account from SSSD, LDAP, or systemd-homed, it runs `getent passwd UID`, but only if `getent` is on `PATH`. It accepts the answer only if it is one passwd record with seven fields, a nonempty name, and exactly your UID.
+
+If neither step gives a name, the user name stays unknown. Lines keyed by your numeric UID still match, but lines keyed by a user name are not trusted. `getent` calls glibc's `mtrace`, which writes a malloc trace to the file named by `MALLOC_TRACE` when that tracing is enabled ([getent.c](https://github.com/bminor/glibc/blob/glibc-2.39/nss/getent.c#L977-L1003), [mtrace-impl.c](https://github.com/bminor/glibc/blob/glibc-2.39/malloc/mtrace-impl.c#L167-L199), glibc 2.39). The check therefore runs `getent` without `MALLOC_TRACE` and passes the rest of your environment unchanged. The check never takes the name from environment variables such as `USER`. `getent` is optional and not a prerequisite. Without it, ranges keyed by your numeric UID are still found.
 
 If `podman` is not on `PATH`, the check does not run `podman --version` and reports both `podman` and `Podman version` as missing.
 
@@ -130,8 +135,8 @@ The check confirms host configuration. It does not start a container, so a host 
 The check does not:
 
 - **Look for `pasta` in Podman's helper directories.** Podman searches `helper_binaries_dir` (for example `/usr/libexec/podman`) before `PATH` ([`FindHelperBinary`, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/common/pkg/config/config.go#L1046-L1095)). A `pasta` found only there is reported missing.
-- **Ask NSS for subordinate IDs.** Podman built with `libsubid` can get subordinate ID ranges from an NSS `subid` provider, such as SSSD or FreeIPA, instead of `/etc/subuid` and `/etc/subgid` ([idtools, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/pkg/idtools/idtools_supported.go)). The check reads only the files, so such hosts are reported as missing their ranges.
-- **Validate subordinate ID files fully.** It does not reject malformed lines that Podman would refuse to parse. It does not check that a range avoids your own UID or GID, or that it is large enough for the IDs an image uses. When it falls back to `USER`, it takes the variable as given.
+- **Ask NSS for subordinate IDs.** Podman built with `libsubid` can get subordinate ID ranges from an NSS `subid` provider, such as SSSD or FreeIPA, instead of `/etc/subuid` and `/etc/subgid` ([idtools, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/pkg/idtools/idtools_supported.go)). The check reads only the files, so such hosts are reported as missing their ranges. This is separate from account lookup: `getent passwd` resolves your user name through NSS, but subordinate ranges are still read only from `/etc/subuid` and `/etc/subgid`.
+- **Validate subordinate ID files fully.** It does not reject malformed lines that Podman would refuse to parse. It does not check that a range avoids your own UID or GID, or that it is large enough for the IDs an image uses.
 - **Prove the mapping helpers work.** It does not check that `newuidmap` and `newgidmap` have the setuid bit or file capabilities they need.
 - **Prove user namespaces are allowed.** It does not read `user.max_user_namespaces` or `kernel.unprivileged_userns_clone`, and it does not evaluate AppArmor or SELinux policy. "Rootless" means only that you are not root.
 - **Prove a future cgroup write succeeds.** The write-permission test is taken at one moment. The check does not test the cgroup manager Podman uses, or controllers enabled further down the delegated subtree. A delegated cgroup that is not the user manager and not a parent of the current cgroup is not found.

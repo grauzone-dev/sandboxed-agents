@@ -24,7 +24,7 @@ func RunningSessions(ctx context.Context, container string, run process.Runner) 
 		err = ctx.Err()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("start manager session query: %w", err)
+		return nil, fmt.Errorf("manager session query did not complete: %w", err)
 	}
 	if status != 0 {
 		return nil, fmt.Errorf("manager session query failed with exit status %d: %s", status, diagnostic.String())

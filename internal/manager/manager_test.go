@@ -106,7 +106,7 @@ func TestSessionQueryReturnsAnEmptyListWithoutRunningProcesses(t *testing.T) {
 }
 
 func TestSessionQueryRejectsInvalidUsageWithoutRunningProcesses(t *testing.T) {
-	for _, args := range [][]string{{"sessions"}, {"sessions", "other"}, {"sessions", "list", "extra"}, {"sessions", "list", "--unknown"}} {
+	for _, args := range [][]string{{"sessions"}, {"sessions", "other"}, {"sessions", "--unknown"}, {"sessions", "list", "extra"}, {"sessions", "list", "--unknown"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			app := manager.New("test", func(context.Context, process.Request) (int, error) {
@@ -114,7 +114,7 @@ func TestSessionQueryRejectsInvalidUsageWithoutRunningProcesses(t *testing.T) {
 				return 1, nil
 			})
 			status := app.Run(context.Background(), args, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			if status == 0 || stdout.Len() != 0 || stderr.Len() == 0 {
+			if status == 0 || stdout.Len() != 0 || stderr.String() != "usage: sandboxed-agents-manager sessions list\n" {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
 			}
 		})

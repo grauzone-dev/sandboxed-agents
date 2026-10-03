@@ -30,7 +30,7 @@ func TestLifecycleKeepsConfigurationAndHonorsTheRequestedState(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/running-%t/force-%t", test.command, test.running, force), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				owned := "default"
-				responses := lifecycleObjectResponses(&owned, test.running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
+				responses := sandboxObjectResponses(&owned, test.running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 				query := test.running && test.command != "start"
 				if query {
 					responses = append(responses, testutil.Response{Stdout: "[]\n"})
@@ -69,7 +69,7 @@ func TestLifecycleKeepsConfigurationAndHonorsTheRequestedState(t *testing.T) {
 				if calls := fakes.Calls("podman"); !reflect.DeepEqual(calls, want) {
 					t.Fatalf("calls=%v want=%v", calls, want)
 				}
-				assertLifecycleNoSSH(t, fakes)
+				assertNoSSH(t, fakes)
 			})
 		}
 	}
@@ -85,7 +85,7 @@ func TestStopAndRestartProtectRunningAgentSessions(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/force-%t", command, force), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				owned := "default"
-				responses := lifecycleObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
+				responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 				responses = append(responses, testutil.Response{Stdout: `[{"name":"coding","agent":"codex"},{"name":"review","agent":"claude"}]`})
 				fakes.Script("podman", append(responses, testutil.Response{}, testutil.Response{})...)
 				args := []string{command, "agent01"}
@@ -121,7 +121,7 @@ func TestStopAndRestartProtectRunningAgentSessions(t *testing.T) {
 						t.Fatalf("calls=%v want mutations=%v", calls, want)
 					}
 				}
-				assertLifecycleNoSSH(t, fakes)
+				assertNoSSH(t, fakes)
 			})
 		}
 	}
@@ -142,7 +142,7 @@ func TestStopAndRestartRefuseWhenSessionsCannotBeDeterminedUnlessForced(t *testi
 				t.Run(fmt.Sprintf("%s/%q/force-%t", command, answer.Stdout, force), func(t *testing.T) {
 					fakes := testutil.NewFakePrograms(t)
 					owned := "default"
-					responses := lifecycleObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
+					responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 					responses = append(responses, answer)
 					fakes.Script("podman", append(responses, testutil.Response{}, testutil.Response{})...)
 					args := []string{command, "agent01"}
@@ -162,7 +162,7 @@ func TestStopAndRestartRefuseWhenSessionsCannotBeDeterminedUnlessForced(t *testi
 					} else if status == 0 || len(calls) != len(responses) || !strings.Contains(stderr, "cannot rule out running agent sessions") || !strings.Contains(stderr, "agent01") || !strings.Contains(stderr, "--force") {
 						t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, calls)
 					}
-					assertLifecycleNoSSH(t, fakes)
+					assertNoSSH(t, fakes)
 				})
 			}
 		}
@@ -180,7 +180,7 @@ func TestLifecycleNamesUnknownSandboxesAndAdoptableKeptVolumes(t *testing.T) {
 						volumes[role] = "default"
 					}
 				}
-				fakes.Script("podman", lifecycleObjectResponses(nil, false, volumes, nil)...)
+				fakes.Script("podman", sandboxObjectResponses(nil, false, volumes, nil)...)
 				stdout, stderr, status := runCLI(t, "production", command, "agent01")
 				if status == 0 || stdout != "" || !strings.Contains(stderr, "agent01") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -227,7 +227,7 @@ func TestLifecycleRefusesForeignObjectsBeforeUpdateAndSessions(t *testing.T) {
 								volumes[object] = owner
 								name += "." + object
 							}
-							responses := lifecycleObjectResponses(containerOwner, running, volumes, backupOwner)
+							responses := sandboxObjectResponses(containerOwner, running, volumes, backupOwner)
 							if owner == "missing" {
 								for index := range responses {
 									responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `{"io.github.sandboxed-agents.owner":"missing"}`, `{}`)
@@ -257,7 +257,7 @@ func TestLifecycleRefusesInterruptedUpdatesBeforeQueryingSessions(t *testing.T) 
 		for _, running := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/running-%t", command, running), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
-				responses := lifecycleObjectResponses(&owned, running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, &owned)
+				responses := sandboxObjectResponses(&owned, running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, &owned)
 				fakes.Script("podman", append(responses, testutil.Response{Stdout: `[{"name":"coding","agent":"codex"}]`})...)
 				stdout, stderr, status := runCLI(t, "production", command, "agent01")
 				if status == 0 || stdout != "" || !strings.Contains(stderr, "sandboxed-agents-backup.default.agent01") || !strings.Contains(stderr, "interrupted update") || !strings.Contains(stderr, "update agent01") || strings.Contains(stderr, "sessions") {
@@ -274,7 +274,7 @@ func TestStopAndRestartReportAnOwnerConflictBeforeRunningSessionsWithoutForce(t 
 		t.Run(command, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
-			responses := lifecycleObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "other", "ssh": "default"}, nil)
+			responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "other", "ssh": "default"}, nil)
 			fakes.Script("podman", append(responses, testutil.Response{Stdout: `[{"name":"coding","agent":"codex"}]`})...)
 			stdout, stderr, status := runCLI(t, "production", command, "agent01")
 			if status == 0 || stdout != "" || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, "sandboxed-agents.default.agent01.home") || strings.Contains(stderr, "sessions") {
@@ -318,7 +318,7 @@ func TestLifecycleStopsAfterPodmanFailureWithoutClaimingSuccess(t *testing.T) {
 		t.Run(test.command+"/"+test.last, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
-			responses := lifecycleObjectResponses(&owned, test.running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
+			responses := sandboxObjectResponses(&owned, test.running, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 			if test.running {
 				responses = append(responses, testutil.Response{Stdout: `[{"name":"coding","agent":"codex"}]`})
 			}
@@ -336,7 +336,7 @@ func TestLifecycleStopsAfterPodmanFailureWithoutClaimingSuccess(t *testing.T) {
 			if strings.Contains(stdout, "Ended agent sessions") != (test.last == "start" && test.running) {
 				t.Fatalf("incorrect ended-session report: %q", stdout)
 			}
-			assertLifecycleNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -359,7 +359,7 @@ func TestLifecycleRefusesFailedOrUnusablePodmanLookups(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/lookup-%d/%s", command, test.index, test.message), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				owned := "default"
-				responses := lifecycleObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
+				responses := sandboxObjectResponses(&owned, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 				responses[test.index] = test.response
 				fakes.Script("podman", responses...)
 				stdout, stderr, status := runCLI(t, "production", command, "agent01")
@@ -375,7 +375,7 @@ func TestLifecycleRefusesFailedOrUnusablePodmanLookups(t *testing.T) {
 func TestStartResumesTheSameSandboxWithoutChangingConfiguration(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
-	responses := lifecycleObjectResponses(&owned, false, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
+	responses := sandboxObjectResponses(&owned, false, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil)
 	fakes.Script("podman", append(responses, testutil.Response{})...)
 	stdout, stderr, status := runCLI(t, "production", "start", "agent01")
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
@@ -385,18 +385,7 @@ func TestStartResumesTheSameSandboxWithoutChangingConfiguration(t *testing.T) {
 	if len(calls) != len(responses)+1 || !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"start", "sandboxed-agents.default.agent01"}) {
 		t.Fatalf("calls=%v", calls)
 	}
-	assertLifecycleNoSSH(t, fakes)
-}
-
-func lifecycleObjectResponses(containerOwner *string, running bool, volumes map[string]string, backupOwner *string) []testutil.Response {
-	return upObjectResponses(containerOwner, running, volumes, backupOwner)[1:]
-}
-
-func assertLifecycleNoSSH(t *testing.T, fakes *testutil.FakePrograms) {
-	t.Helper()
-	if calls := fakes.Calls("ssh"); len(calls) != 0 {
-		t.Fatalf("calls=%v", calls)
-	}
+	assertNoSSH(t, fakes)
 }
 
 func assertLifecycleReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
@@ -406,7 +395,7 @@ func assertLifecycleReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
 			t.Fatalf("calls=%v", call)
 		}
 	}
-	assertLifecycleNoSSH(t, fakes)
+	assertNoSSH(t, fakes)
 }
 
 func stopOrRestartCalls(command string) []testutil.Call {

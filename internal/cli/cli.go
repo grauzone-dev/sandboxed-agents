@@ -16,6 +16,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
+	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
 type Invocation struct {
@@ -171,25 +172,33 @@ func upCommand(assetHash string, group *string, run process.Runner, check Handle
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			limits, err := sandbox.ParseResourceLimits(invocation.Args[1:])
+			selection, provided, remaining, err := parseToolchains(invocation.Args[1:])
 			if err != nil {
 				return err
 			}
-			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			limits, err := sandbox.ParseResourceLimits(remaining)
+			if err != nil {
+				return err
+			}
+			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, selection, provided, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Preflight:         check,
 		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
-		Preconditions:     func(*Invocation) error { return up.CheckResourceLimits() },
+		Preconditions:     func(*Invocation) error { return up.CheckOptions() },
 	}, Action: func(*Invocation) error { return up.Apply(ctx) }, Help: func(invocation *Invocation) error {
 		args := slices.DeleteFunc(slices.Clone(invocation.Args), func(arg string) bool { return arg == "--help" })
 		if len(args) > 0 {
 			if err := sandbox.ValidateName(args[0]); err != nil {
 				return err
 			}
-			if _, err := sandbox.ParseResourceLimits(args[1:]); err != nil {
+			_, _, remaining, err := parseToolchains(args[1:])
+			if err != nil {
+				return err
+			}
+			if _, err := sandbox.ParseResourceLimits(remaining); err != nil {
 				return err
 			}
 		}
@@ -263,6 +272,7 @@ func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash str
 
 func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, run process.Runner, check Handler) int {
 	var group string
+	var buildSelection toolchains.Set
 	tree := Tree{Name: "sandboxed-agents", Usage: func(*Invocation) error {
 		var err error
 		group, err = controllergroup.CurrentGroup()
@@ -277,12 +287,18 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 		lifecycleCommand(sandbox.Stop, &group, run),
 		lifecycleCommand(sandbox.Restart, &group, run),
 		shellCommand(&group, run),
-		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: check}, Action: func(invocation *Invocation) error {
-			if err := images.BuildBase(context.Background(), assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
+		{Name: "build", Checks: Checks{Usage: func(invocation *Invocation) error {
+			selection, _, remaining, err := parseToolchains(invocation.Args)
+			if err != nil {
 				return err
 			}
-			_, err := fmt.Fprintf(invocation.Stdout, "Built image %s.\nExisting sandboxes keep their current image until you update them; list marks them as outdated.\n", images.BaseTag(assetHash))
-			return err
+			if len(remaining) > 0 {
+				return unexpectedArgument(remaining[0])
+			}
+			buildSelection = selection
+			return nil
+		}, Preflight: check}, Action: func(invocation *Invocation) error {
+			return images.Build(context.Background(), assetHash, buildSelection, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 		}},
 		{Name: "version", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			_, err := fmt.Fprintf(invocation.Stdout, "sandboxed-agents %s\nassets %s\n", version, assetHash)

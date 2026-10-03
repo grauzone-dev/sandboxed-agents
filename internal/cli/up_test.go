@@ -43,6 +43,7 @@ func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
 			"--label", "io.github.sandboxed-agents.owner=default",
 			"--label", "io.github.sandboxed-agents.sandbox-name=agent01",
 			"--label", "io.github.sandboxed-agents.workspace-kind=volume",
+			"--label", "io.github.sandboxed-agents.toolchains=",
 			"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
 			"--memory=8589934592", "--label", "io.github.sandboxed-agents.memory=8589934592",
 			"--cpus=4", "--label", "io.github.sandboxed-agents.cpus=4",

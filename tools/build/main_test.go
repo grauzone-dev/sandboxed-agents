@@ -43,7 +43,11 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		contextFiles[entry.Name()] = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+		relative, err := filepath.Rel(filepath.Dir(contextPath), path)
+		if err != nil {
+			return err
+		}
+		contextFiles[filepath.ToSlash(relative)] = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -97,7 +101,7 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 		t.Fatal("unchanged rebuild changed the printed asset hash")
 	}
 	for name, data := range contextFiles {
-		if err := os.WriteFile(filepath.Join(filepath.Dir(contextPath), name), bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n")), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(contextPath), filepath.FromSlash(name)), bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n")), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}

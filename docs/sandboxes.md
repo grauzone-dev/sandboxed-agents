@@ -4,7 +4,7 @@ A sandbox is one rootless Podman container with three named volumes of its own: 
 
 `up` first runs the preflight for the host operating system: the Linux preflight on Linux and the Windows preflight on Windows ([Host prerequisites](host-prerequisites.md)). On any other operating system, the preflight reports that no prerequisite check is available, and `up` stops before it looks up or creates anything.
 
-Every command acts only on the sandboxes of the current [controller group](#controller-groups). Only the resource limits of a sandbox can differ from the defaults; binding a host directory as the workspace comes with #26.
+Every command acts only on the sandboxes of the current [controller group](#controller-groups). Only the resource limits and the toolchain set of a sandbox can differ from the defaults; binding a host directory as the workspace comes with #26.
 
 ## Controller groups
 
@@ -49,10 +49,10 @@ In this version no command reads or writes host state, and none creates these di
 ## Create or start a sandbox
 
 ```sh
-sandboxed-agents up NAME [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE]
+sandboxed-agents up NAME [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE] [--with SET]
 ```
 
-`up` takes one sandbox name, followed by the resource limit options. Each option is given as `--option VALUE` or `--option=VALUE`, at most once. An option that is not given keeps its default:
+`up` takes one sandbox name, followed by the resource limit options and the toolchain option. Each option is given as `--option VALUE` or `--option=VALUE`, at most once. An option that is not given keeps its default:
 
 | Option | Limit | Default | Accepted values |
 | --- | --- | --- | --- |
@@ -63,7 +63,9 @@ sandboxed-agents up NAME [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size
 
 A `SIZE` is a positive whole number of bytes, optionally followed by one of the suffixes `k`, `m`, `g`, or `t`, in upper or lower case, which multiply it by 1024, 1024², 1024³, or 1024⁴. For example, `512m` is 512 MiB and `16g` is 16 GiB. The result is at most 9223372036854775807 bytes.
 
-`--help` prints the help of `up`, with the option formats, the defaults, and how to change a limit, and exits with status 0. It may stand anywhere after `up`, as long as the other words form a valid `up` command line: `up --help`, `up NAME --help`, and `up NAME --memory 16g --help` all print the help. Otherwise `up` reports the usage error instead. `--help` runs no preflight and calls no Podman command.
+`--with SET` selects the toolchains built into the sandbox's image: a comma-separated list of toolchain names, or `none` alone for the base image. Without `--with`, a new sandbox uses the base image, as with `--with none`. In this version the only toolchain is `native`, so the valid values are `native` and `none` ([Toolchains](images.md#toolchains)). Order and repetition of names do not matter.
+
+`--help` prints the help of `up`, with the option formats, the defaults, and how to change a limit or the toolchain set, and exits with status 0. It may stand anywhere after `up`, as long as the other words form a valid `up` command line: `up --help`, `up NAME --help`, and `up NAME --memory 16g --help` all print the help. Otherwise `up` reports the usage error instead. `--help` runs no preflight and calls no Podman command.
 
 A usage error prints a message and a usage line on standard error, calls no Podman command, and exits with status 1:
 
@@ -71,6 +73,7 @@ A usage error prints a message and a usage line on standard error, calls no Podm
 - The first word is the sandbox name, so an option in its place, other than `--help`, is a usage error.
 - A word after the name that is not an option is reported as an unexpected argument, and an unknown option as an unknown option.
 - A limit option without a value, given twice, or with a value in a format it does not accept is a usage error that names the option.
+- `--with` without a value or given twice is a usage error. So is a value with an unknown or undelivered toolchain name, with an empty name, or with `none` combined with another name; the message lists the valid values.
 
 ### Sandbox names
 
@@ -78,15 +81,15 @@ A sandbox name matches `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`: it starts with a letter o
 
 ### What `up` does
 
-1. It checks the command line, the sandbox name, and the format of each limit option.
+1. It checks the command line, the sandbox name, the format of each limit option, and the toolchain names of `--with`.
 2. It runs the preflight and prints its lines. On Linux, the preflight's only Podman call is `podman --version`. If a prerequisite is missing, `up` reports `host prerequisites are missing` and exits with status 1. On Windows, the preflight runs read-only queries of the Podman client and the [selected Podman machine](host-prerequisites.md#selected-podman-machine), including commands in the machine through `podman machine ssh`. If a required prerequisite is missing or could not be checked, `up` exits with status 1. Every later Podman call of `up` names that machine with `--connection`, without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY` in its environment, so neither these settings nor another default connection redirect it. When the preflight fails, `up` stops before it looks up, creates, or changes any sandbox object.
 3. It looks up the container and the three volumes of the sandbox by their exact Podman names (see [Podman names and labels](#podman-names-and-labels)) and reads the owner label of each one that exists. It looks at no other container or volume. When no container exists, it also looks up the backup container of an interrupted update and checks the owners of the existing volumes and of the backup container here.
 4. When the container exists, it looks up the backup container now and checks the owners of the container, its volumes, and the backup container together. It refuses to continue on an owner conflict or an interrupted update (see [Refusals](#refusals)).
-5. If the container exists, `up` compares each given limit option with the value recorded on the container and refuses on a difference. Otherwise it starts the container when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
+5. If the container exists, `up` compares each given limit option and the given toolchain set with the values recorded on the container and refuses on a difference. Otherwise it starts the container when it is stopped and leaves it alone when it is running (see [Existing sandboxes](#existing-sandboxes)).
 6. Otherwise `up` creates the sandbox:
-   - If the base image does not exist, it builds it first, as `sandboxed-agents build` does ([Images](images.md)). It never rebuilds an existing image; that is what `build` is for. The image name contains no controller group, so an image that another controller group built with the same executable counts as existing (ADR-0005).
+   - It makes sure the image for the selected toolchain set exists ([Images](images.md)). Without toolchains, that is the base image: if it does not exist, `up` builds it, as `sandboxed-agents build` does. With toolchains, `up` builds the base image first when it is missing, and then builds the toolchain image when it is missing or not current, that is, when it was not built on the current base image ([Image names and labels](images.md#image-names-and-labels)). When the image exists and is current, `up` builds nothing. It never rebuilds a current image or any image of another toolchain set; that is what `build` is for. The image names contain no controller group, so an image that another controller group built with the same executable counts as existing (ADR-0005).
    - It creates each of the three volumes that does not exist yet and adopts each one that does (see [Kept volumes](#kept-volumes)). It prints one line per volume, `Created volume NAME.` or `Adopted volume NAME.`.
-   - It creates the container from the base image with the defaults below and the given limits, and starts it.
+   - It creates the container from that image with the defaults below, the given limits, and a label recording the toolchain set, and starts it.
 
 When the sandbox runs, `up` prints `Sandbox NAME is running.` and exits with status 0. Podman's own output, such as that of a build, passes through.
 
@@ -119,8 +122,9 @@ The container and the volumes carry these labels:
 | `io.github.sandboxed-agents.cpus` | the number of CPUs as a decimal number whose trailing zeros after the point are trimmed, with the point dropped when no decimals remain: `--cpus 1.50` records `1.5`, `--cpus 10.000` records `10`, and `--cpus 10` stays `10`; `4` by default | the container |
 | `io.github.sandboxed-agents.pids-limit` | the process limit, `2048` by default | the container |
 | `io.github.sandboxed-agents.shm-size` | the shared memory size in bytes, `1073741824` by default | the container |
+| `io.github.sandboxed-agents.toolchains` | the canonical toolchain set: sorted, deduplicated names separated by commas, such as `native`; empty for a sandbox without toolchains | the container |
 
-`up` records all four limits on every container it creates, the defaults included, so `podman container inspect` shows the values in effect under `Config.Labels`. Containers created before these labels existed carry none of them.
+`up` records all four limits and the toolchain set on every container it creates, the defaults included, so `podman container inspect` shows the values in effect under `Config.Labels`. Containers created before these labels existed carry none of them. Podman cannot change the labels of an existing container, so the toolchain set of a sandbox changes only when its container is replaced.
 
 The owner label is the authoritative check: a container or volume with a matching name but a missing or different owner label belongs to no sandbox of this controller group, and `up` neither changes nor adopts it. The label authorizes a command; it does not attest how the object was configured (see [Existing sandboxes](#existing-sandboxes)).
 
@@ -144,8 +148,7 @@ A container that `up` creates mounts its three named volumes and nothing else: n
 A sandbox created by this version does not yet offer:
 
 - a published SSH port (#18) or an SSH setup on the host (#19);
-- installed agents (#69);
-- toolchains (#28).
+- installed agents (#69).
 
 `up` opens no SSH connection to the sandbox and changes no host SSH file. On Windows, the preflight runs its read-only machine checks through `podman machine ssh`. These checks run in the Podman machine, not in the sandbox.
 
@@ -160,13 +163,15 @@ Root in the container is root only inside the sandbox's user namespace: it maps 
 
 ## Existing sandboxes
 
-When the container of the sandbox exists with the current owner, and no volume or backup container under its names has a missing or different owner, `up` checks the given limit options. If none is given, or each one equals the value recorded on the container, `up` starts the container if it is stopped and exits with status 0. If it already runs, `up` exits with status 0 without a change. In both cases it creates, removes, and reconfigures no container or volume, and it does not check or build the image. `up` never changes the configuration of an existing sandbox.
+When the container of the sandbox exists with the current owner, and no volume or backup container under its names has a missing or different owner, `up` checks the given limit options and the given toolchain set. If none is given, or each one equals the value recorded on the container, `up` starts the container if it is stopped and exits with status 0. If it already runs, `up` exits with status 0 without a change. In both cases it creates, removes, and reconfigures no container or volume, and it does not check or build the image. `up` never changes the configuration of an existing sandbox.
 
-`up`, `start`, and `restart` start an existing container of the current owner as it is. The owner label authorizes them to act on it, but it is not a record of the container's whole configuration. `up` compares only the limit options you give with the limit labels. The image, the mounts, the user, the user namespace, the network, and the security options of an existing container are not compared with the [container defaults](#container-defaults). A container that carries the current owner label but was created or changed outside `sandboxed-agents`, which needs access to your Podman, is therefore started with the configuration it has. Comparing that configuration has no Story yet.
+`up`, `start`, and `restart` start an existing container of the current owner as it is. The owner label authorizes them to act on it, but it is not a record of the container's whole configuration. `up` compares only the limit options and the toolchain set you give with their labels. The image, the mounts, the user, the user namespace, the network, and the security options of an existing container are not compared with the [container defaults](#container-defaults). A container that carries the current owner label but was created or changed outside `sandboxed-agents`, which needs access to your Podman, is therefore started with the configuration it has. Comparing that configuration has no Story yet.
 
 Only the options you give are compared, and they are compared by value: `--memory 8192m` equals a recorded `8589934592`, and `--cpus 1.50` equals a recorded `1.5`. A limit option that differs from the recorded value is refused (see [Refusals](#refusals)). To change a limit, run `remove NAME` and then `up NAME` with the new value; `up` adopts the kept volumes.
 
-Without limit options, `up` also starts a container that carries no limit labels, such as one created before they existed.
+Without `--with`, `up` keeps the recorded toolchain set and starts the sandbox. With `--with`, the given set must equal the recorded one, in any order: `up NAME --with native` starts a sandbox created with `--with native`. A different set is refused, including `--with none` on a sandbox with toolchains and `--with native` on one without (see [Refusals](#refusals)). To change the toolchain set in this version, run `remove NAME` and then `up NAME --with SET`; `up` adopts the kept volumes. Changing the set of an existing sandbox with `update NAME --with SET` comes with #71.
+
+Without limit options and without `--with`, `up` also starts a container that carries none of these labels, such as one created before they existed.
 
 ### Kept volumes
 
@@ -179,6 +184,7 @@ Volumes can outlive their container, for example when the container was removed 
 - **Owner conflict.** The container, one of the three volumes, or the backup container exists under the sandbox's Podman name, and its owner label is missing or names another controller group. This includes a container with the current owner when one of its volumes does not have it. The message starts with `owner conflict`, names every such object, and points to Podman: remove or rename each foreign object there. `up` repairs and adopts nothing.
 - **Interrupted update.** The backup container `sandboxed-agents-backup.GROUP.NAME` exists and carries the current owner. The message names the backup container and `sandboxed-agents update NAME`. This version has no `update` command yet; it comes with a later Story. Until then, `up` refuses such a sandbox.
 - **Limit conflict.** On an existing sandbox, a given limit option differs from the value recorded on the container. The message names the limit, the recorded value as the label stores it (in bytes for memory and shared memory), the given value as you typed it, such as `16g`, and `remove NAME` followed by `up NAME` as the way to change it. When the label of a given limit is missing or unreadable, `up` refuses as well, since it cannot rule out a difference; the message then shows the recorded value as empty or as the unreadable label value. In both cases it also says that `up` without that option starts the sandbox as it is. `remove NAME` without `--volumes` keeps the volumes, and the next `up NAME` with the new value adopts them ([Remove a sandbox](#remove-a-sandbox)).
+- **Toolchain conflict.** On an existing sandbox, the set given with `--with` differs from the set recorded on the container. The message names the recorded set and the given set, each shown as `none` when it is empty, and `update NAME --with ...` as the way to change it. A container without the toolchain label counts as recorded `none`. This version has no `update` command yet; changing the set with it comes with #71. Until then, `remove NAME` followed by `up NAME --with SET` replaces the container and keeps the volumes. `up` issues no build and does not start the sandbox.
 
 If a Podman lookup itself fails or returns output that `up` cannot read, `up` also stops with status 1, reports the failure with Podman's message, and changes nothing.
 
@@ -188,14 +194,14 @@ If a Podman lookup itself fails or returns output that `up` cannot read, `up` al
 
 | Step | What `up` does at this step |
 | --- | --- |
-| 1. Usage and names | reports an invalid controller group, then a usage error, an invalid sandbox name, or a limit option in a format it does not accept, before any Podman call. `--help` ends here and exits with status 0 when the group is valid. |
+| 1. Usage and names | reports an invalid controller group, then a usage error, an invalid sandbox name, a limit option in a format it does not accept, or an invalid toolchain selection, before any Podman call. `--help` ends here and exits with status 0 when the group is valid. |
 | 2. Preflight | reports a missing host prerequisite. On Windows, it also reports a required prerequisite that could not be checked. |
 | 3. Sandbox existence | looks up the container and the volumes. An unknown name is no failure: it is a sandbox to create. When no container exists, also looks up the backup container and reports an owner conflict on the remaining volumes or the backup container. |
 | 4. Owner | reports an owner conflict on an existing container, its volumes, or the backup container, with all foreign objects in one message |
 | 5. Interrupted update | reports a backup container with the current owner |
-| 7. Preconditions | reports a limit conflict on an existing sandbox |
+| 7. Preconditions | reports a limit conflict or a toolchain conflict on an existing sandbox |
 
-An invalid name or limit value is therefore reported ahead of a missing prerequisite, and a missing prerequisite ahead of an owner conflict or a backup container. An owner conflict is reported ahead of an interrupted update, and both ahead of a limit conflict.
+An invalid name, limit value, or toolchain selection is therefore reported ahead of a missing prerequisite, and a missing prerequisite ahead of an owner conflict or a backup container. An owner conflict is reported ahead of an interrupted update, and both ahead of a limit conflict or a toolchain conflict. `up NAME --with nosuch` reports the unknown toolchain even when a prerequisite is missing or `NAME` belongs to another controller group. Images are built only after all checks have passed, when `up` creates the sandbox.
 
 ## Remove a sandbox
 
@@ -355,7 +361,7 @@ sandboxed-agents list
 
 ```text
 NAME     STATE         WORKSPACE  PORT  TOOLCHAINS  AGENTS  VOLUMES
-agent01  running       volume     -     -           -       -
+agent01  running       volume     -     native      -       -
 agent02  volumes only  volume     -     -           -       sandboxed-agents.default.agent02.home,sandboxed-agents.default.agent02.workspace
 ```
 
@@ -364,7 +370,8 @@ agent02  volumes only  volume     -     -           -       sandboxed-agents.def
 | `NAME` | the sandbox name, not the Podman name |
 | `STATE` | one of the states below |
 | `WORKSPACE` | the workspace kind recorded on the container. Without a container, `volume` when the workspace volume exists, otherwise the kind recorded on the backup container. `-` when it is not known. |
-| `PORT`, `TOOLCHAINS`, `AGENTS` | `-`, meaning "not available". The SSH port comes with #18, the toolchains with #28, and the enabled agents of a running sandbox whose manager answers with #69. |
+| `TOOLCHAINS` | the toolchain set recorded on the container, such as `native`. Without a container, the set recorded on the backup container. `-` for a sandbox without toolchains, for a container without the toolchain label, such as one created before the label existed, and when neither a container nor a backup container exists. |
+| `PORT`, `AGENTS` | `-`, meaning "not available". The SSH port comes with #18, and the enabled agents of a running sandbox whose manager answers with #69. |
 | `VOLUMES` | the Podman names of the sandbox's volumes that exist, separated by commas, or `-` when none exists |
 
 A sandbox is shown when a container, a backup container, or a volume exists under the current group's Podman names ([Podman names and labels](#podman-names-and-labels)). A container that carries the current group in its owner label is also shown when it was renamed with Podman, under the sandbox name from its `sandbox-name` label; the other commands look only under the exact Podman names and do not find such a container. A sandbox of another group gets no row. Without any sandbox, `list` prints only the header line. Each sandbox gets one row in the first state that applies:
@@ -378,4 +385,4 @@ If a Podman call fails or returns output that `list` cannot read, `list` prints 
 
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver alone, because no command uses host state yet. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The host state locations are covered by tests of the path resolver alone, because no command uses host state yet. The manager's side of the session query is covered by tests with injected process functions. The refusals of `remove`, `stop`, and `restart` on running sessions are covered by a fake `podman` whose `exec` answer reports sessions. The toolchain selection, the image builds of `up`, the toolchain label, and the `TOOLCHAINS` column are covered by a fake `podman` that reports images and their labels. These tests check the arguments the executable passes to Podman, such as `--connection` and `--user=0:0`. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: neither the target binding on Windows nor the isolation the container defaults and execution identities are meant to provide. Confirming that isolation needs a live test against real Podman (#24).

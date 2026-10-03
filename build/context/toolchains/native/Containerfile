@@ -1,0 +1,9 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY smoke.sh /usr/local/share/sandboxed-agents/smoke/native.sh
+COPY install.sh /tmp/install-native.sh
+COPY record-versions.sh /tmp/record-versions.sh
+RUN sh /tmp/install-native.sh \
+    && sh /tmp/record-versions.sh \
+    && rm /tmp/install-native.sh /tmp/record-versions.sh

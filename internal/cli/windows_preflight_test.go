@@ -513,10 +513,15 @@ func TestWindowsBuildRetainsPreflightAndRemovesContext(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			captured := filepath.Join(t.TempDir(), "captured")
 			responses := append(healthyWindowsPodman(), testutil.Response{Stdout: "build log\n", ExitCode: buildStatus, CaptureBuildContext: captured})
+			wantCalls := 8
+			if buildStatus == 0 {
+				responses = append(responses, testutil.Response{Stdout: "[]"})
+				wantCalls++
+			}
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLIAt(t, t.TempDir(), "windows-build", "build")
 			calls := fakes.Calls("podman")
-			if len(calls) != 8 {
+			if len(calls) != wantCalls {
 				t.Fatalf("Windows build calls=%v stdout=%q stderr=%q", calls, stdout, stderr)
 			}
 			assertReadOnlyPodmanCalls(t, calls[:7])

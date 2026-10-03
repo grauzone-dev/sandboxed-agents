@@ -6,16 +6,19 @@ import (
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
 type Up struct {
 	*sandboxObjects
-	assetHash string
-	limits    ResourceLimits
+	assetHash    string
+	limits       ResourceLimits
+	toolchains   toolchains.Set
+	withProvided bool
 }
 
-func NewUp(name, group, assetHash string, limits ResourceLimits, run process.Runner, streams process.Streams) *Up {
-	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: limits}
+func NewUp(name, group, assetHash string, limits ResourceLimits, selection toolchains.Set, withProvided bool, run process.Runner, streams process.Streams) *Up {
+	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: limits, toolchains: selection, withProvided: withProvided}
 }
 
 func (up *Up) Apply(ctx context.Context) error {
@@ -33,23 +36,31 @@ func (up *Up) Apply(ctx context.Context) error {
 	return err
 }
 
-func (up *Up) CheckResourceLimits() error {
+func (up *Up) CheckOptions() error {
 	if !up.containerExists {
 		return nil
 	}
-	return up.limits.checkRecorded(up.name, up.containerLabels)
+	if err := up.limits.checkRecorded(up.name, up.containerLabels); err != nil {
+		return err
+	}
+	if up.withProvided && up.containerLabels[images.ToolchainsLabel] != up.toolchains.String() {
+		recorded := up.containerLabels[images.ToolchainsLabel]
+		if recorded == "" {
+			recorded = "none"
+		}
+		given := up.toolchains.String()
+		if given == "" {
+			given = "none"
+		}
+		return fmt.Errorf("toolchain set conflict: recorded %q, given %q; use sandboxed-agents update %s --with %s to change it", recorded, given, up.name, given)
+	}
+	return nil
 }
 
 func (up *Up) createSandbox(ctx context.Context) error {
-	image := images.BaseTag(up.assetHash)
-	exists, err := up.objectExists(ctx, "image", image)
+	image, err := images.Ensure(ctx, up.assetHash, up.toolchains, up.run, up.streams)
 	if err != nil {
 		return err
-	}
-	if !exists {
-		if err := images.BuildBase(ctx, up.assetHash, up.run, up.streams); err != nil {
-			return err
-		}
 	}
 	for _, volume := range up.volumes {
 		verb := "Adopted"
@@ -69,6 +80,7 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		"--label", OwnerLabel + "=" + up.group,
 		"--label", NameLabel + "=" + up.name,
 		"--label", WorkspaceKindLabel + "=volume",
+		"--label", images.ToolchainsLabel + "=" + up.toolchains.String(),
 		"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
 	}
 	args = append(args, up.limits.createArguments()...)

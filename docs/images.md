@@ -1,45 +1,79 @@
 # Images
 
-A sandbox is created from an image: the base contents every sandbox needs plus the sandbox's toolchains. `sandboxed-agents build` builds the image from the build context embedded in the executable. In this version it builds only the base image; toolchain images come with #28.
+A sandbox is created from an image: the base contents every sandbox needs plus the sandbox's toolchains. `sandboxed-agents build` builds the images from the build context embedded in the executable: the base image, and a toolchain image for each toolchain set that needs one. Sandboxes with the same toolchain set share one image.
 
-## Build the base image
+## Toolchains
+
+A toolchain is a set of SDKs or system packages built into a sandbox's image. All toolchains are off by default. `build --with SET` and `up NAME --with SET` select a toolchain set: a comma-separated list of toolchain names, such as `--with native`.
+
+This version delivers one toolchain:
+
+| Toolchain | Debian packages |
+| --- | --- |
+| `native` | `build-essential`, `cmake`, `pkg-config`, `ninja-build` |
+
+`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected. The catalog also plans `dotnet`, `playwright`, and `azure`; until each of them is delivered, its name is rejected like an unknown name.
+
+The selection is a set. Order and repetition do not matter, so `--with native,native` selects the same set as `--with native`. The executable records a set in its canonical form: the names sorted and deduplicated, separated by commas, and the empty string for the base image.
+
+An unknown or undelivered name, `none` combined with another name, an empty name, or a missing value is a usage error. The message lists the valid values, which in this version are `native` and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
+
+## Build images
 
 ```sh
-sandboxed-agents build
+sandboxed-agents build [--with SET]
 ```
 
-`build` takes no arguments or options in this version; an extra word is a usage error and calls no Podman command. The command then runs the preflight described in [Host prerequisites](host-prerequisites.md) and prints its lines. If a prerequisite is missing, it builds nothing. The build itself needs network access to pull the Debian image and to download packages.
+`build` accepts one option, `--with SET`, at most once; any other word is a usage error and calls no Podman command. The command then runs the preflight described in [Host prerequisites](host-prerequisites.md) and prints its lines. If a prerequisite is missing, it builds nothing. The builds need network access to pull the Debian image and to download packages.
 
-The build runs in three steps:
+Every `build` rebuilds, even when images with the same tags exist, so that current packages are installed:
 
-1. The executable writes the embedded build context and the in-container manager to a new temporary directory, named with the prefix `sandboxed-agents-context-` in the operating system's temporary directory.
-2. It runs one Podman command on that directory:
+1. It rebuilds the base image from the current Debian image without the layer cache.
+2. It finds the toolchain images of the current executable: the images labelled as managed by `sandboxed-agents` with the current asset hash and a non-empty toolchain set, whichever controller group built them or uses them ([Image names and labels](#image-names-and-labels)). It rebuilds each of them under its existing tag, for the toolchain set its label records, on top of the new base image and without the layer cache. Images of other executable versions are not rebuilt.
+3. With `--with SET`, it also builds the image for that set when it was not among the existing images. An image that already existed is rebuilt only once, in step 2. `build --with none` builds what `build` without options builds.
 
-   ```sh
-   podman build --pull=always --no-cache --tag TAG --label ... --file CONTEXT/Containerfile CONTEXT
-   ```
+Nothing about images is stored in host state; `build` finds the toolchain images through their labels each time.
 
-3. It removes the temporary directory, whether the build succeeded or failed.
+For the base image, the executable writes the embedded build context and the in-container manager to a new temporary directory, named with the prefix `sandboxed-agents-context-` in the operating system's temporary directory, and runs one Podman command on it:
 
-On Windows, the build runs in the Podman machine that the preflight checked: the call is `podman --connection NAME build …`, with the name of the [selected Podman machine](host-prerequisites.md#selected-podman-machine). `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or another default connection does not redirect it. On Linux, `build` calls the local `podman` without a connection.
+```sh
+podman build --pull=always --no-cache --tag TAG --label ... --file CONTEXT/Containerfile CONTEXT
+```
 
-Podman's output passes through. On success, `build` prints `Built image TAG.` and a reminder that existing sandboxes keep their image. If Podman exits with a nonzero status, `build` reports `podman build failed with exit status N` and exits non-zero.
+For each toolchain image, it writes the toolchain's recipe and the version recording script to a new temporary directory with the prefix `sandboxed-agents-toolchains-` and runs:
 
-`--pull=always` and `--no-cache` make every build start from the current Debian image and current packages. The executable does not inspect, remove, or retag images. An image that an earlier build left behind stays on the host until you remove it, for example with `podman image prune`.
+```sh
+podman build --pull=never --no-cache --build-arg BASE_IMAGE=BASE_ID --tag TAG ... --label ... --file CONTEXT/Containerfile CONTEXT
+```
 
-## Image name and labels
+`BASE_ID` is the Podman image ID of the base image just built or found, so the recipe starts from exactly the image its `base-image` label records. An image that is rebuilt under several tags gets one `--tag` for each. The executable removes each temporary directory whether its build succeeded or failed.
 
-The base image is named `localhost/sandboxed-agents:base-HASH`, where `HASH` is the full lowercase SHA-256 asset hash that `sandboxed-agents version` prints. The name contains no controller group, so every controller group on the host that runs the same executable shares one base image (ADR-0005). A build in one group therefore affects the sandboxes of every group.
+On Windows, the builds run in the Podman machine that the preflight checked: each call is `podman --connection NAME build …`, with the name of the [selected Podman machine](host-prerequisites.md#selected-podman-machine). `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or another default connection does not redirect them. On Linux, `build` calls the local `podman` without a connection.
+
+Podman's output passes through. `build` prints `Built image TAG.` for each tag it built, the base image first, and on success a reminder that existing sandboxes keep their image until they are updated and that `list` marks them as outdated.
+
+When the base image fails to build, `build` reports `podman build failed with exit status N`, issues no toolchain image build, and exits non-zero. When a toolchain image fails to build, `build` still builds the remaining ones. At the end it prints `Failed toolchain sets: SETS.` on standard error, followed by the same reminder, and exits non-zero. A failed set keeps its previous image under its tag, built on the previous base image.
+
+`--pull=always` and `--no-cache` make every base image build start from the current Debian image and current packages. The executable never removes or retags an image. An image that an earlier build left behind, such as the image whose tag a rebuild took over, stays on the host until you remove it, for example with `podman image prune`.
+
+## Image names and labels
+
+The base image is named `localhost/sandboxed-agents:base-HASH`. A toolchain image is named `localhost/sandboxed-agents:toolchains-NAMES-HASH`, where `NAMES` are the names of its canonical toolchain set joined by `-`; the image for `native` is `localhost/sandboxed-agents:toolchains-native-HASH`. `HASH` is the full lowercase SHA-256 asset hash that `sandboxed-agents version` prints. The same set therefore always yields the same tag, and a new executable version yields new tags.
+
+The names contain no controller group, so every controller group on the host that runs the same executable shares the same images (ADR-0005). A build in one group therefore rebuilds the images that the sandboxes of every group use.
 
 Each image carries these labels:
 
-| Label | Value |
-| --- | --- |
-| `io.github.sandboxed-agents.managed` | `true` |
-| `io.github.sandboxed-agents.asset-hash` | the asset hash, 64 lowercase hexadecimal digits |
-| `io.github.sandboxed-agents.toolchains` | the image's toolchain names, sorted and comma-separated; empty for the base image |
+| Label | Value | Carried by |
+| --- | --- | --- |
+| `io.github.sandboxed-agents.managed` | `true` | every image |
+| `io.github.sandboxed-agents.asset-hash` | the asset hash, 64 lowercase hexadecimal digits | every image |
+| `io.github.sandboxed-agents.toolchains` | the canonical toolchain set: sorted, deduplicated names separated by commas; empty for the base image | every image |
+| `io.github.sandboxed-agents.base-image` | the Podman image ID of the base image it was built on, exactly as `podman image inspect` reports it in `Id` | toolchain images |
 
-A build does not change existing sandboxes. They keep the image they were created from until `update` replaces their container, and `list` marks them as outdated. Both commands come with later Stories.
+A toolchain image is current only when its `base-image` label equals the ID of the current base image. After a `build` in which a toolchain image failed, the old image of that set stays under its tag but is not current. `up` treats an image that is not current as missing and builds it on the current base image before it creates a sandbox, so a new sandbox is never created from an outdated image ([What `up` does](sandboxes.md#what-up-does)). After a successful `build`, every image of the current executable is current.
+
+A build does not change existing sandboxes. Because every `build` rebuilds the base image and every existing toolchain image, each sandbox created before it, in any controller group, keeps running on its previous image. Replacing a sandbox's container with `update` (#52) and marking outdated sandboxes in `list` (#56) come with later Stories.
 
 ## Base image contents
 
@@ -56,17 +90,28 @@ The image contains no SSH keys; host keys are removed after the OpenSSH packages
 
 `/usr/local/share/sandboxed-agents/versions.tsv` records what the image contains. It is UTF-8 text with LF line endings and no header. Each line is a component name and its version, separated by one tab. The file lists every installed Debian package as reported by `dpkg-query`, followed by the lines for `node`, `npm`, and `manager`.
 
+A toolchain image records its inventory again after its packages are installed, so its `versions.tsv` replaces the base image's file and also lists the toolchain's Debian packages and their dependencies.
+
+## Toolchain image contents
+
+A toolchain image is layered on the base image, so all toolchain images share the base layers. The `native` image adds:
+
+- **Packages:** `build-essential`, `cmake`, `pkg-config`, and `ninja-build`, installed with APT without recommended packages.
+- **Smoke check:** `/usr/local/share/sandboxed-agents/smoke/native.sh`, which checks that it runs as UID and GID 1000, then compiles a trivial C program with `cc` in a temporary directory and runs it. It is meant to run as `agent` inside a sandbox created from the image. No command runs it in this version; running each toolchain's smoke check against real Podman comes with #29.
+
+The `native` recipe is covered by offline tests of the build context and of the Podman calls; it has not been built or run against real Podman.
+
 ## Toolchain availability on Debian 12
 
 Debian 12 was chosen because every planned toolchain has packages for it. The Azure CLI documentation lists Debian 11 and 12 as tested distributions for its APT packages, but not Debian 13.
 
-This record is based on the upstream documentation listed below. None of these toolchains has been installed in a sandbox image yet; #28 adds them and #29 validates images against real Podman.
+This record is based on the upstream documentation listed below. Of these toolchains, only native build tools are delivered, as `native`; .NET, Playwright, and Azure CLI come with #31, #32, and #30. #29 validates the images against real Podman.
 
 | Toolchain | Upstream statement for Debian 12 | Source |
 | --- | --- | --- |
 | .NET | .NET 10, 9, and 8 are supported on Debian 12, as `dotnet-sdk-*` packages from the Microsoft package repository for x64. | [Install .NET on Debian](https://learn.microsoft.com/en-us/dotnet/core/install/linux-debian) |
 | Playwright with browsers | Debian 12 and 13 are listed as supported Linux distributions, with Node.js 22, 24, or 26. | [Playwright installation](https://playwright.dev/docs/intro) |
 | Azure CLI | The `azure-cli` APT package for x86_64 and ARM64 is tested on Debian 11 and 12. | [Install the Azure CLI on Linux](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux) |
-| Native build tools | `build-essential` and `cmake` are packages in bookworm. | [build-essential](https://packages.debian.org/bookworm/build-essential), [cmake](https://packages.debian.org/bookworm/cmake) |
+| Native build tools | `build-essential`, `cmake`, `pkg-config`, and `ninja-build` are packages in bookworm. | [build-essential](https://packages.debian.org/bookworm/build-essential), [cmake](https://packages.debian.org/bookworm/cmake), [pkg-config](https://packages.debian.org/bookworm/pkg-config), [ninja-build](https://packages.debian.org/bookworm/ninja-build) |
 
 The Node.js runtime in the base image follows the same approach: NodeSource lists Node.js 24 packages for Debian 12 ([NodeSource distributions](https://github.com/nodesource/distributions/blob/master/DEV_README.md)), and Node.js lists version 24 as an LTS release ([Node.js releases](https://nodejs.org/en/about/previous-releases)).

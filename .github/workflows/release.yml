@@ -110,9 +110,7 @@ jobs:
           pattern: preview-*
           path: artifacts
       - run: |
-          for file in sandboxed-agents-linux-amd64 sandboxed-agents-windows-amd64.exe SHA256SUMS; do
-            cmp "artifacts/preview-linux/preview/$file" "artifacts/preview-windows/preview/$file"
-          done
+          diff -r artifacts/preview-linux/preview artifacts/preview-windows/preview
           cmp artifacts/preview-linux/version.txt artifacts/preview-windows/version.txt
           (cd artifacts/preview-linux/preview && sha256sum -c SHA256SUMS)
       - id: attest

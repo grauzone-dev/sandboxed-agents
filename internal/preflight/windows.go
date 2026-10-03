@@ -64,7 +64,7 @@ func (report *Report) add(name string, known, met bool, args ...any) {
 	if status != Unknown && len(args) > 0 {
 		message = fmt.Sprintf(message, args...)
 	}
-	report.Results = append(report.Results, WindowsResult{Name: name, Status: status, Required: name != "automount", Message: message})
+	report.Results = append(report.Results, WindowsResult{Name: name, Status: status, Required: !text.Auxiliary, Message: message})
 }
 
 func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) Report {
@@ -75,9 +75,11 @@ func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) R
 		return report
 	}
 	report.add("windows", true, host.Architecture == "amd64" && host.WindowsMajor == 10 && host.WindowsBuild >= 22000 && host.WindowsWorkstation)
+	_, clientPathErr := exec.LookPath("podman")
 	output, clientOK := readPodman(ctx, run, "--version")
 	client := strings.TrimPrefix(strings.TrimSpace(string(output)), "podman version ")
-	report.add("client", true, clientOK && versionAtLeast(client, minimumWindowsPodman), minimumWindowsPodman)
+	clientMet, clientKnown := versionAtLeast(client, minimumWindowsPodman)
+	report.add("client", clientPathErr != nil || clientOK && clientKnown, clientOK && clientMet, minimumWindowsPodman)
 	machine := inspectMachine(ctx, run)
 	report.add("running_machine", machine.StateKnown, machine.Running)
 	report.add("wsl2", machine.Provider != "", machine.Provider == "wsl")
@@ -173,15 +175,16 @@ func reportMachineService(ctx context.Context, run process.Runner, machine machi
 		output, ok = readPodman(ctx, run, "--connection", machine.Name, "info", "--format", "json")
 		infoOK = ok && json.Unmarshal(output, &info) == nil
 	}
-	report.add("machine_version", serverOK, serverOK && versionAtLeast(server.Server.Version, minimumWindowsPodman), minimumWindowsPodman)
-	rootlessKnown := machine.Running && machine.Rootful != nil && (*machine.Rootful || infoOK && info.Host.Security.Rootless != nil)
+	serverMet, serverKnown := versionAtLeast(server.Server.Version, minimumWindowsPodman)
+	report.add("machine_version", serverOK && serverKnown, serverOK && serverMet, minimumWindowsPodman)
+	rootlessKnown := machine.Rootful != nil && (*machine.Rootful || machine.Running && infoOK && info.Host.Security.Rootless != nil)
 	rootless := rootlessKnown && !*machine.Rootful && *info.Host.Security.Rootless
 	report.add("rootless", rootlessKnown, rootless)
 	controllers := map[string]bool{}
 	for _, controller := range info.Host.CgroupControllers {
 		controllers[controller] = true
 	}
-	cgroupsKnown := infoOK && info.Host.CgroupVersion != "" && (info.Host.CgroupVersion != "v2" || info.Host.CgroupControllers != nil)
+	cgroupsKnown := infoOK && info.Host.CgroupVersion != ""
 	report.add("cgroups", cgroupsKnown, cgroupsKnown && info.Host.CgroupVersion == "v2" && controllers["cpu"] && controllers["memory"] && controllers["pids"])
 }
 
@@ -191,27 +194,27 @@ func readPodman(ctx context.Context, run process.Runner, args ...string) ([]byte
 	return stdout.Bytes(), err == nil && status == 0
 }
 
-func versionAtLeast(version, minimum string) bool {
+func versionAtLeast(version, minimum string) (met, known bool) {
 	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
 	expected := strings.Split(minimum, ".")
 	if len(parts) != 3 || strings.ContainsAny(version, "-+") {
-		return false
+		return false, false
 	}
 	var values [3]int
 	for index, part := range parts {
 		value, err := strconv.Atoi(part)
 		if err != nil || value < 0 {
-			return false
+			return false, false
 		}
 		values[index] = value
 	}
 	for index, value := range values {
 		threshold, _ := strconv.Atoi(expected[index])
 		if value != threshold {
-			return value > threshold
+			return value > threshold, true
 		}
 	}
-	return true
+	return true, true
 }
 
 func automountRoot(config string) (string, bool) {

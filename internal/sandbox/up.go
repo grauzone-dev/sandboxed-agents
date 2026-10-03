@@ -9,12 +9,12 @@ import (
 )
 
 type Up struct {
-	*objects
+	*sandboxObjects
 	assetHash string
 }
 
 func NewUp(name, assetHash string, run process.Runner, streams process.Streams) *Up {
-	return &Up{objects: newObjects(name, run, streams), assetHash: assetHash}
+	return &Up{sandboxObjects: newSandboxObjects(name, run, streams), assetHash: assetHash}
 }
 
 func (up *Up) Apply(ctx context.Context) error {

@@ -59,7 +59,7 @@ func TestUpCreatesARunningSandboxWithSafeDefaults(t *testing.T) {
 			t.Fatalf("missing volume output: %q", stdout)
 		}
 	}
-	assertUpNoSSH(t, fakes)
+	assertNoSSH(t, fakes)
 }
 
 func TestUpResumesAnOwnedSandboxWithoutChangingItsConfiguration(t *testing.T) {
@@ -95,7 +95,7 @@ func TestUpResumesAnOwnedSandboxWithoutChangingItsConfiguration(t *testing.T) {
 			if !reflect.DeepEqual(calls, want) {
 				t.Fatalf("calls=%v want=%v", calls, want)
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -151,13 +151,17 @@ func TestUpAdoptsKeptVolumesAndCreatesOnlyMissingOnes(t *testing.T) {
 			if !reflect.DeepEqual(created, wantCreated) {
 				t.Fatalf("created=%v want=%v", created, wantCreated)
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
 
 func upObjectResponses(containerOwner *string, running bool, volumes map[string]string, backupOwner *string) []testutil.Response {
-	responses := []testutil.Response{{Stdout: "podman version 5.0.0\n"}}
+	return append([]testutil.Response{{Stdout: "podman version 5.0.0\n"}}, sandboxObjectResponses(containerOwner, running, volumes, backupOwner)...)
+}
+
+func sandboxObjectResponses(containerOwner *string, running bool, volumes map[string]string, backupOwner *string) []testutil.Response {
+	var responses []testutil.Response
 	container := func(name, owner string) testutil.Response {
 		return testutil.Response{Stdout: fmt.Sprintf(`[{"Name":%q,"Config":{"Labels":{"io.github.sandboxed-agents.owner":%q}},"State":{"Running":%t}}]`, name, owner, running)}
 	}
@@ -181,14 +185,14 @@ func upObjectResponses(containerOwner *string, running bool, volumes map[string]
 	return responses
 }
 
-func assertUpNoSSH(t *testing.T, fakes *testutil.FakePrograms) {
+func assertNoSSH(t *testing.T, fakes *testutil.FakePrograms) {
 	t.Helper()
 	if len(fakes.Calls("ssh")) != 0 {
-		t.Fatal("up attempted SSH")
+		t.Fatal("command attempted SSH")
 	}
 }
 
-func assertUpReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
+func assertPodmanReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
 	t.Helper()
 	for _, call := range fakes.Calls("podman") {
 		args := call.Args
@@ -198,9 +202,9 @@ func assertUpReadOnly(t *testing.T, fakes *testutil.FakePrograms) {
 		if len(args) == 3 && (args[0] == "container" || args[0] == "volume") && (args[1] == "exists" || args[1] == "inspect") {
 			continue
 		}
-		t.Fatalf("refused up changed state: %v", args)
+		t.Fatalf("refused command changed state: %v", args)
 	}
-	assertUpNoSSH(t, fakes)
+	assertNoSSH(t, fakes)
 }
 
 func TestUpRefusesEveryForeignObjectBeforeAnInterruptedUpdate(t *testing.T) {
@@ -235,7 +239,7 @@ func TestUpRefusesEveryForeignObjectBeforeAnInterruptedUpdate(t *testing.T) {
 					if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, name) || !strings.Contains(stderr, "Podman") || !strings.Contains(stderr, "remove or rename") || strings.Contains(stderr, "interrupted update") {
 						t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 					}
-					assertUpReadOnly(t, fakes)
+					assertPodmanReadOnly(t, fakes)
 				})
 			}
 		}
@@ -255,7 +259,7 @@ func TestUpNamesAllForeignSandboxObjects(t *testing.T) {
 			t.Fatalf("missing foreign object %s: %q", name, stderr)
 		}
 	}
-	assertUpReadOnly(t, fakes)
+	assertPodmanReadOnly(t, fakes)
 }
 
 func TestUpRefusesAnInterruptedUpdateWithoutChangingAnything(t *testing.T) {
@@ -272,7 +276,7 @@ func TestUpRefusesAnInterruptedUpdateWithoutChangingAnything(t *testing.T) {
 			if status == 0 || !strings.Contains(stderr, "sandboxed-agents-backup.default.agent01") || !strings.Contains(stderr, "update agent01") || !strings.Contains(stderr, "interrupted update") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			assertUpReadOnly(t, fakes)
+			assertPodmanReadOnly(t, fakes)
 		})
 	}
 }
@@ -307,7 +311,7 @@ func TestUpReportsPreflightBeforeForeignObjectsAndBackup(t *testing.T) {
 	if calls := fakes.Calls("podman"); !reflect.DeepEqual(calls, []testutil.Call{{Args: []string{"--version"}}}) {
 		t.Fatalf("calls=%v", calls)
 	}
-	assertUpNoSSH(t, fakes)
+	assertNoSSH(t, fakes)
 }
 
 func TestUpBuildsOnlyAnAbsentSharedBaseImage(t *testing.T) {
@@ -371,7 +375,7 @@ func TestUpBuildsOnlyAnAbsentSharedBaseImage(t *testing.T) {
 			if create[0] != "create" || create[len(create)-1] != tag {
 				t.Fatalf("create=%v", create)
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -405,7 +409,7 @@ func TestUpAcceptsCommandNamesAndKeepsVolumeNamesUnique(t *testing.T) {
 			if created != 3 {
 				t.Fatalf("created=%d", created)
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -434,7 +438,7 @@ func TestUpStopsWhenPodmanCannotReadItsObjects(t *testing.T) {
 			if status == 0 || !strings.Contains(stderr, test.want) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			assertUpReadOnly(t, fakes)
+			assertPodmanReadOnly(t, fakes)
 		})
 	}
 }
@@ -470,7 +474,7 @@ func TestUpStopsAfterImageAndCreationFailures(t *testing.T) {
 					t.Fatalf("build context remains: %v", err)
 				}
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -498,7 +502,7 @@ func TestUpRefusesObjectsWithoutAnOwnerLabel(t *testing.T) {
 			if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, name) {
 				t.Fatalf("status=%d stderr=%q", status, stderr)
 			}
-			assertUpReadOnly(t, fakes)
+			assertPodmanReadOnly(t, fakes)
 		})
 	}
 }

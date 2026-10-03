@@ -11,7 +11,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-func QuerySessions(ctx context.Context, container string, run process.Runner) ([]manager.Session, bool) {
+func querySessions(ctx context.Context, container string, run process.Runner) ([]manager.Session, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var output, diagnostic bytes.Buffer

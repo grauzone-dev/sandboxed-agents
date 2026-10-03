@@ -134,7 +134,7 @@ sandboxed-agents remove NAME [--volumes] [--force]
 | `--volumes` | Also deletes the sandbox's volumes that carry the current owner. A volume with a missing or different owner is never deleted. |
 | `--force` | Removes a running sandbox even while agent sessions run in it or the manager does not answer, and ends those sessions. |
 
-`remove` prints one line for the removed container and one line per removed or kept volume. It changes no host SSH file; removing the host side of a sandbox's SSH setup comes with #37.
+`remove` prints one line for the removed container and one line per removed or kept volume, each with its Podman name. It changes no host SSH file; removing the host side of a sandbox's SSH setup comes with #37.
 
 ### Running agent sessions
 
@@ -177,7 +177,7 @@ A bound host directory is never deleted, with or without `--volumes`. Binding a 
 | --- | --- |
 | 1. Usage and names | reports a usage error or an invalid sandbox name, before any Podman call |
 | 3. Sandbox existence | reports an unknown sandbox. When only volumes remain, checks their owners. |
-| 4. Owner | reports an owner conflict on the container, then on a volume, then on the backup container. With `--volumes`, an existing container, and no backup container, a foreign volume is kept instead of reported here. |
+| 4. Owner | checks the owners of the container, the volumes, and the backup container, and reports all foreign objects together in one owner conflict. With `--volumes`, an owned container, and no backup container, a foreign volume is kept instead of reported here. |
 | 5. Interrupted update | reports a backup container with the current owner when no object is foreign |
 | 7. Preconditions | on a running sandbox, reports a manager that does not answer, unless `--force` is given |
 | 9. Session guard | on a running sandbox, reports running agent sessions, unless `--force` is given |
@@ -186,4 +186,4 @@ An owner conflict or an interrupted update is therefore reported ahead of runnin
 
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The session query of the manager is covered by tests with injected process functions, and the refusal on running sessions by a fake manager that reports sessions. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The manager's side of the session query is covered by tests with injected process functions. The refusal on running sessions is covered by a fake `podman` whose `exec` answer reports sessions. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.

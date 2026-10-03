@@ -11,7 +11,7 @@ import (
 )
 
 type Remove struct {
-	*objects
+	*sandboxObjects
 	deleteVolumes bool
 	force         bool
 	sessions      []manager.Session
@@ -19,11 +19,11 @@ type Remove struct {
 }
 
 func NewRemove(name string, deleteVolumes, force bool, run process.Runner, streams process.Streams) *Remove {
-	return &Remove{objects: newObjects(name, run, streams), deleteVolumes: deleteVolumes, force: force}
+	return &Remove{sandboxObjects: newSandboxObjects(name, run, streams), deleteVolumes: deleteVolumes, force: force}
 }
 
 func (remove *Remove) CheckSandbox(ctx context.Context) error {
-	if err := remove.objects.CheckSandbox(ctx); err != nil {
+	if err := remove.sandboxObjects.CheckSandbox(ctx); err != nil {
 		return err
 	}
 	if remove.containerExists {
@@ -38,19 +38,20 @@ func (remove *Remove) CheckSandbox(ctx context.Context) error {
 }
 
 func (remove *Remove) CheckOwner(ctx context.Context) error {
-	if !remove.deleteVolumes || !remove.containerExists {
-		return remove.objects.CheckOwner(ctx)
+	if !remove.containerExists {
+		return remove.sandboxObjects.CheckOwner(ctx)
 	}
-	if remove.containerOwner != defaultGroup {
-		return remove.checkSandboxOwner()
-	}
-	if err := remove.checkBackupOwner(ctx); err != nil {
+	if err := remove.inspectBackup(ctx); err != nil {
 		return err
 	}
-	if remove.backupExists {
-		return remove.checkSandboxOwner()
+	conflicts := remove.ownerConflicts()
+	if remove.backupExists && !isOwned(remove.backupOwner) {
+		conflicts = append(conflicts, remove.backup)
 	}
-	return nil
+	if len(conflicts) == 0 || (remove.deleteVolumes && isOwned(remove.containerOwner) && !remove.backupExists) {
+		return nil
+	}
+	return ownerConflict(conflicts)
 }
 
 func (remove *Remove) Apply(ctx context.Context) error {
@@ -66,7 +67,7 @@ func (remove *Remove) Apply(ctx context.Context) error {
 		if err := remove.runPodman(ctx, "rm", remove.container); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(remove.streams.Stdout, "Removed container %s.\n", remove.name); err != nil {
+		if _, err := fmt.Fprintf(remove.streams.Stdout, "Removed container %s.\n", remove.container); err != nil {
 			return err
 		}
 	} else if !remove.deleteVolumes {
@@ -80,7 +81,7 @@ func (remove *Remove) Apply(ctx context.Context) error {
 		}
 		message := "Kept volume %s.\n"
 		if remove.deleteVolumes {
-			if volume.owner != defaultGroup {
+			if !isOwned(volume.owner) {
 				message = "Kept volume %s: its owner label is missing or names another controller group; remove or rename it with Podman.\n"
 				foreign = true
 			} else {
@@ -104,7 +105,7 @@ func (remove *Remove) CheckManager(ctx context.Context) error {
 	if !remove.containerRunning {
 		return nil
 	}
-	remove.sessions, remove.sessionsKnown = QuerySessions(ctx, remove.container, remove.run)
+	remove.sessions, remove.sessionsKnown = querySessions(ctx, remove.container, remove.run)
 	if !remove.sessionsKnown && !remove.force {
 		return errors.New("the sandbox manager did not answer, so running agent sessions cannot be ruled out; nothing was removed; use --force to remove the sandbox anyway")
 	}

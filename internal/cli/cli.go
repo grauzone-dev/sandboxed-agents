@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
 type Invocation struct {
@@ -119,6 +121,7 @@ func Run(args []string, stdout, stderr io.Writer, version, assetHash string) int
 
 func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
 	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
+		upCommand(assetHash, host),
 		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: func(invocation *Invocation) error {
 			return preflight.Run(context.Background(), host, invocation.Stdout)
 		}}, Action: func(invocation *Invocation) error {
@@ -148,4 +151,30 @@ func noArguments(invocation *Invocation) error {
 		message = "unknown option"
 	}
 	return fmt.Errorf("%s %q", message, invocation.Args[0])
+}
+
+var sandboxName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+func upCommand(assetHash string, host preflight.Host) Command {
+	ctx := context.Background()
+	var up *sandbox.Up
+	return Command{Name: "up", Checks: Checks{
+		Usage: func(invocation *Invocation) error {
+			if len(invocation.Args) == 0 {
+				return errors.New("missing sandbox name; use sandboxed-agents up NAME")
+			}
+			if !sandboxName.MatchString(invocation.Args[0]) {
+				return fmt.Errorf("invalid sandbox name %q; names must match %s", invocation.Args[0], sandboxName.String())
+			}
+			if err := noArguments(&Invocation{Args: invocation.Args[1:]}); err != nil {
+				return err
+			}
+			up = sandbox.NewUp(invocation.Args[0], assetHash, host.Run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			return nil
+		},
+		Preflight:         func(invocation *Invocation) error { return preflight.Run(ctx, host, invocation.Stdout) },
+		Sandbox:           func(*Invocation) error { return up.Read(ctx) },
+		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
+		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
+	}, Action: func(*Invocation) error { return up.Apply(ctx) }}
 }

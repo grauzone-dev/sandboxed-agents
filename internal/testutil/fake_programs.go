@@ -14,7 +14,7 @@ import (
 
 const fakeStateEnv = "SANDBOXED_AGENTS_FAKE_STATE"
 
-var fakeProgramNames = []string{"podman", "ssh", "getent"}
+var fakeProgramNames = []string{"podman", "ssh", "getent", "ssh-keygen"}
 
 type Response struct {
 	Stdout              string
@@ -27,11 +27,12 @@ type Response struct {
 type Call struct{ Args []string }
 
 type FakePrograms struct {
-	Podman string
-	SSH    string
-	Getent string
-	t      testing.TB
-	state  string
+	Podman    string
+	SSH       string
+	Getent    string
+	SSHKeygen string
+	t         testing.TB
+	state     string
 }
 
 func NewFakePrograms(t testing.TB) *FakePrograms {
@@ -54,12 +55,15 @@ func NewFakePrograms(t testing.TB) *FakePrograms {
 		if err := copyExecutable(source, path); err != nil {
 			t.Fatal(err)
 		}
-		if name == "podman" {
+		switch name {
+		case "podman":
 			f.Podman = path
-		} else if name == "ssh" {
+		case "ssh":
 			f.SSH = path
-		} else {
+		case "getent":
 			f.Getent = path
+		case "ssh-keygen":
+			f.SSHKeygen = path
 		}
 	}
 	t.Setenv(fakeStateEnv, dir)

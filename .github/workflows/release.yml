@@ -1,0 +1,115 @@
+name: Preview release
+
+on:
+  push:
+    tags:
+      - 'v*-preview.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOPROXY: 'off'
+  GOSUMDB: 'off'
+  GOTOOLCHAIN: local
+  CGO_ENABLED: '0'
+  RELEASE_TAG: ${{ github.ref_name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      preview: ${{ steps.check.outputs.preview }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+      - id: check
+        run: |
+          if go run ./tools/release -tag "$RELEASE_TAG" -check-tag; then
+            echo 'preview=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'preview=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.preview == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            native: sandboxed-agents-linux-amd64
+          - os: windows-latest
+            platform: windows
+            native: sandboxed-agents-windows-amd64.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      NATIVE_BINARY: ${{ matrix.native }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.1'
+      - run: go run ./tools/release -tag "$RELEASE_TAG" -output .scratch/preview
+      - run: |
+          ".scratch/preview/$NATIVE_BINARY" version > .scratch/version.txt
+          asset_hash=$(sha256sum internal/assets/bundle.zip | cut -d ' ' -f 1)
+          printf 'sandboxed-agents %s\nassets %s\n' "$RELEASE_TAG" "$asset_hash" > .scratch/expected-version.txt
+          cmp .scratch/expected-version.txt .scratch/version.txt
+          (cd .scratch/preview && sha256sum -c SHA256SUMS)
+      - run: |
+          go test ./...
+          go vet ./...
+      - if: runner.os == 'Linux'
+        run: bash tests/test-mirror-issue.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: preview-${{ matrix.platform }}
+          path: |
+            .scratch/preview/*
+            .scratch/version.txt
+          if-no-files-found: error
+          include-hidden-files: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: preview-*
+          path: artifacts
+      - run: |
+          for file in sandboxed-agents-linux-amd64 sandboxed-agents-windows-amd64.exe SHA256SUMS; do
+            cmp "artifacts/preview-linux/preview/$file" "artifacts/preview-windows/preview/$file"
+          done
+          cmp artifacts/preview-linux/version.txt artifacts/preview-windows/version.txt
+          (cd artifacts/preview-linux/preview && sha256sum -c SHA256SUMS)
+      - run: |
+          gh release create "$RELEASE_TAG" \
+            artifacts/preview-linux/preview/sandboxed-agents-linux-amd64 \
+            artifacts/preview-linux/preview/sandboxed-agents-windows-amd64.exe \
+            artifacts/preview-linux/preview/SHA256SUMS \
+            --verify-tag --prerelease --title "$RELEASE_TAG" \
+            --notes "Preview build of commit $GITHUB_SHA."

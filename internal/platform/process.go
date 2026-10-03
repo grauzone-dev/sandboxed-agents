@@ -10,6 +10,7 @@ import (
 
 func run(ctx context.Context, cmd *exec.Cmd, request process.Request) (int, error) {
 	cmd.Env = request.Env
+	cmd.Dir = request.Dir
 	cmd.Stdin = request.Streams.Stdin
 	cmd.Stdout = request.Streams.Stdout
 	cmd.Stderr = request.Streams.Stderr

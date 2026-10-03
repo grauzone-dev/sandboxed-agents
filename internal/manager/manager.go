@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
@@ -15,14 +17,36 @@ type Manager struct {
 	version  string
 	run      process.Runner
 	commands map[string]Command
+	options  Options
+}
+
+type Options struct {
+	Home    string
+	Catalog *agentcatalog.Catalog
+	User    func() process.Identity
 }
 
 func New(version string, run process.Runner) *Manager {
+	return NewWithOptions(version, run, Options{})
+}
+
+func NewWithOptions(version string, run process.Runner, options Options) *Manager {
 	if run == nil {
 		run = platform.Run
 	}
-	m := &Manager{version: version, run: run, commands: make(map[string]Command)}
+	if options.Home == "" {
+		options.Home = "/home/agent"
+	}
+	if options.Catalog == nil {
+		catalog := agentcatalog.Embedded()
+		options.Catalog = &catalog
+	}
+	if options.User == nil {
+		options.User = func() process.Identity { return process.Identity{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())} }
+	}
+	m := &Manager{version: version, run: run, commands: make(map[string]Command), options: options}
 	m.Register("sessions", listSessions)
+	m.Register("agents", m.agents)
 	return m
 }
 

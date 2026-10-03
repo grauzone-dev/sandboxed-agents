@@ -1,0 +1,5 @@
+*.go text eol=lf
+*.mod text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+/build/context/** text=auto eol=lf

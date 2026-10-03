@@ -1,6 +1,6 @@
 # Sandboxes
 
-A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists.
+A sandbox is one rootless Podman container with three named volumes of its own: the workspace, the home data, and the SSH server state. `sandboxed-agents up NAME` creates a sandbox with safe defaults and leaves it running, or starts a sandbox that already exists. `sandboxed-agents remove NAME` deletes the container of a sandbox and keeps its volumes unless you ask otherwise (see [Remove a sandbox](#remove-a-sandbox)).
 
 `up` first runs the preflight for the host operating system: the Linux preflight on Linux and the Windows preflight on Windows ([Host prerequisites](host-prerequisites.md)). On any other operating system, the preflight reports that no prerequisite check is available, and `up` stops before it looks up or creates anything.
 
@@ -95,7 +95,7 @@ An option given to `up` that differs from the configuration recorded on an exist
 
 ### Kept volumes
 
-Volumes can outlive their container, for example when the container was removed with `podman rm`, or when an earlier `up` failed after creating them. When no container of the sandbox exists but some or all of its volumes do, and each of them carries the current owner, `up` adopts them: it creates only the missing volumes and a new container on all three. The files in an adopted volume are kept.
+Volumes can outlive their container, for example when the container was removed with `sandboxed-agents remove NAME` or `podman rm`, or when an earlier `up` failed after creating them. When no container of the sandbox exists but some or all of its volumes do, and each of them carries the current owner, `up` adopts them: it creates only the missing volumes and a new container on all three. The files in an adopted volume are kept.
 
 ## Refusals
 
@@ -121,6 +121,69 @@ If a Podman lookup itself fails or returns output that `up` cannot read, `up` al
 
 An invalid name is therefore reported ahead of a missing prerequisite, and a missing prerequisite ahead of an owner conflict or a backup container. An owner conflict is reported ahead of an interrupted update.
 
+## Remove a sandbox
+
+```sh
+sandboxed-agents remove NAME [--volumes] [--force]
+```
+
+`remove` deletes the container of the sandbox. A running sandbox is stopped first; you do not have to stop it yourself. Without `--volumes`, all three volumes are kept, and a later `up NAME` adopts them ([Kept volumes](#kept-volumes)). `remove` asks for no confirmation and does not read standard input. It runs no preflight. It accepts the same sandbox names as `up`, and a usage error prints a message and the usage line, calls no Podman command, and exits with status 1.
+
+| Option | Effect |
+| --- | --- |
+| `--volumes` | Also deletes the sandbox's volumes that carry the current owner. A volume with a missing or different owner is never deleted. |
+| `--force` | Removes a running sandbox even while agent sessions run in it or the manager does not answer, and ends those sessions. |
+
+`remove` prints one line for the removed container and one line per removed or kept volume. It changes no host SSH file; removing the host side of a sandbox's SSH setup comes with #37.
+
+### Running agent sessions
+
+Before it stops a running sandbox, `remove` asks the manager in the container for the running agent sessions:
+
+```sh
+podman exec sandboxed-agents.default.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+```
+
+The manager answers with a JSON array of objects, one per running session, each with a non-empty `name` and a non-empty `agent` string. `remove` names each session as `AGENT/NAME`. If the query fails, returns no such array, or does not finish within 5 seconds, the manager counts as not answering. A stopped sandbox has no running sessions, so `remove` does not ask.
+
+- **Sessions run.** `remove` refuses, names each running session, and names `--force`. With `--force` it removes the sandbox and names the sessions it ended.
+- **No answer.** `remove` refuses, says that running sessions cannot be ruled out, and names `--force`. With `--force` it still asks the manager. If the manager still does not answer, `remove` removes the sandbox and says that sessions that may have been running were ended and cannot be named.
+
+In this version the manager always answers with an empty list, because agent sessions arrive with #45. A sandbox created by this version therefore never refuses on running sessions as long as its manager answers.
+
+### Owners and kept volumes
+
+`remove` checks the owner label of the container and of all three volumes, like `up` ([Podman names and labels](#podman-names-and-labels)). On a refusal it exits with status 1 and stops, removes, or changes nothing.
+
+| Situation | `remove NAME` | `remove NAME --volumes` |
+| --- | --- | --- |
+| Neither the container nor a volume exists | refuses: the sandbox is unknown | refuses: the sandbox is unknown |
+| The container has a missing or different owner | refuses with an owner conflict | refuses with an owner conflict |
+| The backup container `sandboxed-agents-backup.default.NAME` exists with the current owner, and no object is foreign | refuses and names `sandboxed-agents update NAME` | refuses and names `sandboxed-agents update NAME` |
+| The container has the current owner, a volume does not, and no backup container exists | refuses with an owner conflict | removes the container and the owned volumes, keeps the other volume, names it, points to Podman to remove or rename it, and exits with status 1 |
+| A volume has a missing or different owner, and a backup container exists | refuses with an owner conflict | refuses with an owner conflict, also with `--force` |
+| No container, and only volumes with the current owner remain | reports that no container exists, names `remove NAME --volumes`, deletes nothing, and exits with status 0 | deletes those volumes, names each, and exits with status 0 |
+| No container, and a remaining volume has a missing or different owner | refuses with an owner conflict | refuses with an owner conflict |
+
+An owner-conflict message names each foreign object by its Podman name and points to Podman, where you remove or rename it. A backup container with a missing or different owner is an owner conflict as well. A foreign object is reported ahead of an interrupted update. `remove NAME --volumes` on a sandbox with a foreign volume and no backup container is the only command that acts on a sandbox with an owner conflict; it touches only objects that carry the current owner.
+
+A bound host directory is never deleted, with or without `--volumes`. Binding a host directory as the workspace comes with #26; the workspace volume left unused by such a bind counts as one of the sandbox's volumes.
+
+### Order of checks for `remove`
+
+`remove` reports only the first failure, in the order described in [Development](development.md#order-of-checks):
+
+| Step | What `remove` does at this step |
+| --- | --- |
+| 1. Usage and names | reports a usage error or an invalid sandbox name, before any Podman call |
+| 3. Sandbox existence | reports an unknown sandbox. When only volumes remain, checks their owners. |
+| 4. Owner | reports an owner conflict on the container, then on a volume, then on the backup container. With `--volumes`, an existing container, and no backup container, a foreign volume is kept instead of reported here. |
+| 5. Interrupted update | reports a backup container with the current owner when no object is foreign |
+| 7. Preconditions | on a running sandbox, reports a manager that does not answer, unless `--force` is given |
+| 9. Session guard | on a running sandbox, reports running agent sessions, unless `--force` is given |
+
+An owner conflict or an interrupted update is therefore reported ahead of running sessions.
+
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.
+The behavior on this page is covered by offline tests against fake `podman` and `ssh` programs ([Development](development.md#test-seams)). The session query of the manager is covered by tests with injected process functions, and the refusal on running sessions by a fake manager that reports sessions. No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host.

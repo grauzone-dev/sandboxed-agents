@@ -1,0 +1,221 @@
+package sandbox
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+)
+
+const (
+	OwnerLabel         = "io.github.sandboxed-agents.owner"
+	NameLabel          = "io.github.sandboxed-agents.sandbox-name"
+	WorkspaceKindLabel = "io.github.sandboxed-agents.workspace-kind"
+	defaultGroup       = "default"
+)
+
+type volume struct {
+	name   string
+	target string
+	exists bool
+	owner  string
+}
+
+type objects struct {
+	name             string
+	container        string
+	backup           string
+	volumes          []volume
+	run              process.Runner
+	streams          process.Streams
+	containerExists  bool
+	backupExists     bool
+	containerOwner   string
+	containerRunning bool
+}
+
+func newObjects(name string, run process.Runner, streams process.Streams) *objects {
+	container := "sandboxed-agents." + defaultGroup + "." + name
+	return &objects{
+		name: name, container: container, backup: "sandboxed-agents-backup." + defaultGroup + "." + name,
+		volumes: []volume{
+			{name: container + ".workspace", target: "/workspace"},
+			{name: container + ".home", target: "/home/agent"},
+			{name: container + ".ssh", target: "/etc/ssh"},
+		},
+		run: run, streams: streams,
+	}
+}
+
+func (state *objects) CheckSandbox(ctx context.Context) error {
+	var err error
+	state.containerExists, err = state.objectExists(ctx, "container", state.container)
+	if err != nil {
+		return err
+	}
+	if state.containerExists {
+		record, err := state.inspectContainer(ctx, state.container)
+		if err != nil {
+			return err
+		}
+		state.containerOwner = record.Config.Labels[OwnerLabel]
+		state.containerRunning = record.State.Running
+	}
+	for index := range state.volumes {
+		state.volumes[index].exists, err = state.objectExists(ctx, "volume", state.volumes[index].name)
+		if err != nil {
+			return err
+		}
+		if state.volumes[index].exists {
+			record, err := state.inspectVolume(ctx, state.volumes[index].name)
+			if err != nil {
+				return err
+			}
+			state.volumes[index].owner = record.Labels[OwnerLabel]
+		}
+	}
+	if !state.containerExists {
+		return state.checkSandboxOwner()
+	}
+	return nil
+}
+
+func (state *objects) checkSandboxOwner() error {
+	var conflicts []string
+	if state.containerExists && state.containerOwner != defaultGroup {
+		conflicts = append(conflicts, state.container)
+	}
+	for _, volume := range state.volumes {
+		if volume.exists && volume.owner != defaultGroup {
+			conflicts = append(conflicts, volume.name)
+		}
+	}
+	if len(conflicts) > 0 {
+		return ownerConflict(conflicts)
+	}
+	return nil
+}
+
+func (state *objects) CheckOwner(ctx context.Context) error {
+	if err := state.checkSandboxOwner(); err != nil {
+		return err
+	}
+	return state.checkBackupOwner(ctx)
+}
+
+func (state *objects) checkBackupOwner(ctx context.Context) error {
+	var err error
+	state.backupExists, err = state.objectExists(ctx, "container", state.backup)
+	if err != nil {
+		return err
+	}
+	if state.backupExists {
+		backup, err := state.inspectContainer(ctx, state.backup)
+		if err != nil {
+			return err
+		}
+		if backup.Config.Labels[OwnerLabel] != defaultGroup {
+			return ownerConflict([]string{state.backup})
+		}
+	}
+	return nil
+}
+
+func ownerConflict(names []string) error {
+	return fmt.Errorf("owner conflict on %s: the %s label is missing or names another controller group; remove or rename each foreign object with Podman", strings.Join(names, ", "), OwnerLabel)
+}
+
+func (state *objects) CheckInterruptedUpdate() error {
+	if state.backupExists {
+		return fmt.Errorf("backup container %s remains from an interrupted update; run sandboxed-agents update %s", state.backup, state.name)
+	}
+	return nil
+}
+
+func (state *objects) objectExists(ctx context.Context, kind, name string) (bool, error) {
+	var diagnostic bytes.Buffer
+	status, err := state.run(ctx, process.Request{Name: "podman", Args: []string{kind, "exists", name}, Streams: process.Streams{Stderr: &diagnostic}})
+	if err != nil {
+		return false, fmt.Errorf("start podman %s exists %s: %w", kind, name, err)
+	}
+	switch status {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	default:
+		return false, fmt.Errorf("podman %s exists %s failed with exit status %d: %s", kind, name, status, diagnostic.String())
+	}
+}
+
+func (state *objects) runPodman(ctx context.Context, args ...string) error {
+	status, err := state.run(ctx, process.Request{Name: "podman", Args: args, Streams: state.streams})
+	if err != nil {
+		return fmt.Errorf("start podman %s: %w", args[0], err)
+	}
+	if status != 0 {
+		return fmt.Errorf("podman %s failed with exit status %d", args[0], status)
+	}
+	return nil
+}
+
+type containerRecord struct {
+	Name   string
+	Config *struct{ Labels map[string]string }
+	State  *struct{ Running bool }
+}
+
+func (state *objects) inspectContainer(ctx context.Context, name string) (containerRecord, error) {
+	var records []containerRecord
+	if err := state.inspect(ctx, "container", name, &records); err != nil {
+		return containerRecord{}, err
+	}
+	if len(records) != 1 || records[0].Name != name || records[0].Config == nil || records[0].State == nil {
+		return containerRecord{}, fmt.Errorf("invalid podman container inspect response for %s", name)
+	}
+	return records[0], nil
+}
+
+func (state *objects) inspect(ctx context.Context, kind, name string, record any) error {
+	var output, diagnostic bytes.Buffer
+	status, err := state.run(ctx, process.Request{Name: "podman", Args: []string{kind, "inspect", name}, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
+	if err != nil {
+		return fmt.Errorf("start podman %s inspect %s: %w", kind, name, err)
+	}
+	if status != 0 {
+		return fmt.Errorf("podman %s inspect %s failed with exit status %d: %s", kind, name, status, diagnostic.String())
+	}
+	if err := json.Unmarshal(output.Bytes(), record); err != nil {
+		return fmt.Errorf("decode podman %s inspect %s: %w", kind, name, err)
+	}
+	return nil
+}
+
+type volumeRecord struct {
+	Name   string
+	Labels map[string]string
+}
+
+func (state *objects) inspectVolume(ctx context.Context, name string) (volumeRecord, error) {
+	var records []volumeRecord
+	if err := state.inspect(ctx, "volume", name, &records); err != nil {
+		return volumeRecord{}, err
+	}
+	if len(records) != 1 || records[0].Name != name {
+		return volumeRecord{}, fmt.Errorf("invalid podman volume inspect response for %s", name)
+	}
+	return records[0], nil
+}
+
+var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+func ValidateName(name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("invalid sandbox name %q; names must match %s", name, namePattern.String())
+	}
+	return nil
+}

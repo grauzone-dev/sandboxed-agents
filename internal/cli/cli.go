@@ -187,6 +187,7 @@ func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash str
 func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, run process.Runner, check Handler) int {
 	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
 		upCommand(assetHash, run, check),
+		removeCommand(run),
 		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: check}, Action: func(invocation *Invocation) error {
 			if err := images.BuildBase(context.Background(), assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
 				return err

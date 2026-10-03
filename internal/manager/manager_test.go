@@ -92,3 +92,31 @@ func TestInvalidUsageFailsWithoutRunningProcesses(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionQueryReturnsAnEmptyListWithoutRunningProcesses(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := manager.New("test", func(context.Context, process.Request) (int, error) {
+		t.Fatal("session placeholder invoked a process")
+		return 1, nil
+	})
+	status := app.Run(context.Background(), []string{"sessions", "list"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
+	if status != 0 || stdout.String() != "[]\n" || stderr.Len() != 0 {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+}
+
+func TestSessionQueryRejectsInvalidUsageWithoutRunningProcesses(t *testing.T) {
+	for _, args := range [][]string{{"sessions"}, {"sessions", "other"}, {"sessions", "list", "extra"}, {"sessions", "list", "--unknown"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := manager.New("test", func(context.Context, process.Request) (int, error) {
+				t.Fatal("invalid usage invoked a process")
+				return 1, nil
+			})
+			status := app.Run(context.Background(), args, process.Streams{Stdout: &stdout, Stderr: &stderr})
+			if status == 0 || stdout.Len() != 0 || stderr.Len() == 0 {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+			}
+		})
+	}
+}

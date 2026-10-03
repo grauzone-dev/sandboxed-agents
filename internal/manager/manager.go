@@ -21,7 +21,7 @@ func New(version string, run process.Runner) *Manager {
 	if run == nil {
 		run = platform.Run
 	}
-	return &Manager{version: version, run: run, commands: make(map[string]Command)}
+	return &Manager{version: version, run: run, commands: map[string]Command{"sessions": listSessions}}
 }
 
 func (m *Manager) Register(name string, command Command) {

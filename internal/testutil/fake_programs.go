@@ -22,6 +22,7 @@ type Response struct {
 	ExitCode            int
 	AbsentEnv           []string
 	CaptureBuildContext string
+	WantStdin           string
 }
 
 type Call struct{ Args []string }
@@ -175,6 +176,13 @@ func runFake(state, name string, args []string) int {
 		return 99
 	}
 	response := responses[0]
+	if response.WantStdin != "" {
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil || string(input) != response.WantStdin {
+			fmt.Fprintf(os.Stderr, "stdin=%q error=%v; want %q\n", input, err, response.WantStdin)
+			return 99
+		}
+	}
 	if response.CaptureBuildContext != "" {
 		operationArgs := args
 		if len(operationArgs) >= 2 && operationArgs[0] == "--connection" {

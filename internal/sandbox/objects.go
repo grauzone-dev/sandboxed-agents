@@ -98,6 +98,21 @@ func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
 	return nil
 }
 
+func (state *sandboxObjects) CheckContainer(ctx context.Context) error {
+	if err := state.CheckSandbox(ctx); err != nil {
+		return err
+	}
+	if state.containerExists || state.backupExists {
+		return nil
+	}
+	for _, volume := range state.volumes {
+		if volume.exists {
+			return fmt.Errorf("sandbox %[1]s has no container; run sandboxed-agents up %[1]s, which adopts its volumes", state.name)
+		}
+	}
+	return fmt.Errorf("sandbox %s does not exist in this controller group", state.name)
+}
+
 func (state *sandboxObjects) isOwned(owner string) bool { return owner == state.group }
 
 func (state *sandboxObjects) ownerConflicts() []string {

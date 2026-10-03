@@ -50,7 +50,7 @@ A build does not change existing sandboxes. They keep the image they were create
 - **Manager:** `/usr/local/bin/sandboxed-agents-manager`.
 - **Workspace:** `/workspace`, owned by `agent`.
 
-The image contains no SSH keys; host keys are removed after the OpenSSH packages are installed. Until the SSH server setup (#18), the entrypoint runs as root only to create `/run/sshd` and then runs `sleep infinity` as `agent` through `runuser`. The entrypoint is not the only root process: the host executable makes its administrative control calls to the manager with `podman exec --user=0:0`, as root in the container. Agent installation and agent work, which later Stories add, are to run as `agent` ([Execution identities](sandboxes.md#execution-identities)).
+The image contains no SSH keys; host keys are removed after the OpenSSH packages are installed. Until the SSH server setup (#18), the entrypoint runs as root only to create `/run/sshd` and then runs `sleep infinity` as `agent` through `runuser`. The entrypoint is not the only root process: the host executable makes its administrative control calls to the manager with `podman exec --user=0:0`, as root in the container. `sandboxed-agents shell` opens its shell with `podman exec --user=1000:1000`, so a shell runs as `agent`, UID and GID 1000 ([Shell and SSH access](ssh.md#open-a-shell)). Agent installation, agents, toolchains used by agents, and agent sessions, which later Stories add, are to run as `agent` too ([Execution identities](sandboxes.md#execution-identities)).
 
 ### Version inventory
 

@@ -23,7 +23,7 @@ func TestWindowsOperationsStayOnTheCheckedConnection(t *testing.T) {
 			{"default among two", `[{"Name":"other","Default":false,"Running":true,"VMType":"wsl"},{"Name":"checked-machine","Default":true,"Running":true,"VMType":"wsl"}]`},
 			{"sole without default", `[{"Name":"checked-machine","Default":false,"Running":true,"VMType":"wsl"}]`},
 		} {
-			for _, command := range []string{"build", "up", "start", "stop", "restart", "remove"} {
+			for _, command := range []string{"build", "up", "start", "stop", "restart", "remove", "shell"} {
 				t.Run(overrides.name+"/"+machineList.name+"/"+command, func(t *testing.T) {
 					fakes := testutil.NewFakePrograms(t)
 					for _, name := range []string{"CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY"} {
@@ -36,6 +36,13 @@ func TestWindowsOperationsStayOnTheCheckedConnection(t *testing.T) {
 					var args []string
 					var operations []string
 					switch command {
+					case "shell":
+						responses = append(responses, preflight[1:3]...)
+						owned := "default"
+						responses = append(responses, sandboxObjectResponses(&owned, true, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, nil)...)
+						responses = append(responses, testutil.Response{})
+						args = []string{command, "agent01"}
+						operations = []string{"exec"}
 					case "build":
 						responses = append(preflight, testutil.Response{})
 						args = []string{command}
@@ -134,7 +141,7 @@ func TestWindowsLifecycleKeepsOwnershipAndSessionGuardsOnItsTarget(t *testing.T)
 }
 
 func TestWindowsLifecycleRefusesAnUnavailableTargetBeforeObjectLookups(t *testing.T) {
-	for _, command := range []string{"start", "stop", "restart", "remove"} {
+	for _, command := range []string{"start", "stop", "restart", "remove", "shell"} {
 		for _, target := range []struct{ name, list, inspect string }{
 			{"absent", `[]`, ""},
 			{"ambiguous", `[{"Name":"one","Running":true,"VMType":"wsl"},{"Name":"two","Running":true,"VMType":"wsl"}]`, ""},

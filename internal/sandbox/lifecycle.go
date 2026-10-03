@@ -31,18 +31,7 @@ func NewLifecycle(name, group string, action LifecycleAction, force bool, run pr
 }
 
 func (lifecycle *Lifecycle) CheckSandbox(ctx context.Context) error {
-	if err := lifecycle.sandboxObjects.CheckSandbox(ctx); err != nil {
-		return err
-	}
-	if lifecycle.containerExists || lifecycle.backupExists {
-		return nil
-	}
-	for _, volume := range lifecycle.volumes {
-		if volume.exists {
-			return fmt.Errorf("sandbox %[1]s has no container; run sandboxed-agents up %[1]s, which adopts its volumes", lifecycle.name)
-		}
-	}
-	return fmt.Errorf("sandbox %s does not exist in this controller group", lifecycle.name)
+	return lifecycle.CheckContainer(ctx)
 }
 
 func (lifecycle *Lifecycle) start(ctx context.Context) error {

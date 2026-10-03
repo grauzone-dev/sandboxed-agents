@@ -9,7 +9,7 @@ import (
 
 func TestInvalidControllerGroupFailsEveryCommandBeforeExternalCalls(t *testing.T) {
 	for _, group := range []string{"", "Team", "a.b", "-a", "a/b", "a b"} {
-		for _, args := range [][]string{{"up", "agent01"}, {"up", "--help"}, {"start", "agent01"}, {"stop", "agent01"}, {"restart", "agent01"}, {"remove", "agent01"}, {"list"}, {"build"}, {"check"}, {"version"}} {
+		for _, args := range [][]string{{"up", "agent01"}, {"up", "--help"}, {"start", "agent01"}, {"stop", "agent01"}, {"restart", "agent01"}, {"remove", "agent01"}, {"shell", "agent01"}, {"list"}, {"build"}, {"check"}, {"version"}} {
 			t.Run(group+"/"+args[0], func(t *testing.T) {
 				t.Setenv("SANDBOXED_AGENTS_GROUP", group)
 				fakes := testutil.NewFakePrograms(t)
@@ -49,7 +49,7 @@ func TestSelectedControllerGroupCreatesItsOwnSandboxAndVolumes(t *testing.T) {
 }
 
 func TestOtherControllerGroupSandboxIsUnknown(t *testing.T) {
-	for _, command := range []string{"start", "stop", "restart", "remove"} {
+	for _, command := range []string{"start", "stop", "restart", "remove", "shell"} {
 		t.Run(command, func(t *testing.T) {
 			t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
 			fakes := testutil.NewFakePrograms(t)
@@ -70,7 +70,7 @@ func TestOtherControllerGroupSandboxIsUnknown(t *testing.T) {
 }
 
 func TestSelectedControllerGroupChecksAllObjectOwners(t *testing.T) {
-	for _, command := range []string{"up", "start", "stop", "restart", "remove"} {
+	for _, command := range []string{"up", "start", "stop", "restart", "remove", "shell"} {
 		for _, object := range []string{"container", "workspace", "home", "ssh", "backup"} {
 			t.Run(command+"/"+object, func(t *testing.T) {
 				t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
@@ -114,7 +114,7 @@ func TestSelectedControllerGroupChecksAllObjectOwners(t *testing.T) {
 }
 
 func TestBackupOnlySandboxRefusesChangesAndNamesRecovery(t *testing.T) {
-	for _, command := range []string{"up", "start", "stop", "restart", "remove"} {
+	for _, command := range []string{"up", "start", "stop", "restart", "remove", "shell"} {
 		for _, owner := range []string{"default", "foreign", ""} {
 			t.Run(command+"/"+owner, func(t *testing.T) {
 				fakes := linuxHost(t)
@@ -144,7 +144,7 @@ func TestBackupOnlySandboxRefusesChangesAndNamesRecovery(t *testing.T) {
 }
 
 func TestNamedCommandsReportEveryForeignObjectBeforeInterruptedUpdate(t *testing.T) {
-	for _, command := range []string{"up", "start", "stop", "restart", "remove"} {
+	for _, command := range []string{"up", "start", "stop", "restart", "remove", "shell"} {
 		t.Run(command, func(t *testing.T) {
 			fakes := linuxHost(t)
 			foreign := "foreign"

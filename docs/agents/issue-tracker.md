@@ -78,7 +78,7 @@ List children with `gh api repos/grauzone-dev/sandboxed-agents/issues/<parent>/s
 - **Pointer back**: on creation the workflow comments on the source issue `Mirrored to grauzone-dev/planning#<m> for planning.`
 - **Edit the source, not the mirror.** The next sync overwrites any change to a mirror's title, body, labels or state. On the mirror, only its project fields are set by hand: Status after creation, Priority, Estimate and Sprint.
 - **Find the mirror**: read the `Mirrored to` comment on the source issue. Without one (the hand-made mirrors of #1 to #8 have none), run `gh issue list -R grauzone-dev/planning --state all --search '"Source: grauzone-dev/sandboxed-agents#<n>" in:body' --json number,body` and keep the issue whose second body line is exactly that `Source:` line. If no mirror exists, report it; the maintainer can resync it with a manual workflow run.
-- **Token**: the workflow needs the repository secret `PLANNING_SYNC_TOKEN`, a token that can write issues in `grauzone-dev/planning` and write to the user project. Without that secret, every run that reaches the token check fails there and mirrors nothing; runs for issues from outside contributors are skipped before the check.
+- **Token**: the workflow needs the repository secret `PLANNING_SYNC_TOKEN`, a token that can write issues in `grauzone-dev/planning` and write to the user project. Without that secret, every run that reaches the token check fails there and mirrors nothing; issue-event runs for issues from outside contributors are skipped before the check.
 
 ### Project: Product Backlog
 

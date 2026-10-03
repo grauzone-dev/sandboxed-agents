@@ -19,7 +19,8 @@ Two requirements led here. `update` needs a backup name that cannot collide with
 
 - `podman ps` shows the long names. Users address a sandbox by its sandbox name; the executable derives the Podman name.
 - `list` and `update --all` tell a backup container from a sandbox by its name prefix and never treat it as a sandbox.
-- An invalid controller group name fails before Podman is called. The same rule makes the group usable as a directory name in host state.
+- An invalid controller group name fails before Podman is called.
+- The pattern admits names that Windows reserves for devices, such as `con` and `nul`, so a group name alone is not a safe directory name. Host state uses the group as a path component only behind a fixed prefix, on every platform. The Podman names already carry the `sandboxed-agents` prefix.
 - Loopback ports belong to the host and not to a controller group, so port allocation reads the ports recorded on the containers of every group.
 - Images are the exception: their names contain no controller group, and every group with the same executable and toolchain set shares one image. An image holds no user data, and sharing saves build time and disk space. A `build` in one group therefore marks the sandboxes of other groups as outdated.
 - The SSH host entry of a sandbox lives in the user's single SSH configuration and so needs a name that is unique across groups: the sandbox name in the `default` group, `NAME.GROUP` in any other. Because sandbox names may contain dots, installing an SSH setup refuses when the entry name already resolves to a configured host. Each group keeps its own managed configuration in host state and its own `Include` line, so no group writes another group's files.

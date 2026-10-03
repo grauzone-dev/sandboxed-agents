@@ -9,7 +9,7 @@ The live suite is the second release gate. It drives the executable against real
 - Linux on amd64, or Windows 11 on x64: a workstation edition with build 22000 or later. Windows 11 reports itself as Windows 10 to programs, so the suite accepts major version 10 with a build of 22000 or later and refuses Windows 10 and Windows Server. On Windows, the suite reads the machine's native architecture, not the architecture of the Go program.
 - Go 1.27 or newer and `git` on `PATH`.
 - The prerequisites of the executable itself, Podman and OpenSSH, set up as described in [Host prerequisites](host-prerequisites.md).
-- A clean checkout of the commit you want to validate.
+- A clean checkout of the commit you want to validate, left unchanged while the run lasts.
 
 The suite needs no `sudo`, no administrator rights, and no credentials, and it signs in nowhere. It may use the network: `build` pulls the Debian image and downloads packages, and the agent coverage (#68) will need npm.
 
@@ -41,7 +41,7 @@ Options:
 - `-images` also runs the image part (see [Image part](#image-part)). A run that validates a preview must select it.
 - `-output <directory>` sets the directory for the summary, relative to the current directory. The default is `.scratch/live`, which Git ignores. The directory may also lie inside the checkout without being ignored: the check of the checkout leaves out exactly the summary file this run writes. Any other file in that directory, such as a summary copied from the other platform, still counts as a change and makes the run refuse.
 
-An unknown option or an extra argument exits non-zero before anything runs. A run stops after one hour. Interrupting it with Ctrl+C stops it with a failing summary.
+An unknown option or an extra argument exits non-zero before anything runs. The suite waits at most one hour for a run. When that deadline passes or you interrupt the run with Ctrl+C, it leaves a failing summary. It does not ensure that processes started by the build, or work Podman has already begun, have stopped or been undone.
 
 ### What a run does
 
@@ -212,7 +212,7 @@ The offline tests in `internal/livesuite` and `tools/live` run against the fake 
 - a checkout with changes, a failed build, and an output directory that cannot be written: a non-zero exit and no Podman call;
 - a built executable whose `version` does not name the commit: a failing summary;
 - an output directory inside the checkout that Git does not ignore: the run's own summary does not make the checkout count as changed;
-- a run with a Linux host identity without `-images`: only the Podman calls of `list`, no `build`, and a passing summary;
+- runs without `-images` with a host identity for the operating system the tests run on, Linux or a synthetic Windows 11 identity: only the Podman calls of `list`, no `build`, and a passing summary under that platform's file name;
 - runs with a Windows 11 host identity with `-images`, with `build` succeeding and failing: exactly one `podman build`, `image_part_ran` `true` only when that `build` succeeded, and `image_coverage_complete` always `false`;
 - on Windows only, an output directory on another drive than the checkout: the run passes. Only the Windows CI job runs this test;
 - a failing Podman call whose output holds a user name, a host name, paths, the group variable, a token, a key, an SSH host entry, a host key fingerprint, and a URL: each appears on the console and none in the summary, which holds only the fields of its record.

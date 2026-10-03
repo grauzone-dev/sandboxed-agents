@@ -23,6 +23,8 @@ import (
 
 const commit = "0123456789abcdef0123456789abcdef01234567"
 
+var nativeSummaryPlatform = map[string]string{"linux": "linux", "windows": "windows-11"}[runtime.GOOS]
+
 func TestNormalRunNeedsNoPodmanOrSummary(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	dir := filepath.Join(t.TempDir(), "records")
@@ -123,7 +125,7 @@ func fixtureConfig(t *testing.T) livesuite.Config {
 	if err := os.WriteFile(executable, data, 0700); err != nil {
 		t.Fatal(err)
 	}
-	return livesuite.Config{OptIn: true, Commit: commit, Repository: t.TempDir(), OutputDirectory: t.TempDir(), Host: platform.Host{OS: "linux", Architecture: "amd64"}, Run: func(ctx context.Context, request process.Request) (int, error) {
+	return livesuite.Config{OptIn: true, Commit: commit, Repository: t.TempDir(), OutputDirectory: t.TempDir(), Host: platform.Host{OS: runtime.GOOS, Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}, Run: func(ctx context.Context, request process.Request) (int, error) {
 		if request.Name == "git" {
 			return 0, nil
 		}
@@ -162,7 +164,7 @@ func TestLiveRunReachesPodmanWithoutRebuildingSharedImages(t *testing.T) {
 	if calls := fakes.Calls("podman"); !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls=%v", calls)
 	}
-	summary := readSummary(t, config, "linux")
+	summary := readSummary(t, config, nativeSummaryPlatform)
 	if summary.Commit != commit || summary.Result != "pass" || summary.ImagePartSelected || summary.ImagePartRan || summary.Kind != "live-suite" {
 		t.Fatalf("summary=%+v", summary)
 	}
@@ -218,11 +220,11 @@ func TestFailedSummaryOmitsHostDetailsAndCredentials(t *testing.T) {
 	if err := livesuite.Run(context.Background(), config); err == nil {
 		t.Fatal("Podman failure passed")
 	}
-	summary := readSummary(t, config, "linux")
+	summary := readSummary(t, config, nativeSummaryPlatform)
 	if summary.Result != "fail" || summary.ImagePartRan || !summary.ImagePartSelected {
 		t.Fatalf("summary=%+v", summary)
 	}
-	data, err := os.ReadFile(filepath.Join(config.OutputDirectory, "live-suite-linux.json"))
+	data, err := os.ReadFile(filepath.Join(config.OutputDirectory, "live-suite-"+nativeSummaryPlatform+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +256,7 @@ func TestRejectedRunReplacesAnEarlierPassingSummary(t *testing.T) {
 	if err := livesuite.Run(context.Background(), config); err == nil {
 		t.Fatal("default accepted")
 	}
-	if summary := readSummary(t, config, "linux"); summary.Result != "fail" || len(summary.Checks) != 0 {
+	if summary := readSummary(t, config, nativeSummaryPlatform); summary.Result != "fail" || len(summary.Checks) != 0 {
 		t.Fatalf("stale summary=%+v", summary)
 	}
 	if len(fakes.Calls("podman")) != 2 {
@@ -298,7 +300,7 @@ func TestLiveSuiteRejectsDirtySourcesAndFailedCompilation(t *testing.T) {
 			if err := livesuite.Run(context.Background(), config); err == nil {
 				t.Fatal("preparation failure passed")
 			}
-			if summary := readSummary(t, config, "linux"); summary.Result != "fail" || summary.ImagePartRan {
+			if summary := readSummary(t, config, nativeSummaryPlatform); summary.Result != "fail" || summary.ImagePartRan {
 				t.Fatalf("summary=%+v", summary)
 			}
 			if len(fakes.Calls("podman")) != 0 {
@@ -315,7 +317,7 @@ func TestMismatchedExecutableCannotProducePassingValidation(t *testing.T) {
 	if err := livesuite.Run(context.Background(), config); err == nil {
 		t.Fatal("mismatched binary passed")
 	}
-	summary := readSummary(t, config, "linux")
+	summary := readSummary(t, config, nativeSummaryPlatform)
 	if summary.Commit != config.Commit || summary.Result != "fail" || !reflect.DeepEqual(summary.Checks, []livesuite.Check{{Name: "build-host", Result: "pass"}, {Name: "version", Result: "fail"}}) {
 		t.Fatalf("summary=%+v", summary)
 	}
@@ -363,7 +365,7 @@ func TestDefaultRunBuildsTheCommitBeforeItReachesPodman(t *testing.T) {
 	if err := livesuite.Run(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	summary := readSummary(t, config, "linux")
+	summary := readSummary(t, config, nativeSummaryPlatform)
 	if summary.Result != "pass" || len(summary.Checks) != 3 || summary.Checks[0].Name != "build-host" {
 		t.Fatalf("summary=%+v", summary)
 	}
@@ -378,7 +380,7 @@ func TestCustomSummaryDirectoryDoesNotMakeTheSourceDirty(t *testing.T) {
 	runner := config.Run
 	config.Run = func(ctx context.Context, request process.Request) (int, error) {
 		if request.Name == "git" {
-			want := []string{"-C", config.Repository, "status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude,literal)records/live-suite-linux.json"}
+			want := []string{"-C", config.Repository, "status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude,literal)records/live-suite-" + nativeSummaryPlatform + ".json"}
 			if !reflect.DeepEqual(request.Args, want) {
 				t.Fatalf("dirty check hides more than the generated record: %v", request.Args)
 			}
@@ -390,7 +392,7 @@ func TestCustomSummaryDirectoryDoesNotMakeTheSourceDirty(t *testing.T) {
 	if err := livesuite.Run(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	if summary := readSummary(t, config, "linux"); summary.Result != "pass" || summary.ImageCoverageComplete {
+	if summary := readSummary(t, config, nativeSummaryPlatform); summary.Result != "pass" || summary.ImageCoverageComplete {
 		t.Fatalf("summary=%+v", summary)
 	}
 }

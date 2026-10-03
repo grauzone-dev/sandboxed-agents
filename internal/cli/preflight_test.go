@@ -13,6 +13,8 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
+var linuxPrerequisiteNames = []string{"podman", "Podman version", "rootless", "subordinate UID", "subordinate GID", "newuidmap", "newgidmap", "pasta", "cgroups v2", "CPU", "memory", "process", "ssh", "ssh-keygen"}
+
 func linuxHost(t *testing.T) *testutil.FakePrograms {
 	t.Helper()
 	if runtime.GOOS != "linux" {
@@ -28,7 +30,8 @@ func linuxHost(t *testing.T) *testutil.FakePrograms {
 	t.Setenv("PATH", bin)
 	root := t.TempDir()
 	t.Setenv("SANDBOXED_AGENTS_HOST_FIXTURE", root)
-	t.Setenv("SANDBOXED_AGENTS_PREFLIGHT_ROOT", "")
+	t.Setenv("SANDBOXED_AGENTS_PREFLIGHT_AS_ROOT", "")
+	t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "")
 	t.Setenv("SANDBOXED_AGENTS_NO_DELEGATION", "")
 	for path, data := range map[string]string{
 		"/etc/subuid": "fixture:100000:65536\n", "/etc/subgid": "1000:200000:65536\n",
@@ -61,7 +64,7 @@ func TestCheckReportsEveryMetLinuxPrerequisite(t *testing.T) {
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
-	for _, name := range []string{"podman", "Podman version", "rootless", "subordinate UID", "subordinate GID", "newuidmap", "newgidmap", "pasta", "cgroups v2", "CPU", "memory", "process", "ssh", "ssh-keygen"} {
+	for _, name := range linuxPrerequisiteNames {
 		if !strings.Contains(stdout, "OK: "+name) {
 			t.Errorf("missing met prerequisite %q in %q", name, stdout)
 		}
@@ -76,7 +79,7 @@ func TestCheckReportsEveryMetLinuxPrerequisite(t *testing.T) {
 }
 
 func TestCheckNamesEachMissingLinuxPrerequisite(t *testing.T) {
-	for _, name := range []string{"podman", "Podman version", "rootless", "subordinate UID", "subordinate GID", "newuidmap", "newgidmap", "pasta", "cgroups v2", "CPU", "memory", "process", "ssh", "ssh-keygen"} {
+	for _, name := range linuxPrerequisiteNames {
 		t.Run(name, func(t *testing.T) {
 			fakes := linuxHost(t)
 			root := os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE")
@@ -93,7 +96,7 @@ func TestCheckNamesEachMissingLinuxPrerequisite(t *testing.T) {
 			case "Podman version":
 				fakes.Script("podman", testutil.Response{Stdout: "podman version 4.3.1\n"})
 			case "rootless":
-				t.Setenv("SANDBOXED_AGENTS_PREFLIGHT_ROOT", "1")
+				t.Setenv("SANDBOXED_AGENTS_PREFLIGHT_AS_ROOT", "1")
 				hostFile(t, root, "/etc/subgid", "fixture:200000:65536\n")
 				hostFile(t, root, "/proc/self/cgroup", "0::/delegated\n")
 				for _, file := range []string{"cgroup.controllers", "cgroup.procs", "cgroup.subtree_control"} {
@@ -283,7 +286,7 @@ func TestCheckReportsVersionQueryFailures(t *testing.T) {
 	fakes := linuxHost(t)
 	fakes.Script("podman", testutil.Response{Stderr: "configuration error", ExitCode: 42})
 	stdout, _, status := runCLI(t, "linux-preflight", "check")
-	if status == 0 || !strings.Contains(stdout, "MISSING: Podman version") || !strings.Contains(stdout, "OK: ssh-keygen") {
+	if status == 0 || !strings.Contains(stdout, "MISSING: Podman version") || !strings.Contains(stdout, "OK: ssh-keygen") || !strings.Contains(stdout, "podman --version") || strings.Contains(stdout, "install Podman") {
 		t.Fatalf("status=%d stdout=%q", status, stdout)
 	}
 }
@@ -298,5 +301,40 @@ func TestCheckRejectsInvalidSubordinateRanges(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q", status, stdout)
 			}
 		})
+	}
+}
+
+func TestCheckFindsControllersDelegatedAboveADesktopScope(t *testing.T) {
+	linuxHost(t)
+	root := os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE")
+	path := "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/term.scope"
+	hostFile(t, root, "/proc/self/cgroup", "0::/user.slice/user-1000.slice/user@1000.service/app.slice/term.scope\n")
+	for _, file := range []string{"cgroup.controllers", "cgroup.procs", "cgroup.subtree_control"} {
+		hostFile(t, root, path+"/"+file, "memory pids\n")
+	}
+	stdout, stderr, status := runCLI(t, "linux-preflight", "check")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+}
+
+func TestCheckExplainsHybridCgroupHostsNeedTheUnifiedHierarchy(t *testing.T) {
+	linuxHost(t)
+	root := os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE")
+	hostFile(t, root, "/proc/self/cgroup", "1:name=systemd:/user.slice\n0::/user.slice/user-1000.slice/session-3.scope\n")
+	hostFile(t, root, "/proc/self/mountinfo", "35 25 0:30 / /sys/fs/cgroup/unified rw - cgroup2 cgroup2 rw\n")
+	stdout, _, status := runCLI(t, "linux-preflight", "check")
+	if status == 0 || !strings.Contains(stdout, "MISSING: cgroups v2:") || !strings.Contains(stdout, "unified cgroup v2 hierarchy") {
+		t.Fatalf("status=%d stdout=%q", status, stdout)
+	}
+}
+
+func TestCheckUsesThePodmanAccountNameWhenPasswdLookupFails(t *testing.T) {
+	linuxHost(t)
+	t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "1")
+	t.Setenv("USER", "fixture")
+	stdout, stderr, status := runCLI(t, "linux-preflight", "check")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 }

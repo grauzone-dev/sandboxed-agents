@@ -52,19 +52,23 @@ Each row is one line of `check` output. **Name** is the name the check prints, a
 | Name | Met when | Remedy |
 | --- | --- | --- |
 | `podman` | `podman` is on `PATH`. | install Podman and make sure podman is on PATH |
-| `Podman version` | `podman --version` prints `podman version X.Y.Z` with X.Y.Z at least 4.4.0. Pre-releases of 4.4.0, such as `4.4.0-rc1`, do not count. | install Podman 4.4.0 or newer |
+| `Podman version` | `podman --version` succeeds and prints `podman version X.Y.Z` with X.Y.Z at least 4.4.0. Pre-releases of 4.4.0, such as `4.4.0-rc1`, do not count. | When the reported version is too old: install Podman 4.4.0 or newer. When the query fails or its output cannot be read: fix the Podman installation or configuration so that podman --version reports version 4.4.0 or newer |
 | `rootless` | The check runs with a nonzero effective user ID. | run sandboxed-agents as your own user, not as root or with sudo |
 | `subordinate UID` | `/etc/subuid` has a line for your user name or numeric UID with a valid range: start above 0, size above 0, end within the 32-bit ID space. | add a subordinate UID range for your user to /etc/subuid |
 | `subordinate GID` | `/etc/subgid` has a line for your user name or numeric **UID** with a valid range. Podman looks up subordinate GIDs by user, not by group. | add a subordinate GID range for your user to /etc/subgid |
 | `newuidmap` | `newuidmap` is on `PATH`. | install newuidmap (in the uidmap or shadow-utils package) and make sure it is on PATH |
 | `newgidmap` | `newgidmap` is on `PATH`. | install newgidmap (in the uidmap or shadow-utils package) and make sure it is on PATH |
 | `pasta` | `pasta` is on `PATH`. | install pasta (the passt package) and make sure it is on PATH |
-| `cgroups v2` | `/proc/self/cgroup` has a unified-hierarchy entry (`0::/…`), and `/proc/self/mountinfo` has a cgroup2 mount that contains it. | boot the host with the unified cgroup v2 hierarchy |
+| `cgroups v2` | `/proc/self/cgroup` has only the unified-hierarchy entry (`0::/…`) and no cgroup v1 entries, and `/proc/self/mountinfo` has a cgroup2 mount that contains it. A hybrid host, with v1 controllers next to a unified mount, does not count. | boot the host with the unified cgroup v2 hierarchy |
 | `CPU` | The `cpu` controller is delegated to you (see below). | delegate the cgroup v2 cpu controller to your user, for example with Delegate= in a user@.service drop-in |
 | `memory` | The `memory` controller is delegated to you. | delegate the cgroup v2 memory controller to your user, … |
 | `process` | The `pids` controller is delegated to you. | delegate the cgroup v2 pids controller to your user, … |
 | `ssh` | `ssh` is on `PATH`. | install the OpenSSH client and make sure ssh is on PATH |
 | `ssh-keygen` | `ssh-keygen` is on `PATH`. | install the OpenSSH client and make sure ssh-keygen is on PATH |
+
+The check takes your user name from `/etc/passwd`. For an account that `/etc/passwd` does not list, such as one from SSSD, LDAP, or systemd-homed, it uses the `USER` environment variable instead. Lines keyed by your numeric UID match either way.
+
+If `podman` is not on `PATH`, the check does not run `podman --version` and reports both `podman` and `Podman version` as missing.
 
 To add subordinate ranges, run `usermod --add-subuids FIRST-LAST USER` and `usermod --add-subgids FIRST-LAST USER` from shadow-utils as an administrator.
 
@@ -74,7 +78,11 @@ To add subordinate ranges, run `usermod --add-subuids FIRST-LAST USER` and `user
 
 Rootless Podman can apply `--memory`, `--cpus`, and `--pids-limit` only when the cgroup v2 controllers `memory`, `cpu`, and `pids` are delegated to the user. Podman documents `--memory` and `--cpus` as unsupported on rootless cgroup v1 ([`--memory`](https://github.com/containers/podman/blob/v5.0.0/docs/source/markdown/options/memory.md#L15), [`--cpus`](https://github.com/containers/podman/blob/v5.0.0/docs/source/markdown/options/cpus.container.md#L15), v5.0.0).
 
-To find a delegated cgroup, the check maps its own cgroup from `/proc/self/cgroup` onto the cgroup2 mount point from `/proc/self/mountinfo`. It then examines that cgroup and each parent up to the mount root. A login shell normally runs in a session scope such as `user-1000.slice/session-3.scope`. systemd delegates to the user manager `user-1000.slice/user@1000.service`, which is a sibling of that scope rather than a parent. So when the check passes `user-UID.slice`, it also examines `user@UID.service`.
+To find a delegated cgroup, the check maps its own cgroup from `/proc/self/cgroup` onto the cgroup2 mount point from `/proc/self/mountinfo`. On systemd hosts, delegation to a user happens at the user manager, `user-UID.slice/user@UID.service`.
+
+A login shell runs in a session scope such as `user-1000.slice/session-3.scope`, which is a sibling of the user manager. A terminal started by the desktop often runs in a leaf below the user manager, such as `user@1000.service/app.slice/…`. A leaf like that may list fewer controllers than the user manager does. So when your cgroup lies under `user-UID.slice`, the check examines your user manager first. It then examines your own cgroup and each parent up to the mount root.
+
+If the host is not unified (see `cgroups v2` above), the check looks for no delegated cgroup. `CPU`, `memory`, and `process` are then reported missing as well.
 
 The first cgroup that meets all four of these conditions is the delegated one:
 
@@ -100,7 +108,7 @@ cat "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.
 
 ## Why Podman 4.4.0
 
-The sandbox container uses these Podman options:
+Each sandbox uses these Podman options:
 
 | Option | Available since | Source |
 | --- | --- | --- |
@@ -123,7 +131,7 @@ The check does not:
 
 - **Look for `pasta` in Podman's helper directories.** Podman searches `helper_binaries_dir` (for example `/usr/libexec/podman`) before `PATH` ([`FindHelperBinary`, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/common/pkg/config/config.go#L1046-L1095)). A `pasta` found only there is reported missing.
 - **Ask NSS for subordinate IDs.** Podman built with `libsubid` can get subordinate ID ranges from an NSS `subid` provider, such as SSSD or FreeIPA, instead of `/etc/subuid` and `/etc/subgid` ([idtools, v5.0.0](https://github.com/containers/podman/blob/v5.0.0/vendor/github.com/containers/storage/pkg/idtools/idtools_supported.go)). The check reads only the files, so such hosts are reported as missing their ranges.
-- **Validate subordinate ID files fully.** It does not reject malformed lines that Podman would refuse to parse. It does not check that a range avoids your own UID or GID, or that it is large enough for the IDs an image uses.
+- **Validate subordinate ID files fully.** It does not reject malformed lines that Podman would refuse to parse. It does not check that a range avoids your own UID or GID, or that it is large enough for the IDs an image uses. When it falls back to `USER`, it takes the variable as given.
 - **Prove the mapping helpers work.** It does not check that `newuidmap` and `newgidmap` have the setuid bit or file capabilities they need.
 - **Prove user namespaces are allowed.** It does not read `user.max_user_namespaces` or `kernel.unprivileged_userns_clone`, and it does not evaluate AppArmor or SELinux policy. "Rootless" means only that you are not root.
 - **Prove a future cgroup write succeeds.** The write-permission test is taken at one moment. The check does not test the cgroup manager Podman uses, or controllers enabled further down the delegated subtree. A delegated cgroup that is not the user manager and not a parent of the current cgroup is not found.

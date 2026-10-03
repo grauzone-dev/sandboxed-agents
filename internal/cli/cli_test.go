@@ -77,8 +77,11 @@ func TestCLIProcess(t *testing.T) {
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "linux-preflight" {
 				host := preflight.LocalHost()
 				host.UID, host.Username = 1000, "fixture"
-				if os.Getenv("SANDBOXED_AGENTS_PREFLIGHT_ROOT") != "" {
+				if os.Getenv("SANDBOXED_AGENTS_PREFLIGHT_AS_ROOT") != "" {
 					host.UID = 0
+				}
+				if os.Getenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT") != "" {
+					host.Username = ""
 				}
 				root := os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE")
 				host.ReadFile = func(path string) ([]byte, error) { return os.ReadFile(filepath.Join(root, path)) }

@@ -382,8 +382,14 @@ func TestCheckAcceptsNumericRangesWithoutAnAccountLookupTool(t *testing.T) {
 func TestCheckDisablesFileTracingForTheReadOnlyAccountLookup(t *testing.T) {
 	fakes := linuxHost(t)
 	t.Setenv("SANDBOXED_AGENTS_UNKNOWN_ACCOUNT", "1")
-	t.Setenv("MALLOC_TRACE", filepath.Join(os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"), "unexpected.trace"))
-	fakes.Script("getent", testutil.Response{Stdout: "fixture:x:1000:1000:Fixture:/home/fixture:/bin/bash\n", AbsentEnv: []string{"MALLOC_TRACE"}})
+	tracing := []string{"MALLOC_TRACE", "LD_DEBUG", "LD_DEBUG_OUTPUT", "LD_PROFILE", "LD_PROFILE_OUTPUT"}
+	for _, key := range tracing {
+		t.Setenv(key, filepath.Join(os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"), "unexpected.trace"))
+	}
+	t.Setenv("LD_DEBUG", "libs")
+	t.Setenv("LD_PROFILE", "libc.so.6")
+	t.Setenv("LD_PROFILE_OUTPUT", os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE"))
+	fakes.Script("getent", testutil.Response{Stdout: "fixture:x:1000:1000:Fixture:/home/fixture:/bin/bash\n", AbsentEnv: tracing})
 	stdout, stderr, status := runCLI(t, "linux-preflight", "check")
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)

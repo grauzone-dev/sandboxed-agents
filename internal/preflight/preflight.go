@@ -152,7 +152,10 @@ func accountName(ctx context.Context, host Host) string {
 	var stdout, stderr bytes.Buffer
 	env := []string{}
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "MALLOC_TRACE=") {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "MALLOC_TRACE", "LD_DEBUG", "LD_DEBUG_OUTPUT", "LD_PROFILE", "LD_PROFILE_OUTPUT":
+		default:
 			env = append(env, entry)
 		}
 	}

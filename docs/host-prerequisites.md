@@ -71,7 +71,13 @@ To match subordinate ID lines, the check resolves your user name once from your 
 1. It looks up the UID in `/etc/passwd`.
 2. If the UID is not there, as for an account from SSSD, LDAP, or systemd-homed, it runs `getent passwd UID`, but only if `getent` is on `PATH`. It accepts the answer only if it is one passwd record with seven fields, a nonempty name, and exactly your UID.
 
-If neither step gives a name, the user name stays unknown. Lines keyed by your numeric UID still match, but lines keyed by a user name are not trusted. `getent` calls glibc's `mtrace`, which writes a malloc trace to the file named by `MALLOC_TRACE` when that tracing is enabled ([getent.c](https://github.com/bminor/glibc/blob/glibc-2.39/nss/getent.c#L977-L1003), [mtrace-impl.c](https://github.com/bminor/glibc/blob/glibc-2.39/malloc/mtrace-impl.c#L167-L199), glibc 2.39). The check therefore runs `getent` without `MALLOC_TRACE` and passes the rest of your environment unchanged. The check never takes the name from environment variables such as `USER`. `getent` is optional and not a prerequisite. Without it, ranges keyed by your numeric UID are still found.
+If neither step gives a name, the user name stays unknown. Lines keyed by your numeric UID still match, but lines keyed by a user name are not trusted. glibc lets environment variables make a program write trace and profile files:
+
+- `getent` calls `mtrace`, which writes a malloc trace to the file named by `MALLOC_TRACE` ([getent.c](https://github.com/bminor/glibc/blob/glibc-2.39/nss/getent.c#L977-L1003), [mtrace-impl.c](https://github.com/bminor/glibc/blob/glibc-2.39/malloc/mtrace-impl.c#L167-L199)).
+- The dynamic loader creates debug output files for `LD_DEBUG` and `LD_DEBUG_OUTPUT` ([rtld.c](https://github.com/bminor/glibc/blob/glibc-2.39/elf/rtld.c#L2725-L2746)).
+- The loader creates profile files for `LD_PROFILE` and `LD_PROFILE_OUTPUT`. When `LD_PROFILE_OUTPUT` is unset, it falls back to a default directory such as `/var/tmp` ([dl-profile.c](https://github.com/bminor/glibc/blob/glibc-2.39/elf/dl-profile.c#L318-L329), [ld.so(8)](https://man7.org/linux/man-pages/man8/ld.so.8.html)).
+
+All three sources are glibc 2.39. The check removes these five variables, both the switches and the destinations, from the environment of `getent` only. It passes the rest of your environment unchanged and does not change the environment of `podman --version`. The check never takes the name from environment variables such as `USER`. `getent` is optional and not a prerequisite. Without it, ranges keyed by your numeric UID are still found.
 
 If `podman` is not on `PATH`, the check does not run `podman --version` and reports both `podman` and `Podman version` as missing.
 

@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 )
 
 type Invocation struct {
@@ -109,20 +112,29 @@ func (tree Tree) failure(stderr io.Writer, path string, err error, usage bool) i
 }
 
 func Run(args []string, stdout, stderr io.Writer, version, assetHash string) int {
+	return RunWithHost(args, stdout, stderr, version, assetHash, preflight.LocalHost())
+}
+
+func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
 	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
-		{Name: "version", Checks: Checks{Usage: func(invocation *Invocation) error {
-			if len(invocation.Args) > 0 {
-				message := "unexpected argument"
-				if strings.HasPrefix(invocation.Args[0], "-") {
-					message = "unknown option"
-				}
-				return fmt.Errorf("%s %q", message, invocation.Args[0])
-			}
-			return nil
-		}}, Action: func(invocation *Invocation) error {
+		{Name: "check", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
+			return preflight.Run(context.Background(), host, invocation.Stdout)
+		}},
+		{Name: "version", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			_, err := fmt.Fprintf(invocation.Stdout, "sandboxed-agents %s\nassets %s\n", version, assetHash)
 			return err
 		}},
 	}}
 	return tree.Execute(args, stdout, stderr)
+}
+
+func noArguments(invocation *Invocation) error {
+	if len(invocation.Args) == 0 {
+		return nil
+	}
+	message := "unexpected argument"
+	if strings.HasPrefix(invocation.Args[0], "-") {
+		message = "unknown option"
+	}
+	return fmt.Errorf("%s %q", message, invocation.Args[0])
 }

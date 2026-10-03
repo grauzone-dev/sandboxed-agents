@@ -1,0 +1,17 @@
+FROM docker.io/library/debian:bookworm-slim
+
+COPY install-base.sh /tmp/install-base.sh
+RUN sh /tmp/install-base.sh && rm /tmp/install-base.sh
+
+COPY manager /usr/local/bin/sandboxed-agents-manager
+COPY record-versions.sh /tmp/record-versions.sh
+RUN chmod 0755 /usr/local/bin/sandboxed-agents-manager \
+    && sh /tmp/record-versions.sh \
+    && rm /tmp/record-versions.sh
+
+COPY entrypoint.sh /usr/local/bin/sandboxed-agents-entrypoint
+RUN chmod 0755 /usr/local/bin/sandboxed-agents-entrypoint
+
+WORKDIR /workspace
+USER root
+ENTRYPOINT ["/usr/local/bin/sandboxed-agents-entrypoint"]

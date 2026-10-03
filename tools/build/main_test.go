@@ -8,6 +8,7 @@ import (
 	"debug/pe"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,18 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 	source := filepath.Join(dir, "source")
 	testutil.CopySource(t, root, source)
 	contextPath := filepath.Join(source, "build", "context", "Containerfile")
-	if err := os.WriteFile(contextPath, []byte("FROM test\nRUN true\n"), 0644); err != nil {
+	contextFiles := map[string][]byte{}
+	if err := filepath.WalkDir(filepath.Dir(contextPath), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		contextFiles[entry.Name()] = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	fakes := testutil.NewFakePrograms(t)
@@ -84,8 +96,10 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 	if version != checkVersion(native, unchanged) {
 		t.Fatal("unchanged rebuild changed the printed asset hash")
 	}
-	if err := os.WriteFile(contextPath, []byte("FROM test\r\nRUN true\r\n"), 0644); err != nil {
-		t.Fatal(err)
+	for name, data := range contextFiles {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(contextPath), name), bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n")), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	native, crlf := build(runtime.GOOS)
 	if version != checkVersion(native, crlf) {
@@ -145,17 +159,19 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 			t.Fatal("embedded manager requires a dynamic loader")
 		}
 	}
-	context, err := archive.Open("context/Containerfile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents, err := io.ReadAll(context)
-	context.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != "FROM test\nRUN true\n" {
-		t.Fatalf("embedded context was not normalized: %q", contents)
+	for name, expected := range contextFiles {
+		context, err := archive.Open("context/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents, err := io.ReadAll(context)
+		context.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(contents, expected) {
+			t.Fatalf("embedded context %s was not normalized: %q", name, contents)
+		}
 	}
 	if err := os.WriteFile(contextPath, []byte("FROM different\n"), 0644); err != nil {
 		t.Fatal(err)

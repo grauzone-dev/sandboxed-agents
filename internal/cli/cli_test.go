@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/assets"
 	"github.com/grauzone-dev/sandboxed-agents/internal/cli"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
@@ -29,7 +30,13 @@ func TestVersionPrintsVersionAndAssetHash(t *testing.T) {
 
 func runCLI(t *testing.T, fixture string, args ...string) (string, string, int) {
 	t.Helper()
+	return runCLIAt(t, "", fixture, args...)
+}
+
+func runCLIAt(t *testing.T, directory, fixture string, args ...string) (string, string, int) {
+	t.Helper()
 	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestCLIProcess$", "--"}, args...)...)
+	command.Dir = directory
 	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE="+fixture)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
@@ -74,7 +81,7 @@ func TestCLIProcess(t *testing.T) {
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "checks" {
 				os.Exit(checkTree().Execute(args, os.Stdout, os.Stderr))
 			}
-			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "linux-preflight" {
+			if fixture := os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE"); fixture == "linux-preflight" || fixture == "linux-build" {
 				host := preflight.LocalHost()
 				host.UID, host.Username = 1000, "fixture"
 				if os.Getenv("SANDBOXED_AGENTS_PREFLIGHT_AS_ROOT") != "" {
@@ -93,7 +100,11 @@ func TestCLIProcess(t *testing.T) {
 					mode := os.Getenv("SANDBOXED_AGENTS_NO_DELEGATION")
 					return mode == "" || (mode == "directory" && !info.IsDir())
 				}
-				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", host))
+				hash := "fixture-assets"
+				if fixture == "linux-build" {
+					hash = assets.Hash()
+				}
+				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", hash, host))
 			}
 			os.Exit(cli.Run(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets"))
 		}

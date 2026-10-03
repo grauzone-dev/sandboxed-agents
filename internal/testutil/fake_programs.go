@@ -17,10 +17,11 @@ const fakeStateEnv = "SANDBOXED_AGENTS_FAKE_STATE"
 var fakeProgramNames = []string{"podman", "ssh", "getent"}
 
 type Response struct {
-	Stdout    string
-	Stderr    string
-	ExitCode  int
-	AbsentEnv []string
+	Stdout              string
+	Stderr              string
+	ExitCode            int
+	AbsentEnv           []string
+	CaptureBuildContext string
 }
 
 type Call struct{ Args []string }
@@ -170,6 +171,16 @@ func runFake(state, name string, args []string) int {
 		return 99
 	}
 	response := responses[0]
+	if response.CaptureBuildContext != "" {
+		if name != "podman" || len(args) < 2 || args[0] != "build" {
+			fmt.Fprintln(os.Stderr, "expected a Podman build to capture its context")
+			return 99
+		}
+		if err := os.CopyFS(response.CaptureBuildContext, os.DirFS(args[len(args)-1])); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 99
+		}
+	}
 	for _, name := range response.AbsentEnv {
 		if _, present := os.LookupEnv(name); present {
 			fmt.Fprintln(os.Stderr, "unexpected environment variable:", name)

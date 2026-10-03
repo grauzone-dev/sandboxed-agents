@@ -54,7 +54,7 @@ The previous container of a sandbox, kept under its own name while `update` repl
 ### Host boundaries
 
 **Host state**:
-Mutable data the executable keeps in the operating system's state directory, separated by controller group. It holds managed SSH keys and configuration and temporary image-build inputs.
+Mutable data the executable keeps in the operating system's state directory, separated by controller group. It holds managed SSH keys and configuration.
 
 **Protected host paths**:
 Host locations that must never be exposed through a workspace bind: the executable and its package launchers, host state, temporary build inputs, and the user's SSH directory. Symlinks, junctions, and other aliases do not make a protected path bindable.

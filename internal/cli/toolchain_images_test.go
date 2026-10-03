@@ -139,6 +139,30 @@ func TestBuildRebuildsDiscoveredCurrentImagesOnceUnderTheirExistingTags(t *testi
 	}
 }
 
+func TestBuildRequestedToolchainCreatesItsCanonicalTagWhenOnlyAnAliasExists(t *testing.T) {
+	fakes := linuxHost(t)
+	hash := imageBuildAssetHash(t)
+	alias := "localhost/renamed-native:existing"
+	fakes.Script("podman",
+		testutil.Response{Stdout: "podman version 5.0.0\n"},
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"aliased-native"}]`},
+		imageInspection(t, "aliased-native", hash, "native", alias),
+		testutil.Response{Stdout: `[{"Id":"sha256:new-base"}]`},
+		testutil.Response{}, testutil.Response{},
+	)
+	stdout, stderr, status := runCLI(t, "linux-build", "build", "--with", "native")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	if len(calls) != 7 {
+		t.Fatalf("canonical tag was not built: %v", calls)
+	}
+	assertImageBuild(t, calls[5].Args, hash, alias, "native", "sha256:new-base")
+	assertImageBuild(t, calls[6].Args, hash, "localhost/sandboxed-agents:toolchains-native-"+hash, "native", "sha256:new-base")
+}
+
 func TestBuildNativeSelectionSharesItsTagAcrossRepetitionsAndControllerGroups(t *testing.T) {
 	fakes := linuxHost(t)
 	hash := imageBuildAssetHash(t)
@@ -213,8 +237,8 @@ func TestBuildBaseFailureStopsBeforeToolchainDiscoveryOrBuild(t *testing.T) {
 func TestBuildToolchainFailureKeepsBuildingOtherImagesAndRemovesContexts(t *testing.T) {
 	fakes := linuxHost(t)
 	hash := imageBuildAssetHash(t)
-	firstTag := "localhost/sandboxed-agents:a-native-" + hash
-	secondTag := "localhost/sandboxed-agents:b-native-" + hash
+	firstTag := "localhost/sandboxed-agents:toolchains-native-" + hash
+	secondTag := "localhost/sandboxed-agents:z-native-" + hash
 	firstContext := filepath.Join(t.TempDir(), "failed-native-context")
 	secondContext := filepath.Join(t.TempDir(), "successful-native-context")
 	fakes.Script("podman",

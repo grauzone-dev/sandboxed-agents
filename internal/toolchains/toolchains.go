@@ -12,9 +12,6 @@ func (set Set) String() string { return set.names }
 
 func Parse(value string) (Set, error) {
 	names := strings.Split(value, ",")
-	for index, name := range names {
-		names[index] = strings.TrimSpace(name)
-	}
 	if len(names) == 1 && names[0] == "none" {
 		return Set{}, nil
 	}
@@ -33,7 +30,6 @@ func Parse(value string) (Set, error) {
 type Definition struct {
 	Name       string
 	Delivered  bool
-	Packages   []string
 	SmokeCheck string
 	SmokeUser  string
 }
@@ -43,11 +39,9 @@ func Catalog() []Definition {
 		{Name: "dotnet"},
 		{Name: "playwright"},
 		{Name: "azure"},
-		{Name: "native", Delivered: true, Packages: []string{"build-essential", "cmake", "pkg-config", "ninja-build"}, SmokeCheck: NativeSmokeCheck(), SmokeUser: "1000:1000"},
+		{Name: "native", Delivered: true, SmokeCheck: "sh /usr/local/share/sandboxed-agents/smoke/native.sh", SmokeUser: "1000:1000"},
 	}
 }
-
-func NativeSmokeCheck() string { return "sh /usr/local/share/sandboxed-agents/smoke/native.sh" }
 
 func ValidValues() []string {
 	values := []string{"none"}

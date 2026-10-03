@@ -23,6 +23,10 @@ gh release download v1.0.0-preview.20261003.1 -R grauzone-dev/sandboxed-agents
 sha256sum -c SHA256SUMS
 ```
 
+## Validate a preview
+
+A preview is validated on its commit by three gates: the offline suite, the [live suite](live-suite.md) on Linux and on Windows 11, and the manual checklist (#64). The maintainer uploads the two live-suite summaries and the manual-checklist record to the preview's prerelease. [Live suite](live-suite.md#validation-records) records their file names and format, and the redaction of the summaries, and describes the upload. A live run validates a preview only when its summary reports a pass, says that the image part ran, and says that the full image coverage is complete. In this version the live suite is only the harness and always records the image coverage as incomplete, so no run validates a release yet. The stable release check that reads the records comes with #67.
+
 ## What is verified where
 
 On Linux or Windows amd64, the release tool runs the native binary's `version`; it checks the cross-compiled binary only for the embedded build assets. The workflow runs the release tool and the offline suite on Linux and on Windows, so each binary's `version` runs natively, and publishes only if both runners produced identical release files and `version` output.

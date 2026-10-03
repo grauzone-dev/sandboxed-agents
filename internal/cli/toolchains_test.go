@@ -183,7 +183,7 @@ func TestUpKeepsRecordedToolchainsUnlessAnExplicitSelectionConflicts(t *testing.
 			fakes := linuxHost(t)
 			owner := "default"
 			responses := upObjectResponses(&owner, false, nil, nil)
-			responses[2].Stdout = fmt.Sprintf(`[{"Name":"sandboxed-agents.default.agent01","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.toolchains":%q}},"State":{"Running":false}}]`, example.recorded)
+			responses = withRecordedContainerLabels(t, responses, map[string]string{"toolchains": example.recorded, "ssh-port": fmt.Sprint(unusedSSHPort(t))})
 			if !example.conflict {
 				responses = append(responses, testutil.Response{})
 			}

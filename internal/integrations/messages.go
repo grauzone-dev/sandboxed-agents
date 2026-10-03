@@ -18,7 +18,6 @@ const (
 	PromptFailure         = "could not read %s: %w"
 	GitStartFailure       = "could not start Git configuration: %w"
 	GitFailure            = "Git configuration failed with exit status %d"
-	ManagerUnavailable    = "manager of sandbox %[1]s does not answer; run sandboxed-agents check %[1]s for diagnosis, then sandboxed-agents restart %[1]s"
 	IntegrationFailure    = "integration workflow failed with exit status %d"
 	IntegrationRunFailure = "could not run integration workflow: %w"
 )

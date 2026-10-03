@@ -29,7 +29,7 @@ func TestInvalidControllerGroupFailsEveryCommandBeforeExternalCalls(t *testing.T
 func TestSelectedControllerGroupCreatesItsOwnSandboxAndVolumes(t *testing.T) {
 	t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
 	fakes := linuxHost(t)
-	fakes.Script("podman", testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{})
+	fakes.Script("podman", testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{Stdout: "[]"}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{})
 	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01")
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -172,7 +172,7 @@ func TestNamedCommandsReportEveryForeignObjectBeforeInterruptedUpdate(t *testing
 
 func TestTwoControllerGroupsCreateSameSandboxNameFromDifferentDirectories(t *testing.T) {
 	fakes := linuxHost(t)
-	creation := []testutil.Response{{Stdout: "podman version 5.0.0\n"}, {ExitCode: 1}, {ExitCode: 1}, {ExitCode: 1}, {ExitCode: 1}, {ExitCode: 1}, {}, {}, {}, {}, {}, {}}
+	creation := []testutil.Response{{Stdout: "podman version 5.0.0\n"}, {ExitCode: 1}, {ExitCode: 1}, {ExitCode: 1}, {ExitCode: 1}, {ExitCode: 1}, {Stdout: "[]"}, {}, {}, {}, {}, {}, {}}
 	responses := append(append([]testutil.Response{}, creation...), creation...)
 	fakes.Script("podman", responses...)
 	for _, group := range []string{"default", "team-a"} {

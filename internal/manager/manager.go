@@ -21,9 +21,10 @@ type Manager struct {
 }
 
 type Options struct {
-	Home    string
-	Catalog *agentcatalog.Catalog
-	User    func() process.Identity
+	Home              string
+	Catalog           *agentcatalog.Catalog
+	User              func() process.Identity
+	SSHStateDirectory string
 }
 
 func New(version string, run process.Runner) *Manager {
@@ -48,6 +49,7 @@ func NewWithOptions(version string, run process.Runner, options Options) *Manage
 	m.Register("sessions", listSessions)
 	m.Register("agents", m.agents)
 	m.Register("integrations", runIntegrationWorkflow)
+	m.Register("ssh", sshServer(options.SSHStateDirectory))
 	return m
 }
 

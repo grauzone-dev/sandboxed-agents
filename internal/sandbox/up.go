@@ -13,13 +13,14 @@ type Up struct {
 	*sandboxObjects
 	assetHash    string
 	limits       ResourceLimits
+	port         int
 	toolchains   toolchains.Set
 	withProvided bool
 	workspace    string
 }
 
-func NewUp(name, group, assetHash string, limits ResourceLimits, selection toolchains.Set, withProvided bool, run process.Runner, streams process.Streams) *Up {
-	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: limits, toolchains: selection, withProvided: withProvided}
+func NewUp(name, group, assetHash string, limits ResourceLimits, port int, selection toolchains.Set, withProvided bool, run process.Runner, streams process.Streams) *Up {
+	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: limits, port: port, toolchains: selection, withProvided: withProvided}
 }
 
 func (up *Up) Apply(ctx context.Context) error {
@@ -97,6 +98,8 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		"--label", NameLabel + "=" + up.name,
 		"--label", WorkspaceKindLabel + "=" + kind,
 		"--label", images.ToolchainsLabel + "=" + up.toolchains.String(),
+		"--label", fmt.Sprintf("%s=%d", SSHPortLabel, up.port),
+		"--publish", fmt.Sprintf("127.0.0.1:%d:22", up.port),
 		"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
 	}
 	args = append(args, up.limits.createArguments()...)

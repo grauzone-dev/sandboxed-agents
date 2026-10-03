@@ -593,7 +593,7 @@ func TestWindowsUpRetainsSandboxFlowAndPlatformPreflight(t *testing.T) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			calls := fakes.Calls("podman")
-			wantCount := 18
+			wantCount := 19
 			if missingImage {
 				wantCount++
 			}
@@ -608,13 +608,14 @@ func TestWindowsUpRetainsSandboxFlowAndPlatformPreflight(t *testing.T) {
 				{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.home"}},
 				{Args: []string{"volume", "exists", "sandboxed-agents.default.agent01.ssh"}},
 				{Args: []string{"container", "exists", "sandboxed-agents-backup.default.agent01"}},
+				{Args: []string{"ps", "--all", "--format", "json"}},
 				{Args: []string{"image", "exists", tag}},
 			}
-			if !reflect.DeepEqual(calls[7:13], wantLookups) {
-				t.Fatalf("lookups=%v want=%v", calls[7:13], wantLookups)
+			if !reflect.DeepEqual(calls[7:14], wantLookups) {
+				t.Fatalf("lookups=%v want=%v", calls[7:14], wantLookups)
 			}
 			if missingImage {
-				args := calls[13].Args
+				args := calls[14].Args
 				if len(args) < 5 || !reflect.DeepEqual(args[:5], []string{"build", "--pull=always", "--no-cache", "--tag", tag}) {
 					t.Fatalf("build args=%v", args)
 				}

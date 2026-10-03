@@ -173,11 +173,11 @@ func upCommand(assetHash string, host sandbox.WorkspaceHost, group *string, run 
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			workspace, limits, selection, provided, err := parseUpArguments(invocation.Args[1:])
+			workspace, limits, port, selection, provided, err := parseUpArguments(invocation.Args[1:])
 			if err != nil {
 				return err
 			}
-			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, selection, provided, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, port, selection, provided, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			if err := up.BindWorkspace(host, workspace); err != nil {
 				return err
 			}
@@ -187,14 +187,19 @@ func upCommand(assetHash string, host sandbox.WorkspaceHost, group *string, run 
 		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
-		Preconditions:     func(*Invocation) error { return up.CheckOptions() },
+		Preconditions: func(*Invocation) error {
+			if err := up.CheckOptions(); err != nil {
+				return err
+			}
+			return up.CheckSSHPort(ctx)
+		},
 	}, Action: func(*Invocation) error { return up.Apply(ctx) }, Help: func(invocation *Invocation) error {
 		args := slices.DeleteFunc(slices.Clone(invocation.Args), func(arg string) bool { return arg == "--help" })
 		if len(args) > 0 {
 			if err := sandbox.ValidateName(args[0]); err != nil {
 				return err
 			}
-			if _, _, _, _, err := parseUpArguments(args[1:]); err != nil {
+			if _, _, _, _, _, err := parseUpArguments(args[1:]); err != nil {
 				return err
 			}
 		}
@@ -320,7 +325,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 	return tree.Execute(args, stdout, stderr)
 }
 
-func parseUpArguments(args []string) (string, sandbox.ResourceLimits, toolchains.Set, bool, error) {
+func parseUpArguments(args []string) (string, sandbox.ResourceLimits, int, toolchains.Set, bool, error) {
 	workspace := ""
 	if len(args) > 0 && args[0] != "" && !strings.HasPrefix(args[0], "-") {
 		workspace = args[0]
@@ -328,8 +333,8 @@ func parseUpArguments(args []string) (string, sandbox.ResourceLimits, toolchains
 	}
 	selection, provided, remaining, err := parseToolchains(args)
 	if err != nil {
-		return workspace, sandbox.ResourceLimits{}, selection, provided, err
+		return workspace, sandbox.ResourceLimits{}, 0, selection, provided, err
 	}
-	limits, err := sandbox.ParseResourceLimits(remaining)
-	return workspace, limits, selection, provided, err
+	limits, port, err := sandbox.ParseUpOptions(remaining)
+	return workspace, limits, port, selection, provided, err
 }

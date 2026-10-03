@@ -19,7 +19,7 @@ func RunningSessions(ctx context.Context, container string, run process.Runner) 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var output, diagnostic bytes.Buffer
-	status, err := run(ctx, process.Request{Name: "podman", Args: []string{"exec", "--user=0:0", container, "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"}, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
+	status, err := run(ctx, process.Request{Name: "podman", Args: []string{"exec", "--user=0:0", container, manager.ExecutablePath, "sessions", "list"}, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
 	if err == nil {
 		err = ctx.Err()
 	}

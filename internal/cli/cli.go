@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
@@ -266,6 +267,16 @@ func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash str
 }
 
 func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, host sandbox.WorkspaceHost, run process.Runner, check Handler) int {
+	return runWithCatalog(args, stdout, stderr, version, assetHash, host, run, check, agentcatalog.Embedded())
+}
+
+func RunWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host, catalog agentcatalog.Catalog) int {
+	return runWithCatalog(args, stdout, stderr, version, assetHash, sandbox.WorkspaceHost{OS: host.Platform, ReadFile: host.ReadFile}, host.Run, func(invocation *Invocation) error {
+		return preflight.Run(context.Background(), host, invocation.Stdout)
+	}, catalog)
+}
+
+func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash string, host sandbox.WorkspaceHost, run process.Runner, check Handler, catalog agentcatalog.Catalog) int {
 	var group string
 	var buildSelection toolchains.Set
 	tree := Tree{Name: "sandboxed-agents", Usage: func(*Invocation) error {
@@ -273,6 +284,7 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 		group, err = controllergroup.CurrentGroup()
 		return err
 	}, Commands: []Command{
+		{Name: "agents", Commands: []Command{enableAgentCommand(&group, run, catalog)}},
 		upCommand(assetHash, host, &group, run, check),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return sandbox.List(context.Background(), group, run, invocation.Stdout)

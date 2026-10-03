@@ -1,9 +1,10 @@
 package cli_test
 
 import (
-	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 	"strings"
 	"testing"
+
+	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
 func TestInvalidControllerGroupFailsEveryCommandBeforeExternalCalls(t *testing.T) {

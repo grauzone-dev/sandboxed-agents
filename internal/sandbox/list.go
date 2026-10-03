@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
@@ -25,20 +24,58 @@ type listObjects struct {
 	volumes    []volume
 }
 
+type sandboxState string
+
+const (
+	sandboxRunning           sandboxState = "running"
+	sandboxStopped           sandboxState = "stopped"
+	sandboxVolumesOnly       sandboxState = "volumes only"
+	sandboxUpdateInterrupted sandboxState = "update interrupted"
+	sandboxOwnerConflict     sandboxState = "owner conflict"
+)
+
+type listRow struct {
+	name      string
+	state     sandboxState
+	workspace string
+	volumes   []string
+}
+
 func List(ctx context.Context, group string, run process.Runner, output io.Writer) error {
-	var containers []listContainer
-	if err := listInventory(ctx, run, []string{"ps", "--all", "--format", "json"}, &containers); err != nil {
+	objects, err := collectListObjects(ctx, group, run)
+	if err != nil {
 		return err
+	}
+	names := make([]string, 0, len(objects))
+	for name := range objects {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	rows := make([]listRow, 0, len(names))
+	for _, name := range names {
+		row, err := objects[name].inspect(ctx)
+		if err != nil {
+			return err
+		}
+		rows = append(rows, row)
+	}
+	return renderList(output, rows)
+}
+
+func collectListObjects(ctx context.Context, group string, run process.Runner) (map[string]*listObjects, error) {
+	var containers []listContainer
+	if err := queryPodmanJSON(ctx, run, []string{"ps", "--all", "--format", "json"}, "ps", &containers); err != nil {
+		return nil, err
 	}
 	if containers == nil {
-		return fmt.Errorf("invalid podman ps response")
+		return nil, fmt.Errorf("invalid podman ps response")
 	}
 	var volumes []volumeRecord
-	if err := listInventory(ctx, run, []string{"volume", "ls", "--format", "json"}, &volumes); err != nil {
-		return err
+	if err := queryPodmanJSON(ctx, run, []string{"volume", "ls", "--format", "json"}, "volume ls", &volumes); err != nil {
+		return nil, err
 	}
 	if volumes == nil {
-		return fmt.Errorf("invalid podman volume ls response")
+		return nil, fmt.Errorf("invalid podman volume ls response")
 	}
 	objects := make(map[string]*listObjects)
 	get := func(name string) *listObjects {
@@ -50,21 +87,21 @@ func List(ctx context.Context, group string, run process.Runner, output io.Write
 	seen := make(map[string]bool)
 	for _, container := range containers {
 		if len(container.Names) != 1 || container.Names[0] == "" || seen[container.Names[0]] {
-			return fmt.Errorf("invalid podman ps response")
+			return nil, fmt.Errorf("invalid podman ps response")
 		}
 		podmanName := container.Names[0]
 		seen[podmanName] = true
-		backup := strings.HasPrefix(podmanName, "sandboxed-agents-backup.")
-		prefix := "sandboxed-agents."
+		backup := strings.HasPrefix(podmanName, backupPrefix)
+		prefix := containerPrefix
 		if backup {
-			prefix = "sandboxed-agents-backup."
+			prefix = backupPrefix
 		}
 		name, relevant := listSandboxName(podmanName, prefix, group, container.Labels)
 		if !relevant {
 			continue
 		}
 		if err := ValidateName(name); err != nil {
-			return fmt.Errorf("invalid podman ps response: %w", err)
+			return nil, fmt.Errorf("invalid podman ps response: %w", err)
 		}
 		row := get(name)
 		if backup {
@@ -76,37 +113,39 @@ func List(ctx context.Context, group string, run process.Runner, output io.Write
 	clear(seen)
 	for _, record := range volumes {
 		if record.Name == "" || seen[record.Name] {
-			return fmt.Errorf("invalid podman volume ls response")
+			return nil, fmt.Errorf("invalid podman volume ls response")
 		}
 		seen[record.Name] = true
-		base, suffix, ok := splitSandboxVolume(record.Name)
+		base, target, ok := splitSandboxVolume(record.Name)
 		if !ok {
 			continue
 		}
-		name, relevant := listSandboxName(base, "sandboxed-agents.", group, record.Labels)
+		name, relevant := listSandboxName(base, containerPrefix, group, record.Labels)
 		if !relevant {
 			continue
 		}
 		if err := ValidateName(name); err != nil {
-			return fmt.Errorf("invalid podman volume ls response: %w", err)
+			return nil, fmt.Errorf("invalid podman volume ls response: %w", err)
 		}
-		get(name).volumes = append(get(name).volumes, volume{name: record.Name, target: suffix})
+		row := get(name)
+		row.volumes = append(row.volumes, volume{name: record.Name, target: target})
 	}
-	names := make([]string, 0, len(objects))
-	for name := range objects {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	return objects, nil
+}
+
+func renderList(output io.Writer, rows []listRow) error {
 	var buffer bytes.Buffer
 	writer := tabwriter.NewWriter(&buffer, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(writer, "NAME\tSTATE\tWORKSPACE\tPORT\tTOOLCHAINS\tAGENTS\tVOLUMES")
-	for _, name := range names {
-		row := objects[name]
-		state, workspace, existingVolumes, err := row.inspect(ctx)
-		if err != nil {
-			return err
+	for _, row := range rows {
+		workspace, existingVolumes := row.workspace, "-"
+		if workspace == "" {
+			workspace = "-"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t-\t-\t-\t%s\n", name, state, workspace, existingVolumes)
+		if len(row.volumes) > 0 {
+			existingVolumes = strings.Join(row.volumes, ",")
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t-\t-\t-\t%s\n", row.name, row.state, workspace, existingVolumes)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -133,84 +172,58 @@ func listSandboxName(podmanName, prefix, group string, labels map[string]string)
 }
 
 func splitSandboxVolume(name string) (string, string, bool) {
-	for _, suffix := range []string{"workspace", "home", "ssh"} {
-		if base, ok := strings.CutSuffix(name, "."+suffix); ok && strings.HasPrefix(base, "sandboxed-agents.") {
-			return base, suffix, true
+	for _, definition := range volumeDefinitions {
+		if base, ok := strings.CutSuffix(name, "."+definition.suffix); ok && strings.HasPrefix(base, containerPrefix) {
+			return base, definition.target, true
 		}
 	}
 	return "", "", false
 }
 
-func (row *listObjects) inspect(ctx context.Context) (string, string, string, error) {
-	state, workspace := "volumes only", "-"
+func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
+	result := listRow{name: row.state.name, state: sandboxVolumesOnly}
 	conflict := false
 	slices.Sort(row.containers)
-	for _, name := range row.containers {
+	for index, name := range row.containers {
 		record, err := row.state.inspectContainer(ctx, name)
 		if err != nil {
-			return "", "", "", err
+			return listRow{}, err
 		}
 		conflict = conflict || !row.state.isOwned(record.Config.Labels[OwnerLabel])
-		if state == "volumes only" || name == row.state.container {
-			state = "stopped"
+		if index == 0 || name == row.state.container {
+			result.state = sandboxStopped
 			if record.State.Running {
-				state = "running"
+				result.state = sandboxRunning
 			}
-			workspace = record.Config.Labels[WorkspaceKindLabel]
-			if workspace == "" {
-				workspace = "-"
-			}
+			result.workspace = record.Config.Labels[WorkspaceKindLabel]
 		}
 	}
 	slices.SortFunc(row.volumes, func(a, b volume) int { return strings.Compare(a.name, b.name) })
-	var volumeNames []string
 	for _, object := range row.volumes {
 		record, err := row.state.inspectVolume(ctx, object.name)
 		if err != nil {
-			return "", "", "", err
+			return listRow{}, err
 		}
 		conflict = conflict || !row.state.isOwned(record.Labels[OwnerLabel])
-		volumeNames = append(volumeNames, object.name)
-		if len(row.containers) == 0 && object.target == "workspace" {
-			workspace = "volume"
+		result.volumes = append(result.volumes, object.name)
+		if len(row.containers) == 0 && object.target == "/workspace" {
+			result.workspace = "volume"
 		}
 	}
 	slices.Sort(row.backups)
 	for _, name := range row.backups {
 		record, err := row.state.inspectContainer(ctx, name)
 		if err != nil {
-			return "", "", "", err
+			return listRow{}, err
 		}
 		conflict = conflict || !row.state.isOwned(record.Config.Labels[OwnerLabel])
-		if len(row.containers) == 0 && workspace == "-" {
-			if kind := record.Config.Labels[WorkspaceKindLabel]; kind != "" {
-				workspace = kind
-			}
+		if len(row.containers) == 0 && result.workspace == "" {
+			result.workspace = record.Config.Labels[WorkspaceKindLabel]
 		}
-		state = "update interrupted"
+		result.state = sandboxUpdateInterrupted
 	}
 	if conflict {
-		state = "owner conflict"
+		result.state = sandboxOwnerConflict
 	}
-	volumes := "-"
-	if len(volumeNames) > 0 {
-		volumes = strings.Join(volumeNames, ",")
-	}
-	return state, workspace, volumes, nil
-}
-
-func listInventory(ctx context.Context, run process.Runner, args []string, records any) error {
-	var output, diagnostic bytes.Buffer
-	status, err := run(ctx, process.Request{Name: "podman", Args: args, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
-	operation := strings.Join(args[:len(args)-2], " ")
-	if err != nil {
-		return fmt.Errorf("start podman %s: %w", operation, err)
-	}
-	if status != 0 {
-		return fmt.Errorf("podman %s failed with exit status %d: %s", operation, status, diagnostic.String())
-	}
-	if err := json.Unmarshal(output.Bytes(), records); err != nil {
-		return fmt.Errorf("decode podman %s: %w", operation, err)
-	}
-	return nil
+	return result, nil
 }

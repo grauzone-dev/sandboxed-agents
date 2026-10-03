@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/integrations"
+	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
@@ -39,7 +40,7 @@ func NewIntegrationWorkflow(name, group string, workflow integrations.Request, r
 
 func (integration *IntegrationWorkflow) CheckManager(ctx context.Context) error {
 	if _, err := RunningSessions(ctx, integration.container, integration.run); err != nil {
-		return fmt.Errorf(integrations.ManagerUnavailable, integration.name)
+		return fmt.Errorf(managerUnavailableFormat, integration.name)
 	}
 	return nil
 }
@@ -49,7 +50,7 @@ func (integration *IntegrationWorkflow) Apply(ctx context.Context) error {
 	if integration.request.NeedsTerminal() {
 		args = append(args, "-it")
 	}
-	args = append(args, integration.container, "/usr/local/bin/sandboxed-agents-manager")
+	args = append(args, integration.container, manager.ExecutablePath)
 	args = append(args, integration.request.Args()...)
 	if !integration.request.NeedsTerminal() {
 		var cancel context.CancelFunc

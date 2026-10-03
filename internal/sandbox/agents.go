@@ -22,20 +22,13 @@ func NewEnableAgent(name, group, agent string, run process.Runner, streams proce
 	return &EnableAgent{sandboxObjects: newSandboxObjects(name, group, run, streams), agent: agent}
 }
 
-func (enable *EnableAgent) CheckRunning() error {
-	if !enable.containerRunning {
-		return fmt.Errorf("sandbox %[1]s is stopped; run sandboxed-agents start %[1]s", enable.name)
-	}
-	return nil
-}
-
 func (enable *EnableAgent) CheckManager(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var output bytes.Buffer
 	status, err := enable.run(ctx, process.Request{Name: "podman", Args: enable.managerArgs("version"), Streams: process.Streams{Stdout: &output}})
 	if err != nil || status != 0 || ctx.Err() != nil || !managerVersionResponse.Match(output.Bytes()) {
-		return fmt.Errorf("manager does not answer in sandbox %[1]s; run sandboxed-agents check %[1]s for diagnosis, then sandboxed-agents restart %[1]s", enable.name)
+		return fmt.Errorf(managerUnavailableFormat, enable.name)
 	}
 	return nil
 }

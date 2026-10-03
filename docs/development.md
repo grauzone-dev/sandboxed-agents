@@ -34,7 +34,7 @@ Run the build tool again after you change the manager or the build context. A pl
 
 ### Embedded build assets
 
-The image build context lives in `build/context/`. Until #14 it deliberately has no image build content. Its only file is the `build/context/.gitkeep` placeholder, which the archive leaves out. A `.gitkeep` in a subdirectory is an ordinary asset: it is packaged and hashed.
+The image build context lives in `build/context/`: the `Containerfile` of the base image and the scripts it runs. [Images](images.md) describes what the image contains. The archive leaves out a `.gitkeep` directly in `build/context/`; a `.gitkeep` in a subdirectory is an ordinary asset and is packaged and hashed. The manager is not part of `build/context/`. `sandboxed-agents build` writes the embedded context and the manager into one temporary directory before it calls Podman.
 
 The archive holds the Linux manager and the build context. Before packaging, the build tool converts CRLF line endings to LF in every context file that has no NUL bytes, whatever its text encoding. Files that contain a NUL byte are treated as binary and packaged unchanged. `.gitattributes` also checks text files in the context out with LF. The asset hash is the SHA-256 hash of the archive, so it covers the manager and the normalized context's path names and file contents. One commit therefore yields the same hash on Linux and on Windows, whether its context files were checked out with LF or CRLF line endings.
 
@@ -56,7 +56,7 @@ The mirror workflow has its own offline test:
 bash tests/test-mirror-issue.sh
 ```
 
-The build tool's test copies the sources into a temporary directory and builds hosts for Linux and Windows. It runs only the executable for the operating system it runs on and checks the other one's file format and embedded assets without running it.
+The build tool's test copies the sources into a temporary directory and builds hosts for Linux and Windows. It converts every file of the real build context to CRLF line endings and checks that the asset hash and the embedded, normalized context stay the same. It runs only the executable for the operating system it runs on and checks the other one's file format and embedded assets without running it.
 
 ### CI
 
@@ -65,6 +65,13 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
 ### Test seams
 
 - **CLI boundary.** Tests run the public CLI as a separate process. `testutil.NewFakePrograms` places native fake `podman`, `ssh`, and `getent` programs first on `PATH`. A test scripts their output and exit statuses with `Script` and asserts the exact calls they recorded with `Calls`. For host preflight tests, the test binary enters the CLI through `cli.RunWithHost` with a read-only host adapter, which supplies fixture files, user identity, and write permissions in place of the real host. The tests still drive the public CLI as a subprocess with the fake programs. They assert that `podman` received only `--version`, that `ssh` was never called, and that the account lookup sent exactly one `getent passwd UID` query, without `MALLOC_TRACE`, `LD_DEBUG`, `LD_DEBUG_OUTPUT`, `LD_PROFILE`, or `LD_PROFILE_OUTPUT` in its environment.
+- **Image build.** Build tests run `sandboxed-agents build` from an empty working directory, with the real embedded assets, against the fake `podman`. The fake copies the build context while the build runs. The tests check that context: the recipe files have LF line endings and the manager is an executable static Linux amd64 binary. They also assert the following:
+  - the exact `podman build` call, with its tag, labels, and context directory, and no other Podman call besides the preflight's `--version`;
+  - removal of the temporary context directory after a successful and after a failed build;
+  - the same tag from two controller groups;
+  - usage errors before the preflight, a stop after a failed preflight, and a stop when the context directory cannot be created.
+
+  No offline test runs a real Podman build; #29 validates images against real Podman.
 - **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start.
 - **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks, its preparation, and its action in order. The executable has no debug commands for this.
 

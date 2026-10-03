@@ -7,7 +7,9 @@ import (
 	"io"
 	"strings"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
+	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
 type Invocation struct {
@@ -117,6 +119,15 @@ func Run(args []string, stdout, stderr io.Writer, version, assetHash string) int
 
 func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
 	tree := Tree{Name: "sandboxed-agents", Commands: []Command{
+		{Name: "build", Checks: Checks{Usage: noArguments, Preflight: func(invocation *Invocation) error {
+			return preflight.Run(context.Background(), host, invocation.Stdout)
+		}}, Action: func(invocation *Invocation) error {
+			if err := images.BuildBase(context.Background(), assetHash, host.Run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr}); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(invocation.Stdout, "Built image %s.\nExisting sandboxes keep their current image until you update them; list marks them as outdated.\n", images.BaseTag(assetHash))
+			return err
+		}},
 		{Name: "check", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return preflight.Run(context.Background(), host, invocation.Stdout)
 		}},

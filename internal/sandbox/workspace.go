@@ -18,8 +18,11 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 	if workspace == "" {
 		return nil
 	}
-	if host.OS != "linux" {
+	if host.OS == "windows" {
 		return errors.New(workspaceWindowsError)
+	}
+	if host.OS != "linux" {
+		return fmt.Errorf(workspaceUnsupportedError, host.OS)
 	}
 	path, err := absoluteHostPath(workspace)
 	if err != nil {
@@ -178,7 +181,9 @@ func (up *Up) checkWorkspace() error {
 func (up *Up) workspaceMount() string {
 	var output bytes.Buffer
 	writer := csv.NewWriter(&output)
-	_ = writer.Write([]string{"type=bind", "source=" + up.workspace, "target=/workspace"})
+	// The CSV readers of Go and Podman drop one carriage return before a line feed, so doubling it keeps the validated path intact.
+	source := strings.ReplaceAll(up.workspace, "\r\n", "\r\r\n")
+	_ = writer.Write([]string{"type=bind", "source=" + source, "target=/workspace"})
 	writer.Flush()
 	return strings.TrimSuffix(output.String(), "\n")
 }

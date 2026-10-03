@@ -22,7 +22,7 @@ It writes the host executable to `.scratch/sandboxed-agents`, or to `.scratch/sa
 - `-goos linux` or `-goos windows` selects the target host operating system. The default is the operating system you build on.
 - `-version <value>` sets the version the host executable reports. The default is `dev`. The value must be nonempty and contain no whitespace, quotes, or backslashes.
 
-The only supported architecture is amd64. The build tool sets `GOARCH`, `CGO_ENABLED`, `GOAMD64`, `GOPROXY`, and `GOSUMDB` itself, so their values in your environment do not affect the build.
+The only supported architecture is amd64. The build tool sets the Go build environment itself, including `GOOS`, `GOARCH`, `CGO_ENABLED`, `GOAMD64`, `GOFLAGS`, `GOEXPERIMENT`, `GOWORK`, `GOPROXY`, and `GOSUMDB`, so their values in your environment do not affect the build. It also sets `GOTOOLCHAIN=local`, so the `go` command on your `PATH` must itself be Go 1.27 or newer.
 
 The build tool runs three steps in this order:
 
@@ -34,9 +34,9 @@ Run the build tool again after you change the manager or the build context. A pl
 
 ### Embedded build assets
 
-The image build context lives in `build/context/`. Until #14 it deliberately has no image build content. Its only file is a `.gitkeep` placeholder, which the archive leaves out.
+The image build context lives in `build/context/`. Until #14 it deliberately has no image build content. Its only file is the `build/context/.gitkeep` placeholder, which the archive leaves out. A `.gitkeep` in a subdirectory is an ordinary asset: it is packaged and hashed.
 
-The archive holds the Linux manager and the build context. Before packaging, the build tool converts CRLF line endings to LF in every context file that is valid UTF-8 and has no NUL bytes; `.gitattributes` also checks these files out with LF. The asset hash is the SHA-256 hash of the archive, so it covers the manager and the normalized context's path names and file contents. One commit therefore yields the same hash on Linux and on Windows, whether its context files were checked out with LF or CRLF line endings.
+The archive holds the Linux manager and the build context. Before packaging, the build tool converts CRLF line endings to LF in every context file that has no NUL bytes, whatever its text encoding. Files that contain a NUL byte are treated as binary and packaged unchanged. `.gitattributes` also checks text files in the context out with LF. The asset hash is the SHA-256 hash of the archive, so it covers the manager and the normalized context's path names and file contents. One commit therefore yields the same hash on Linux and on Windows, whether its context files were checked out with LF or CRLF line endings.
 
 `sandboxed-agents version` prints the version and the asset hash. It calls neither Podman nor SSH and needs no external tools.
 
@@ -66,7 +66,7 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
 
 - **CLI boundary.** Tests run the public CLI as a separate process. `testutil.NewFakePrograms` places native fake `podman` and `ssh` programs first on `PATH`. A test scripts their output and exit statuses with `Script` and asserts the exact calls they recorded with `Calls`.
 - **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start.
-- **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks in order. The executable has no debug commands for this.
+- **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks, its preparation, and its action in order. The executable has no debug commands for this.
 
 ### Order of checks
 
@@ -82,4 +82,6 @@ A command declares its checks in `cli.Checks`. The tree runs them in this order 
 8. terminal
 9. session guard
 
-The command's action runs directly after the session guard. Later Stories add their commands to the tree and their checks at the matching step.
+A command can also set `Prepare`, which runs after the terminal check and before the session guard. It is for work that must finish before the guard, such as the builds `update` will run; no shipped command uses it yet. Nothing runs between the session guard and the command's action.
+
+A usage failure, including an unknown command or option, also prints a usage line on standard error; a failure at a later step prints only its message. Later Stories add their commands to the tree and their checks at the matching step.

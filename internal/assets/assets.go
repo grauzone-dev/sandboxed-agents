@@ -13,14 +13,15 @@ import (
 //go:embed bundle.zip
 var bundle []byte
 
+var archive, archiveError = zip.NewReader(bytes.NewReader(bundle), int64(len(bundle)))
+
 func Hash() string {
 	return fmt.Sprintf("%x", sha256.Sum256(bundle))
 }
 
 func Manager() ([]byte, error) {
-	archive, err := zip.NewReader(bytes.NewReader(bundle), int64(len(bundle)))
-	if err != nil {
-		return nil, err
+	if archiveError != nil {
+		return nil, archiveError
 	}
 	file, err := archive.Open("manager")
 	if err != nil {
@@ -31,9 +32,8 @@ func Manager() ([]byte, error) {
 }
 
 func Context() (fs.FS, error) {
-	archive, err := zip.NewReader(bytes.NewReader(bundle), int64(len(bundle)))
-	if err != nil {
-		return nil, err
+	if archiveError != nil {
+		return nil, archiveError
 	}
 	return fs.Sub(archive, "context")
 }

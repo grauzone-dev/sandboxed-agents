@@ -1,0 +1,195 @@
+package cli_test
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/grauzone-dev/sandboxed-agents/internal/cli"
+	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
+)
+
+func TestVersionPrintsVersionAndAssetHash(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	stdout, stderr, status := runCLI(t, "production", "version")
+	if status != 0 || stdout != "sandboxed-agents v1.2.3\nassets fixture-assets\n" || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if len(fakes.Calls("podman")) != 0 || len(fakes.Calls("ssh")) != 0 {
+		t.Fatal("version ran an external program")
+	}
+}
+
+func runCLI(t *testing.T, fixture string, args ...string) (string, string, int) {
+	t.Helper()
+	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestCLIProcess$", "--"}, args...)...)
+	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE="+fixture)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	status := 0
+	if err := command.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			status = exit.ExitCode()
+		} else {
+			t.Fatal(err)
+		}
+	}
+	return stdout.String(), stderr.String(), status
+}
+
+func TestCLIProcess(t *testing.T) {
+	if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "" {
+		return
+	}
+	for index, arg := range os.Args {
+		if arg == "--" {
+			args := os.Args[index+1:]
+			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "nested" {
+				tree := cli.Tree{Name: "sandboxed-agents", Commands: []cli.Command{
+					{Name: "agents", Commands: []cli.Command{
+						{Name: "login", Action: func(invocation *cli.Invocation) error {
+							fmt.Fprintln(invocation.Stdout, strings.Join(invocation.Args, " "))
+							return nil
+						}},
+					}},
+				}}
+				os.Exit(tree.Execute(args, os.Stdout, os.Stderr))
+			}
+			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "checks" {
+				os.Exit(checkTree().Execute(args, os.Stdout, os.Stderr))
+			}
+			os.Exit(cli.Run(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets"))
+		}
+	}
+	t.Fatal("missing CLI arguments")
+}
+
+func TestInvalidUsageReportsAnError(t *testing.T) {
+	for _, args := range [][]string{{}, {"unknown"}, {"--unknown"}, {"version", "--unknown"}, {"version", "extra"}, {"version", "extra", "--unknown"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			stdout, stderr, status := runCLI(t, "production", args...)
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("podman")) != 0 || len(fakes.Calls("ssh")) != 0 {
+				t.Fatal("invalid usage ran an external program")
+			}
+		})
+	}
+}
+
+func TestCommandPathPrecedesSandboxName(t *testing.T) {
+	stdout, stderr, status := runCLI(t, "nested", "agents", "login", "version", "codex")
+	if status != 0 || stdout != "version codex\n" || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+}
+
+func checkTree() cli.Tree {
+	check := func(name string) cli.Handler {
+		return func(invocation *cli.Invocation) error {
+			for _, failure := range strings.Split(os.Getenv("SANDBOXED_AGENTS_FAIL_CHECKS"), ",") {
+				if failure == name {
+					return errors.New(name + " failed")
+				}
+			}
+			if name == "usage" {
+				return nil
+			}
+			command := exec.Command("podman", "check", name)
+			command.Stdout, command.Stderr = invocation.Stdout, invocation.Stderr
+			return command.Run()
+		}
+	}
+	return cli.Tree{Name: "sandboxed-agents", Commands: []cli.Command{
+		{Name: "stand-in", Checks: cli.Checks{
+			Usage: check("usage"), Preflight: check("preflight"),
+			Sandbox: check("sandbox"), Owner: check("owner"),
+			InterruptedUpdate: check("interrupted-update"), Running: check("running"),
+			Preconditions: check("preconditions"), Terminal: check("terminal"),
+			SessionGuard: check("session-guard"),
+		}, Action: func(invocation *cli.Invocation) error {
+			command := exec.Command("ssh", append([]string{"action"}, invocation.Args...)...)
+			command.Stdout, command.Stderr = invocation.Stdout, invocation.Stderr
+			return command.Run()
+		}},
+	}}
+}
+
+func TestChecksReportEarliestFailure(t *testing.T) {
+	steps := []string{"usage", "preflight", "sandbox", "owner", "interrupted-update", "running", "preconditions", "terminal", "session-guard"}
+	for index := 0; index < len(steps)-1; index++ {
+		t.Run(steps[index]+" before "+steps[index+1], func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			fakes.Script("podman", make([]testutil.Response, index)...)
+			t.Setenv("SANDBOXED_AGENTS_FAIL_CHECKS", steps[index]+","+steps[index+1])
+			stdout, stderr, status := runCLI(t, "checks", "stand-in", "sandbox01")
+			if status == 0 || stdout != "" || !strings.Contains(stderr, steps[index]+" failed") || strings.Contains(stderr, steps[index+1]+" failed") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			var expected []testutil.Call
+			for prior := 1; prior < index; prior++ {
+				expected = append(expected, testutil.Call{Args: []string{"check", steps[prior]}})
+			}
+			if got := fakes.Calls("podman"); !reflect.DeepEqual(got, expected) {
+				t.Fatalf("calls=%v want=%v", got, expected)
+			}
+			if len(fakes.Calls("ssh")) != 0 {
+				t.Fatal("a rejected command ran its action")
+			}
+		})
+	}
+}
+
+func TestSuccessfulChecksReachTheActionInOrder(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	fakes.Script("podman",
+		testutil.Response{Stdout: "preflight\n"},
+		testutil.Response{Stdout: "sandbox\n"},
+		testutil.Response{Stdout: "owner\n"},
+		testutil.Response{Stdout: "interrupted-update\n"},
+		testutil.Response{Stdout: "running\n"},
+		testutil.Response{Stdout: "preconditions\n"},
+		testutil.Response{Stdout: "terminal\n"},
+		testutil.Response{Stdout: "session-guard\n"},
+	)
+	fakes.Script("ssh", testutil.Response{Stdout: "completed\n"})
+	t.Setenv("SANDBOXED_AGENTS_FAIL_CHECKS", "")
+	stdout, stderr, status := runCLI(t, "checks", "stand-in", "sandbox01")
+	if status != 0 || stdout != "preflight\nsandbox\nowner\ninterrupted-update\nrunning\npreconditions\nterminal\nsession-guard\ncompleted\n" || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	want := []testutil.Call{
+		{Args: []string{"check", "preflight"}},
+		{Args: []string{"check", "sandbox"}},
+		{Args: []string{"check", "owner"}},
+		{Args: []string{"check", "interrupted-update"}},
+		{Args: []string{"check", "running"}},
+		{Args: []string{"check", "preconditions"}},
+		{Args: []string{"check", "terminal"}},
+		{Args: []string{"check", "session-guard"}},
+	}
+	if got := fakes.Calls("podman"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls=%v want=%v", got, want)
+	}
+	if got := fakes.Calls("ssh"); !reflect.DeepEqual(got, []testutil.Call{{Args: []string{"action", "sandbox01"}}}) {
+		t.Fatalf("calls=%v", got)
+	}
+}
+
+func TestActionFailureUsesANonzeroStatus(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	fakes.Script("podman", make([]testutil.Response, 8)...)
+	fakes.Script("ssh", testutil.Response{Stderr: "refused\n", ExitCode: 7})
+	t.Setenv("SANDBOXED_AGENTS_FAIL_CHECKS", "")
+	stdout, stderr, status := runCLI(t, "checks", "stand-in", "sandbox01")
+	if status != 1 || stdout != "" || !strings.Contains(stderr, "refused") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+}

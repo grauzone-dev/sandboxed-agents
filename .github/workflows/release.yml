@@ -35,11 +35,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.27.1'
+      - run: |
+          mkdir -p .scratch
+          go build -o .scratch/release-check ./tools/release
       - id: check
         run: |
-          if go run ./tools/release -tag "$RELEASE_TAG" -check-tag; then
+          if .scratch/release-check -tag "$RELEASE_TAG" -check-tag; then
             echo 'preview=true' >> "$GITHUB_OUTPUT"
           else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              exit "$status"
+            fi
             echo 'preview=false' >> "$GITHUB_OUTPUT"
           fi
 

@@ -6,13 +6,14 @@ import (
 	"debug/elf"
 	"debug/pe"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
 func releaseTool(t *testing.T) string {
@@ -33,7 +34,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 	tool := releaseTool(t)
 	root := filepath.Join("..", "..")
 	source := filepath.Join(t.TempDir(), "source")
-	copySource(t, root, source)
+	testutil.CopySource(t, root, source)
 	tag := "v1.0.0-preview.20261003.1"
 	outputs := []string{filepath.Join(t.TempDir(), "first"), t.TempDir()}
 	var first map[string][]byte
@@ -112,39 +113,6 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 			t.Fatalf("Windows architecture = %v", windows.Machine)
 		}
 		windows.Close()
-	}
-}
-
-func copySource(t *testing.T, source, target string) {
-	t.Helper()
-	if err := os.MkdirAll(target, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"go.mod", "cmd", "internal", "tools", "build"} {
-		err := filepath.WalkDir(filepath.Join(source, name), func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			relative, err := filepath.Rel(source, path)
-			if err != nil {
-				return err
-			}
-			destination := filepath.Join(target, relative)
-			if entry.IsDir() {
-				return os.MkdirAll(destination, 0755)
-			}
-			if strings.HasSuffix(path, "_test.go") || entry.Name() == "bundle.zip" {
-				return nil
-			}
-			contents, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(destination, contents, 0644)
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 
@@ -259,7 +227,7 @@ func TestReleasePublishesNothingWhenRepeatedBinariesDiffer(t *testing.T) {
 		t.Fatalf("build varying Go wrapper: %v\n%s", err, output)
 	}
 	source := filepath.Join(t.TempDir(), "source")
-	copySource(t, filepath.Join("..", ".."), source)
+	testutil.CopySource(t, filepath.Join("..", ".."), source)
 	outputDir := filepath.Join(t.TempDir(), "release")
 	command = exec.Command(tool, "-tag", "v1.0.0-preview.20261003.1", "-output", outputDir)
 	command.Dir = source

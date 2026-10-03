@@ -8,7 +8,6 @@ import (
 	"debug/pe"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +31,7 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 		t.Fatalf("build tool: %v\n%s", err, output)
 	}
 	source := filepath.Join(dir, "source")
-	copySource(t, root, source)
+	testutil.CopySource(t, root, source)
 	contextPath := filepath.Join(source, "build", "context", "Containerfile")
 	if err := os.WriteFile(contextPath, []byte("FROM test\nRUN true\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -182,39 +181,5 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 	}
 	if calls := fakes.Calls("ssh"); len(calls) != 0 {
 		t.Fatalf("unexpected SSH calls: %v", calls)
-	}
-}
-
-func copySource(t *testing.T, source, target string) {
-	t.Helper()
-	if err := os.MkdirAll(target, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"go.mod", "cmd", "internal", "tools", "build"} {
-		origin := filepath.Join(source, name)
-		err := filepath.WalkDir(origin, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			relative, err := filepath.Rel(source, path)
-			if err != nil {
-				return err
-			}
-			destination := filepath.Join(target, relative)
-			if entry.IsDir() {
-				return os.MkdirAll(destination, 0755)
-			}
-			if strings.HasSuffix(path, "_test.go") || entry.Name() == "bundle.zip" {
-				return nil
-			}
-			contents, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(destination, contents, 0644)
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
 	}
 }

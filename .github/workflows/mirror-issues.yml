@@ -1,0 +1,55 @@
+name: Mirror issues
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Source issue number
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: mirror-issue-${{ github.event.issue.number || inputs.issue || 'all' }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  mirror:
+    if: github.event_name == 'workflow_dispatch' || contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PLANNING_SYNC_TOKEN }}
+      SOURCE_REPO: ${{ github.repository }}
+      EVENT_ISSUE: ${{ github.event.issue.number }}
+      INPUT_ISSUE: ${{ inputs.issue }}
+    steps:
+      - name: Check token
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            printf 'PLANNING_SYNC_TOKEN secret is required to mirror issues.\n' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Sync issues
+        shell: bash
+        run: |
+          issue=${EVENT_ISSUE:-$INPUT_ISSUE}
+          if [[ -n "$issue" ]]; then
+            bash .github/scripts/mirror-issue.sh "$issue"
+          else
+            issues=$(gh api --method GET --paginate "repos/$SOURCE_REPO/issues" \
+              -f state=all -f sort=created -f direction=asc -f per_page=100 \
+              | jq -s '[.[][] | select(.pull_request == null)] | sort_by(.created_at, .number) | .[].number')
+            while IFS= read -r number; do
+              [[ -n "$number" ]] || continue
+              bash .github/scripts/mirror-issue.sh "$number"
+            done <<< "$issues"
+          fi

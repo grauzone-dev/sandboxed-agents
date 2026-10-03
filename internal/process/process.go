@@ -14,8 +14,6 @@ type Streams struct {
 type Request struct {
 	Name    string
 	Args    []string
-	Dir     string
-	Env     []string
 	Streams Streams
 }
 

@@ -79,6 +79,8 @@ func TestBuildEmbedsLinuxManagerAndNormalizedContextForBothHosts(t *testing.T) {
 	}
 	native, first := build(runtime.GOOS)
 	version := checkVersion(native, first)
+	t.Setenv("GOFLAGS", "-ldflags=-s")
+	t.Setenv("GOEXPERIMENT", "not-a-valid-experiment")
 	native, unchanged := build(runtime.GOOS)
 	if version != checkVersion(native, unchanged) {
 		t.Fatal("unchanged rebuild changed the printed asset hash")

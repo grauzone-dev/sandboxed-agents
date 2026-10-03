@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"unicode/utf8"
 )
 
 func Package(manager []byte, context fs.FS) ([]byte, error) {
@@ -30,7 +29,7 @@ func Package(manager []byte, context fs.FS) ([]byte, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || entry.Name() == ".gitkeep" {
+		if entry.IsDir() || name == ".gitkeep" {
 			return nil
 		}
 		if !entry.Type().IsRegular() {
@@ -40,7 +39,7 @@ func Package(manager []byte, context fs.FS) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		if utf8.Valid(content) && !bytes.ContainsRune(content, 0) {
+		if !bytes.ContainsRune(content, 0) {
 			content = []byte(strings.ReplaceAll(string(content), "\r\n", "\n"))
 		}
 		return write("context/"+name, content)

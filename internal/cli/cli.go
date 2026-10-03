@@ -31,6 +31,7 @@ type Command struct {
 	Name     string
 	Commands []Command
 	Checks   Checks
+	Prepare  Handler
 	Action   Handler
 }
 
@@ -55,7 +56,11 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		if selected == nil {
-			return tree.failure(stderr, path, fmt.Errorf("unknown command %q", args[0]), true)
+			message := "unknown command"
+			if strings.HasPrefix(args[0], "-") {
+				message = "unknown option"
+			}
+			return tree.failure(stderr, path, fmt.Errorf("%s %q", message, args[0]), true)
 		}
 		path += " " + selected.Name
 		args = args[1:]
@@ -65,8 +70,12 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 		return tree.failure(stderr, path, errors.New("missing command"), true)
 	}
 	invocation := &Invocation{Args: args, Stdout: stdout, Stderr: stderr}
+	if selected.Checks.Usage != nil {
+		if err := selected.Checks.Usage(invocation); err != nil {
+			return tree.failure(stderr, path, err, true)
+		}
+	}
 	steps := []Handler{
-		selected.Checks.Usage,
 		selected.Checks.Preflight,
 		selected.Checks.Sandbox,
 		selected.Checks.Owner,
@@ -74,14 +83,15 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 		selected.Checks.Running,
 		selected.Checks.Preconditions,
 		selected.Checks.Terminal,
+		selected.Prepare,
 		selected.Checks.SessionGuard,
 	}
-	for index, check := range steps {
+	for _, check := range steps {
 		if check == nil {
 			continue
 		}
 		if err := check(invocation); err != nil {
-			return tree.failure(stderr, path, err, index == 0)
+			return tree.failure(stderr, path, err, false)
 		}
 	}
 	if err := selected.Action(invocation); err != nil {

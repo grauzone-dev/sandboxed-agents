@@ -43,3 +43,52 @@ func TestRegisteredCommandCanUseInjectedProcesses(t *testing.T) {
 		t.Fatalf("requests = %#v", requests)
 	}
 }
+
+func TestVersionPrintsManagerVersionWithoutRunningProcesses(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := manager.New("v0.1.2", func(context.Context, process.Request) (int, error) {
+		t.Fatal("version invoked a process")
+		return 1, nil
+	})
+	code := app.Run(context.Background(), []string{"version"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if got := stdout.String(); got != "sandboxed-agents-manager v0.1.2\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestInvalidUsageFailsWithoutRunningProcesses(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{name: "missing command"},
+		{name: "unknown command", args: []string{"unknown"}},
+		{name: "unknown global option", args: []string{"--unknown"}},
+		{name: "unknown version option", args: []string{"version", "--unknown"}},
+		{name: "extra version argument", args: []string{"version", "extra"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := manager.New("v0.1.2", func(context.Context, process.Request) (int, error) {
+				t.Fatal("invalid usage invoked a process")
+				return 1, nil
+			})
+			code := app.Run(context.Background(), test.args, process.Streams{Stdout: &stdout, Stderr: &stderr})
+			if code == 0 {
+				t.Fatal("invalid usage returned zero")
+			}
+			if got := stderr.String(); got == "" {
+				t.Fatal("invalid usage produced no standard error message")
+			}
+			if got := stdout.String(); got != "" {
+				t.Fatalf("stdout = %q, want empty", got)
+			}
+		})
+	}
+}

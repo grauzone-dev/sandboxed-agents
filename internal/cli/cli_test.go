@@ -60,6 +60,15 @@ func TestCLIProcess(t *testing.T) {
 				}}
 				os.Exit(tree.Execute(args, os.Stdout, os.Stderr))
 			}
+			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "prepare" {
+				tree := checkTree()
+				tree.Commands[0].Prepare = func(invocation *cli.Invocation) error {
+					command := exec.Command("podman", append([]string{"build"}, invocation.Args...)...)
+					command.Stdout, command.Stderr = invocation.Stdout, invocation.Stderr
+					return command.Run()
+				}
+				os.Exit(tree.Execute(args, os.Stdout, os.Stderr))
+			}
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "checks" {
 				os.Exit(checkTree().Execute(args, os.Stdout, os.Stderr))
 			}
@@ -191,5 +200,81 @@ func TestActionFailureUsesANonzeroStatus(t *testing.T) {
 	stdout, stderr, status := runCLI(t, "checks", "stand-in", "sandbox01")
 	if status != 1 || stdout != "" || !strings.Contains(stderr, "refused") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+}
+
+func TestPreparationFinishesBeforeTheFinalGuardAndAction(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := append(make([]testutil.Response, 7), testutil.Response{Stdout: "built\n"}, testutil.Response{Stdout: "guarded\n"})
+	fakes.Script("podman", responses...)
+	fakes.Script("ssh", testutil.Response{Stdout: "changed\n"})
+	t.Setenv("SANDBOXED_AGENTS_FAIL_CHECKS", "")
+	stdout, stderr, status := runCLI(t, "prepare", "stand-in", "sandbox01")
+	if status != 0 || stdout != "built\nguarded\nchanged\n" || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	if len(calls) != 9 || !reflect.DeepEqual(calls[7:], []testutil.Call{{Args: []string{"build", "sandbox01"}}, {Args: []string{"check", "session-guard"}}}) {
+		t.Fatalf("calls=%v", calls)
+	}
+	if got := fakes.Calls("ssh"); !reflect.DeepEqual(got, []testutil.Call{{Args: []string{"action", "sandbox01"}}}) {
+		t.Fatalf("calls=%v", got)
+	}
+}
+
+func TestFailedPreparationSkipsTheFinalGuardAndAction(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := append(make([]testutil.Response, 7), testutil.Response{Stderr: "build failed\n", ExitCode: 7})
+	fakes.Script("podman", responses...)
+	t.Setenv("SANDBOXED_AGENTS_FAIL_CHECKS", "")
+	stdout, stderr, status := runCLI(t, "prepare", "stand-in", "sandbox01")
+	if status == 0 || stdout != "" || !strings.Contains(stderr, "build failed") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	if len(calls) != 8 || !reflect.DeepEqual(calls[7].Args, []string{"build", "sandbox01"}) {
+		t.Fatalf("calls=%v", calls)
+	}
+	if len(fakes.Calls("ssh")) != 0 {
+		t.Fatal("failed preparation ran its action")
+	}
+}
+
+func TestFinalGuardCanRefuseAnActionAfterPreparation(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	responses := append(make([]testutil.Response, 7), testutil.Response{Stdout: "built\n"})
+	fakes.Script("podman", responses...)
+	t.Setenv("SANDBOXED_AGENTS_FAIL_CHECKS", "session-guard")
+	stdout, stderr, status := runCLI(t, "prepare", "stand-in", "sandbox01")
+	if status == 0 || stdout != "built\n" || !strings.Contains(stderr, "session-guard failed") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")
+	if len(calls) != 8 || !reflect.DeepEqual(calls[7].Args, []string{"build", "sandbox01"}) {
+		t.Fatalf("calls=%v", calls)
+	}
+	if len(fakes.Calls("ssh")) != 0 {
+		t.Fatal("a rejected command ran its action")
+	}
+}
+
+func TestUnknownOptionsAreNamedAsOptions(t *testing.T) {
+	for _, test := range []struct {
+		fixture string
+		args    []string
+	}{
+		{fixture: "production", args: []string{"--unknown"}},
+		{fixture: "nested", args: []string{"agents", "--unknown"}},
+	} {
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			stdout, stderr, status := runCLI(t, test.fixture, test.args...)
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "unknown option") || !strings.Contains(stderr, "Usage:") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("podman")) != 0 || len(fakes.Calls("ssh")) != 0 {
+				t.Fatal("invalid usage ran an external program")
+			}
+		})
 	}
 }

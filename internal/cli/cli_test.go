@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/cli"
+	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
@@ -71,6 +73,24 @@ func TestCLIProcess(t *testing.T) {
 			}
 			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "checks" {
 				os.Exit(checkTree().Execute(args, os.Stdout, os.Stderr))
+			}
+			if os.Getenv("SANDBOXED_AGENTS_CLI_FIXTURE") == "linux-preflight" {
+				host := preflight.LocalHost()
+				host.UID, host.Username = 1000, "fixture"
+				if os.Getenv("SANDBOXED_AGENTS_PREFLIGHT_ROOT") != "" {
+					host.UID = 0
+				}
+				root := os.Getenv("SANDBOXED_AGENTS_HOST_FIXTURE")
+				host.ReadFile = func(path string) ([]byte, error) { return os.ReadFile(filepath.Join(root, path)) }
+				host.Writable = func(path string) bool {
+					info, err := os.Stat(filepath.Join(root, path))
+					if err != nil {
+						return false
+					}
+					mode := os.Getenv("SANDBOXED_AGENTS_NO_DELEGATION")
+					return mode == "" || (mode == "directory" && !info.IsDir())
+				}
+				os.Exit(cli.RunWithHost(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets", host))
 			}
 			os.Exit(cli.Run(args, os.Stdout, os.Stderr, "v1.2.3", "fixture-assets"))
 		}

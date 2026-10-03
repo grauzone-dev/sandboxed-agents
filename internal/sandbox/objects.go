@@ -37,6 +37,7 @@ type sandboxObjects struct {
 	backupOwner      string
 	containerOwner   string
 	containerRunning bool
+	containerLabels  map[string]string
 }
 
 func newSandboxObjects(name string, run process.Runner, streams process.Streams) *sandboxObjects {
@@ -65,6 +66,7 @@ func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
 		}
 		state.containerOwner = record.Config.Labels[OwnerLabel]
 		state.containerRunning = record.State.Running
+		state.containerLabels = record.Config.Labels
 	}
 	for index := range state.volumes {
 		state.volumes[index].exists, err = state.objectExists(ctx, "volume", state.volumes[index].name)

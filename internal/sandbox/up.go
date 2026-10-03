@@ -11,10 +11,11 @@ import (
 type Up struct {
 	*sandboxObjects
 	assetHash string
+	limits    ResourceLimits
 }
 
-func NewUp(name, assetHash string, run process.Runner, streams process.Streams) *Up {
-	return &Up{sandboxObjects: newSandboxObjects(name, run, streams), assetHash: assetHash}
+func NewUp(name, assetHash string, limits ResourceLimits, run process.Runner, streams process.Streams) *Up {
+	return &Up{sandboxObjects: newSandboxObjects(name, run, streams), assetHash: assetHash, limits: limits}
 }
 
 func (up *Up) Apply(ctx context.Context) error {
@@ -30,6 +31,13 @@ func (up *Up) Apply(ctx context.Context) error {
 	}
 	_, err := fmt.Fprintf(up.streams.Stdout, "Sandbox %s is running.\n", up.name)
 	return err
+}
+
+func (up *Up) CheckResourceLimits() error {
+	if !up.containerExists {
+		return nil
+	}
+	return up.limits.checkRecorded(up.name, up.containerLabels)
 }
 
 func (up *Up) createSandbox(ctx context.Context) error {
@@ -62,8 +70,8 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		"--label", NameLabel + "=" + up.name,
 		"--label", WorkspaceKindLabel + "=volume",
 		"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
-		"--memory=8g", "--cpus=4", "--pids-limit=2048", "--shm-size=1g",
 	}
+	args = append(args, up.limits.createArguments()...)
 	for _, volume := range up.volumes {
 		args = append(args, "--mount", "type=volume,source="+volume.name+",target="+volume.target)
 	}

@@ -28,7 +28,7 @@ func integrationCommand(kind string, group *string, run process.Runner) Command 
 			if err != nil {
 				return err
 			}
-			state = sandbox.NewIntegrationWorkflow(invocation.Args[0], *group, request, run, process.Streams{Stdin: os.Stdin, Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			state = sandbox.NewIntegrationWorkflow(invocation.Args[0], *group, request, run, process.Streams{Stdin: invocation.Stdin, Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Sandbox:           func(*Invocation) error { return state.CheckContainer(ctx) },
@@ -36,8 +36,8 @@ func integrationCommand(kind string, group *string, run process.Runner) Command 
 		InterruptedUpdate: func(*Invocation) error { return state.CheckInterruptedUpdate() },
 		Running:           func(*Invocation) error { return state.CheckRunning() },
 		Preconditions:     func(*Invocation) error { return state.CheckManager(ctx) },
-		Terminal: func(*Invocation) error {
-			if request.NeedsTerminal() && (!platform.IsTerminal(os.Stdin) || !platform.IsTerminal(os.Stdout)) {
+		Terminal: func(invocation *Invocation) error {
+			if request.NeedsTerminal() && (!platform.IsTerminal(invocation.Stdin) || !platform.IsTerminal(os.Stdout)) {
 				return errors.New(integrations.NeedsTerminal)
 			}
 			return nil

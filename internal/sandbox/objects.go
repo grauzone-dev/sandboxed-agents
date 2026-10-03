@@ -115,6 +115,13 @@ func (state *sandboxObjects) CheckContainer(ctx context.Context) error {
 	return fmt.Errorf("sandbox %s does not exist in this controller group", state.name)
 }
 
+func (state *sandboxObjects) CheckRunning() error {
+	if !state.containerRunning {
+		return fmt.Errorf(stoppedSandboxFormat, state.name)
+	}
+	return nil
+}
+
 func (state *sandboxObjects) isOwned(owner string) bool { return owner == state.group }
 
 func (state *sandboxObjects) ownerConflicts() []string {

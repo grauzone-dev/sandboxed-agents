@@ -13,11 +13,6 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-type listContainer struct {
-	Names  []string
-	Labels map[string]string
-}
-
 type listObjects struct {
 	state      *sandboxObjects
 	containers []string
@@ -66,12 +61,9 @@ func List(ctx context.Context, group string, run process.Runner, output io.Write
 }
 
 func collectListObjects(ctx context.Context, group string, run process.Runner) (map[string]*listObjects, error) {
-	var containers []listContainer
-	if err := queryPodmanJSON(ctx, run, []string{"ps", "--all", "--format", "json"}, "ps", &containers); err != nil {
+	containers, err := queryContainers(ctx, run)
+	if err != nil {
 		return nil, err
-	}
-	if containers == nil {
-		return nil, fmt.Errorf("invalid podman ps response")
 	}
 	var volumes []volumeRecord
 	if err := queryPodmanJSON(ctx, run, []string{"volume", "ls", "--format", "json"}, "volume ls", &volumes); err != nil {
@@ -87,13 +79,8 @@ func collectListObjects(ctx context.Context, group string, run process.Runner) (
 		}
 		return objects[name]
 	}
-	seen := make(map[string]bool)
 	for _, container := range containers {
-		if len(container.Names) != 1 || container.Names[0] == "" || seen[container.Names[0]] {
-			return nil, fmt.Errorf("invalid podman ps response")
-		}
 		podmanName := container.Names[0]
-		seen[podmanName] = true
 		backup := strings.HasPrefix(podmanName, backupPrefix)
 		prefix := containerPrefix
 		if backup {
@@ -113,7 +100,7 @@ func collectListObjects(ctx context.Context, group string, run process.Runner) (
 			row.containers = append(row.containers, podmanName)
 		}
 	}
-	clear(seen)
+	seen := make(map[string]bool)
 	for _, record := range volumes {
 		if record.Name == "" || seen[record.Name] {
 			return nil, fmt.Errorf("invalid podman volume ls response")

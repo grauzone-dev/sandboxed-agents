@@ -17,13 +17,17 @@ podman exec --interactive --tty --user=1000:1000 --workdir=/workspace sandboxed-
 ```
 
 - `--interactive` keeps standard input connected, with and without a terminal.
-- `--tty` is passed only when the standard input of `shell` is a terminal ([Without a terminal](#without-a-terminal)).
+- `--tty` is passed only when the standard input of `shell` is a terminal ([Terminal detection](#terminal-detection)).
 - `--user=1000:1000` runs the shell as `agent`, UID and GID 1000. The user is given as numbers and is always stated, so the shell does not inherit the container's start user, which is root ([Execution identities](sandboxes.md#execution-identities), ADR-0006).
 - `sandboxed-agents.GROUP.NAME` is the sandbox's container in the current controller group, for example `sandboxed-agents.default.agent01` ([Podman names and labels](sandboxes.md#podman-names-and-labels)).
 
 On Windows, the call starts with `--connection` and the selected Podman machine ([Target on Windows](#target-on-windows)).
 
 `shell` starts nothing on its own. On a stopped sandbox it fails and names `sandboxed-agents start NAME` ([Refusals](#refusals)).
+
+### Terminal detection
+
+`shell` decides from its standard input alone whether it has a terminal. On Linux, standard input is a terminal when it answers the terminal attribute query `TCGETS`. On Windows, it is a terminal when `GetConsoleMode` accepts it, as it does for a console input handle; input that arrives as a pipe is no terminal. Standard output and standard error do not count: with a terminal as input and output redirected to a file, `shell` passes `--tty`, and with input from a file or pipe it passes no `--tty`, also when output goes to a terminal.
 
 ### With a terminal
 
@@ -43,7 +47,7 @@ A missing terminal is therefore never an error for `shell`. This version has no 
 
 `shell` exits with the exit status of `podman exec`. When the shell starts, that is the shell's own exit status: `exit 7` in the shell makes `shell` exit with status 7. When Podman cannot run the shell, its own exit statuses apply, such as 125 for an error in Podman itself ([podman-exec(1), Exit Status](https://docs.podman.io/en/latest/markdown/podman-exec.1.html#exit-status)).
 
-`shell` and `agents run` are the only commands that pass through another program's exit status. When `shell` refuses before it opens the shell, it exits with status 1, which a shell can also return. A non-zero status alone therefore does not tell whether the shell ran.
+`shell` is the only command of this version that passes through another program's exit status; `agents run`, planned for the first version, is to do the same. When `shell` refuses before it opens the shell, it exits with status 1, which a shell can also return. A non-zero status alone therefore does not tell whether the shell ran.
 
 ### Command line
 

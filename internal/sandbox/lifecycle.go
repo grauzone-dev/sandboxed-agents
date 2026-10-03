@@ -30,10 +30,6 @@ func NewLifecycle(name, group string, action LifecycleAction, force bool, run pr
 	return &Lifecycle{sandboxObjects: newSandboxObjects(name, group, run, streams), stops: action != Start, starts: action != Stop, force: force}
 }
 
-func (lifecycle *Lifecycle) CheckSandbox(ctx context.Context) error {
-	return lifecycle.CheckContainer(ctx)
-}
-
 func (lifecycle *Lifecycle) start(ctx context.Context) error {
 	if !lifecycle.containerRunning {
 		if err := lifecycle.runPodman(ctx, "start", lifecycle.container); err != nil {

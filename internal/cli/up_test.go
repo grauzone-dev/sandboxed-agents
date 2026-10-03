@@ -190,7 +190,7 @@ func sandboxObjectResponses(containerOwner *string, running bool, volumes map[st
 
 func assertNoSSH(t *testing.T, fakes *testutil.FakePrograms) {
 	t.Helper()
-	if len(fakes.Calls("ssh")) != 0 {
+	if len(fakes.Calls("ssh")) != 0 || len(fakes.Calls("ssh-keygen")) != 0 {
 		t.Fatal("command attempted SSH")
 	}
 }

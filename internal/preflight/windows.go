@@ -89,7 +89,7 @@ func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) R
 	_, keygenErr := exec.LookPath("ssh-keygen")
 	report.add("ssh_keygen", true, keygenErr == nil)
 	if machine.Running && machine.Provider == "wsl" {
-		output, ok := readPodman(ctx, run, "machine", "ssh", machine.Name, "sh", "-c", "'if [ -e /etc/wsl.conf ] || [ -L /etc/wsl.conf ]; then cat /etc/wsl.conf; fi'")
+		output, ok := readMachineShell(ctx, run, machine.Name, "if [ -e /etc/wsl.conf ] || [ -L /etc/wsl.conf ]; then cat /etc/wsl.conf; fi")
 		if ok {
 			report.AutomountRoot, ok = automountRoot(string(output))
 		}
@@ -184,8 +184,14 @@ func reportMachineService(ctx context.Context, run process.Runner, machine machi
 	for _, controller := range info.Host.CgroupControllers {
 		controllers[controller] = true
 	}
-	cgroupsKnown := infoOK && info.Host.CgroupVersion != ""
-	report.add("cgroups", cgroupsKnown, cgroupsKnown && info.Host.CgroupVersion == "v2" && controllers["cpu"] && controllers["memory"] && controllers["pids"])
+	availabilityKnown := infoOK && info.Host.CgroupVersion != ""
+	available := availabilityKnown && info.Host.CgroupVersion == "v2" && controllers["cpu"] && controllers["memory"] && controllers["pids"]
+	var delegationKnown, delegated bool
+	if machine.Running && machine.Provider == "wsl" && (machine.Rootful == nil || !*machine.Rootful) {
+		delegationKnown, delegated = windowsCgroupDelegation(ctx, run, machine.Name)
+	}
+	cgroupsKnown := availabilityKnown && !available || delegationKnown && !delegated || availabilityKnown && delegationKnown
+	report.add("cgroups", cgroupsKnown, available && delegated)
 }
 
 func readPodman(ctx context.Context, run process.Runner, args ...string) ([]byte, bool) {

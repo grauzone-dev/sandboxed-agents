@@ -1,18 +1,22 @@
 package cli_test
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
 func removeObjectResponses(containerOwner *string, running bool, volumes map[string]string, backupOwner *string) []testutil.Response {
-	return upObjectResponses(containerOwner, running, volumes, backupOwner)[1:]
+	return sandboxObjectResponses(containerOwner, running, volumes, backupOwner)
 }
 
 func TestRemoveKeepsVolumesOfAStoppedSandbox(t *testing.T) {
@@ -32,7 +36,7 @@ func TestRemoveKeepsVolumesOfAStoppedSandbox(t *testing.T) {
 			t.Fatalf("unexpected mutation: %v", call)
 		}
 	}
-	assertUpNoSSH(t, fakes)
+	assertNoSSH(t, fakes)
 }
 
 func TestRemoveDeletesOnlyOwnedVolumesWhenAsked(t *testing.T) {
@@ -60,7 +64,7 @@ func TestRemoveDeletesOnlyOwnedVolumesWhenAsked(t *testing.T) {
 			if got := removeMutations(t, fakes); !reflect.DeepEqual(got, want) {
 				t.Fatalf("mutations=%v want=%v", got, want)
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -103,7 +107,7 @@ func TestRemoveHandlesEverySubsetOfKeptVolumes(t *testing.T) {
 				if got := removeMutations(t, fakes); !reflect.DeepEqual(got, want) {
 					t.Fatalf("mutations=%v want=%v", got, want)
 				}
-				assertUpNoSSH(t, fakes)
+				assertNoSSH(t, fakes)
 			})
 		}
 	}
@@ -149,7 +153,7 @@ func TestRemoveRefusesForeignObjectsAndInterruptedUpdates(t *testing.T) {
 						if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, name) || !strings.Contains(stderr, "Podman") || strings.Contains(stderr, "interrupted update") {
 							t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 						}
-						assertUpReadOnly(t, fakes)
+						assertPodmanReadOnly(t, fakes)
 					})
 				}
 			}
@@ -173,7 +177,7 @@ func TestRemoveRefusesForeignObjectsAndInterruptedUpdates(t *testing.T) {
 				if status == 0 || !strings.Contains(stderr, "update agent01") || !strings.Contains(stderr, "interrupted update") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				assertUpReadOnly(t, fakes)
+				assertPodmanReadOnly(t, fakes)
 			})
 		}
 	}
@@ -186,7 +190,7 @@ func TestRemoveRejectsUnknownSandboxesAndUsage(t *testing.T) {
 	if status == 0 || !strings.Contains(stderr, "agent01") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
-	assertUpReadOnly(t, fakes)
+	assertPodmanReadOnly(t, fakes)
 	for _, args := range [][]string{{"remove"}, {"remove", "-x"}, {"remove", "a/b"}, {"remove", "agent01", "extra"}, {"remove", "agent01", "--unknown"}, {"remove", "agent01", "--force", "--force"}, {"remove", "agent01", "--volumes", "--volumes"}, {"remove", "agent01", "--volumes=true"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
@@ -281,7 +285,7 @@ func TestRemoveGuardsRunningSessionsAndStopsBeforeRemoving(t *testing.T) {
 				if !allowed && !strings.Contains(stderr, "--force") {
 					t.Fatalf("stderr=%q", stderr)
 				}
-				assertUpNoSSH(t, fakes)
+				assertNoSSH(t, fakes)
 			})
 		}
 	}
@@ -328,7 +332,7 @@ func TestRemovePreservesABoundWorkspaceAndHandlesItsUnusedVolume(t *testing.T) {
 					t.Fatalf("Podman touched host path: %v", call)
 				}
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -383,7 +387,7 @@ func TestRefusedRemoveLeavesTheHostSSHSetupUntouched(t *testing.T) {
 					t.Fatalf("refusal mutated Podman: %v", call)
 				}
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -431,5 +435,57 @@ func TestRemoveReportsForeignVolumesBeforeAnInterruptedUpdateEvenWithVolumes(t *
 	if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, "sandboxed-agents.default.agent01.workspace") || strings.Contains(stderr, "interrupted update") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
-	assertUpReadOnly(t, fakes)
+	assertPodmanReadOnly(t, fakes)
+}
+
+func TestRemoveNamesEveryForeignObjectIncludingTheBackup(t *testing.T) {
+	for _, deleteVolumes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delete-%t", deleteVolumes), func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			owned := "default"
+			foreign := "foreign"
+			fakes.Script("podman", removeObjectResponses(&owned, true, map[string]string{"workspace": foreign, "home": ""}, &foreign)...)
+			args := []string{"remove", "agent01", "--force"}
+			if deleteVolumes {
+				args = append(args, "--volumes")
+			}
+			stdout, stderr, status := runCLI(t, "production", args...)
+			if status == 0 || !strings.Contains(stderr, "owner conflict") || !strings.Contains(stderr, "Podman") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			for _, name := range []string{"sandboxed-agents.default.agent01.workspace", "sandboxed-agents.default.agent01.home", "sandboxed-agents-backup.default.agent01"} {
+				if !strings.Contains(stderr, name) {
+					t.Fatalf("missing foreign object %s: %q", name, stderr)
+				}
+			}
+			assertPodmanReadOnly(t, fakes)
+		})
+	}
+}
+
+func TestRemoveVolumesDoesNotReadStandardInputOrPrompt(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	owned := "default"
+	fakes.Script("podman", append(removeObjectResponses(&owned, false, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, nil), make([]testutil.Response, 4)...)...)
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLIProcess$", "--", "remove", "agent01", "--volumes")
+	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE=production")
+	command.Stdin = input
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("remove failed or read from the open input pipe: %v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	want := "Removed container sandboxed-agents.default.agent01.\nRemoved volume sandboxed-agents.default.agent01.workspace.\nRemoved volume sandboxed-agents.default.agent01.home.\nRemoved volume sandboxed-agents.default.agent01.ssh.\n"
+	if stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
 }

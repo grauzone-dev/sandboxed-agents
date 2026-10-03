@@ -88,7 +88,18 @@ The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every pus
   - usage errors and invalid names check that neither `podman` nor `ssh` was called, with the preflight set to fail.
 
   Every `up` test also asserts that `ssh` was never called. No offline test starts a real container.
-- **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start.
+- **Sandbox removal.** `remove` tests drive the public CLI as a subprocess against the fake `podman` and `ssh`. They script the `exists` and `inspect` answers, including owner labels, running state, and mounts, and compare every other Podman call:
+  - a stopped owned sandbox gets only `rm` of the container. With `--volumes`, each owned volume gets `volume rm`, and a volume with an empty or other owner is kept, named, and makes `remove` exit non-zero;
+  - every non-empty subset of volumes without a container, with and without `--volumes`, gets either the `no container` report or one `volume rm` and one `Removed volume` line per volume;
+  - an empty or other owner on the container, each volume, or the backup container, with and without a container and `--volumes`, and an owned backup container, are refused with only read-only lookups, even with `--force`. A foreign volume beside an owned backup container is reported as an owner conflict, not as an interrupted update, also with `--volumes --force`;
+  - on a running sandbox, the `podman exec … sessions list` call comes first, followed by `stop` and `rm` when `remove` goes on. The scripted answers are an empty list, two sessions, a failed `exec`, invalid JSON, `null`, and an object without `name` or without `agent`, each with and without `--force`. The tests check the named sessions, `--force` in a refusal, and the message about sessions that cannot be named;
+  - a bound workspace keeps its host file, and no Podman call names the host path. Its unused workspace volume is removed with `--volumes` and kept without;
+  - refusals for an owner conflict, a backup container, running sessions, and a manager that does not answer leave fixture host SSH files unchanged;
+  - an unusable `inspect` answer and failures of `stop`, `rm`, and `volume rm` stop `remove` before any later mutating call;
+  - an unknown sandbox is refused with only read-only lookups. Usage errors, including a repeated option and `--volumes=true`, call neither `podman` nor `ssh`.
+
+  Most `remove` tests also assert that `ssh` was never called. No offline test checks the session query against a real manager.
+- **Manager.** `manager.New` takes a `process.Runner`, so a manager test injects its process functions and inspects each process a command would start. The `sessions list` tests inject a runner that fails the test when it is called. They check that the query prints `[]` and starts no process, and that invalid usage, such as `sessions` alone, another subcommand, an extra argument, or an unknown option, fails with nothing on standard output.
 - **Order of checks.** A test registers a stand-in command in a `cli.Tree` to assert that the tree runs its checks, its preparation, and its action in order. The executable has no debug commands for this.
 
 ### Host preflight tests

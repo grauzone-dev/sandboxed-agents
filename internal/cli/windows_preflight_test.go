@@ -630,7 +630,7 @@ func TestWindowsUpRetainsSandboxFlowAndPlatformPreflight(t *testing.T) {
 			if !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"start", "sandboxed-agents.default.agent01"}) {
 				t.Fatalf("start args=%v", calls[len(calls)-1].Args)
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -656,7 +656,7 @@ func TestWindowsUpStopsBeforeSandboxChecksWhenPreflightFails(t *testing.T) {
 				t.Fatalf("failed preflight calls=%v", calls)
 			}
 			assertReadOnlyPodmanCalls(t, calls)
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }
@@ -672,7 +672,7 @@ func TestWindowsUpRejectsUsageBeforePreflight(t *testing.T) {
 			if len(fakes.Calls("podman")) != 0 {
 				t.Fatal("invalid usage ran Podman")
 			}
-			assertUpNoSSH(t, fakes)
+			assertNoSSH(t, fakes)
 		})
 	}
 }

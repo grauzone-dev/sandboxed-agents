@@ -25,7 +25,7 @@ type volume struct {
 	owner  string
 }
 
-type objects struct {
+type sandboxObjects struct {
 	name             string
 	container        string
 	backup           string
@@ -34,13 +34,14 @@ type objects struct {
 	streams          process.Streams
 	containerExists  bool
 	backupExists     bool
+	backupOwner      string
 	containerOwner   string
 	containerRunning bool
 }
 
-func newObjects(name string, run process.Runner, streams process.Streams) *objects {
+func newSandboxObjects(name string, run process.Runner, streams process.Streams) *sandboxObjects {
 	container := "sandboxed-agents." + defaultGroup + "." + name
-	return &objects{
+	return &sandboxObjects{
 		name: name, container: container, backup: "sandboxed-agents-backup." + defaultGroup + "." + name,
 		volumes: []volume{
 			{name: container + ".workspace", target: "/workspace"},
@@ -51,7 +52,7 @@ func newObjects(name string, run process.Runner, streams process.Streams) *objec
 	}
 }
 
-func (state *objects) CheckSandbox(ctx context.Context) error {
+func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
 	var err error
 	state.containerExists, err = state.objectExists(ctx, "container", state.container)
 	if err != nil {
@@ -84,30 +85,46 @@ func (state *objects) CheckSandbox(ctx context.Context) error {
 	return nil
 }
 
-func (state *objects) checkSandboxOwner() error {
+func isOwned(owner string) bool { return owner == defaultGroup }
+
+func (state *sandboxObjects) ownerConflicts() []string {
 	var conflicts []string
-	if state.containerExists && state.containerOwner != defaultGroup {
+	if state.containerExists && !isOwned(state.containerOwner) {
 		conflicts = append(conflicts, state.container)
 	}
 	for _, volume := range state.volumes {
-		if volume.exists && volume.owner != defaultGroup {
+		if volume.exists && !isOwned(volume.owner) {
 			conflicts = append(conflicts, volume.name)
 		}
 	}
-	if len(conflicts) > 0 {
+	return conflicts
+}
+
+func (state *sandboxObjects) checkSandboxOwner() error {
+	if conflicts := state.ownerConflicts(); len(conflicts) > 0 {
 		return ownerConflict(conflicts)
 	}
 	return nil
 }
 
-func (state *objects) CheckOwner(ctx context.Context) error {
+func (state *sandboxObjects) CheckOwner(ctx context.Context) error {
 	if err := state.checkSandboxOwner(); err != nil {
 		return err
 	}
 	return state.checkBackupOwner(ctx)
 }
 
-func (state *objects) checkBackupOwner(ctx context.Context) error {
+func (state *sandboxObjects) checkBackupOwner(ctx context.Context) error {
+	if err := state.inspectBackup(ctx); err != nil {
+		return err
+	}
+	if state.backupExists && !isOwned(state.backupOwner) {
+		return ownerConflict([]string{state.backup})
+	}
+	return nil
+}
+
+func (state *sandboxObjects) inspectBackup(ctx context.Context) error {
 	var err error
 	state.backupExists, err = state.objectExists(ctx, "container", state.backup)
 	if err != nil {
@@ -118,9 +135,7 @@ func (state *objects) checkBackupOwner(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if backup.Config.Labels[OwnerLabel] != defaultGroup {
-			return ownerConflict([]string{state.backup})
-		}
+		state.backupOwner = backup.Config.Labels[OwnerLabel]
 	}
 	return nil
 }
@@ -129,14 +144,14 @@ func ownerConflict(names []string) error {
 	return fmt.Errorf("owner conflict on %s: the %s label is missing or names another controller group; remove or rename each foreign object with Podman", strings.Join(names, ", "), OwnerLabel)
 }
 
-func (state *objects) CheckInterruptedUpdate() error {
+func (state *sandboxObjects) CheckInterruptedUpdate() error {
 	if state.backupExists {
 		return fmt.Errorf("backup container %s remains from an interrupted update; run sandboxed-agents update %s", state.backup, state.name)
 	}
 	return nil
 }
 
-func (state *objects) objectExists(ctx context.Context, kind, name string) (bool, error) {
+func (state *sandboxObjects) objectExists(ctx context.Context, kind, name string) (bool, error) {
 	var diagnostic bytes.Buffer
 	status, err := state.run(ctx, process.Request{Name: "podman", Args: []string{kind, "exists", name}, Streams: process.Streams{Stderr: &diagnostic}})
 	if err != nil {
@@ -152,7 +167,7 @@ func (state *objects) objectExists(ctx context.Context, kind, name string) (bool
 	}
 }
 
-func (state *objects) runPodman(ctx context.Context, args ...string) error {
+func (state *sandboxObjects) runPodman(ctx context.Context, args ...string) error {
 	status, err := state.run(ctx, process.Request{Name: "podman", Args: args, Streams: state.streams})
 	if err != nil {
 		return fmt.Errorf("start podman %s: %w", args[0], err)
@@ -169,7 +184,7 @@ type containerRecord struct {
 	State  *struct{ Running bool }
 }
 
-func (state *objects) inspectContainer(ctx context.Context, name string) (containerRecord, error) {
+func (state *sandboxObjects) inspectContainer(ctx context.Context, name string) (containerRecord, error) {
 	var records []containerRecord
 	if err := state.inspect(ctx, "container", name, &records); err != nil {
 		return containerRecord{}, err
@@ -180,7 +195,7 @@ func (state *objects) inspectContainer(ctx context.Context, name string) (contai
 	return records[0], nil
 }
 
-func (state *objects) inspect(ctx context.Context, kind, name string, record any) error {
+func (state *sandboxObjects) inspect(ctx context.Context, kind, name string, record any) error {
 	var output, diagnostic bytes.Buffer
 	status, err := state.run(ctx, process.Request{Name: "podman", Args: []string{kind, "inspect", name}, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
 	if err != nil {
@@ -200,7 +215,7 @@ type volumeRecord struct {
 	Labels map[string]string
 }
 
-func (state *objects) inspectVolume(ctx context.Context, name string) (volumeRecord, error) {
+func (state *sandboxObjects) inspectVolume(ctx context.Context, name string) (volumeRecord, error) {
 	var records []volumeRecord
 	if err := state.inspect(ctx, "volume", name, &records); err != nil {
 		return volumeRecord{}, err

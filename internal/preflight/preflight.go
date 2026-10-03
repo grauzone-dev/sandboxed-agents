@@ -50,27 +50,31 @@ func Check(ctx context.Context, host Host) []Result {
 		return []Result{{Name: "Linux host", Remedy: "check currently supports Linux hosts only"}}
 	}
 	has := func(name string) bool { _, err := host.LookPath(name); return err == nil }
-	podman := has("podman")
-	version := false
-	if podman {
+	podmanFound := has("podman")
+	versionSupported := false
+	versionRemedy := "install Podman " + MinimumPodmanVersion + " or newer"
+	if podmanFound {
 		var stdout, stderr bytes.Buffer
 		status, err := host.Run(ctx, process.Request{Name: "podman", Args: []string{"--version"}, Streams: process.Streams{Stdout: &stdout, Stderr: &stderr}})
-		version = err == nil && status == 0 && supportedVersion(stdout.String())
+		versionSupported = err == nil && status == 0 && supportedVersion(stdout.String())
+		if err != nil || status != 0 || !podmanVersion.MatchString(strings.TrimSpace(stdout.String())) {
+			versionRemedy = "fix the Podman installation or configuration so that podman --version reports version " + MinimumPodmanVersion + " or newer"
+		}
 	}
-	controllers := delegatedControllers(host)
+	cgroups := cgroupDelegation(host)
 	results := []Result{
-		{Name: "podman", Met: podman, Remedy: "install Podman and make sure podman is on PATH"},
-		{Name: "Podman version", Met: version, Remedy: "install Podman " + MinimumPodmanVersion + " or newer"},
+		{Name: "podman", Met: podmanFound, Remedy: "install Podman and make sure podman is on PATH"},
+		{Name: "Podman version", Met: versionSupported, Remedy: versionRemedy},
 		{Name: "rootless", Met: host.UID > 0, Remedy: "run sandboxed-agents as your own user, not as root or with sudo"},
 		{Name: "subordinate UID", Met: hasRange(host, "/etc/subuid"), Remedy: "add a subordinate UID range for your user to /etc/subuid"},
 		{Name: "subordinate GID", Met: hasRange(host, "/etc/subgid"), Remedy: "add a subordinate GID range for your user to /etc/subgid"},
 		{Name: "newuidmap", Met: has("newuidmap"), Remedy: "install newuidmap (in the uidmap or shadow-utils package) and make sure it is on PATH"},
 		{Name: "newgidmap", Met: has("newgidmap"), Remedy: "install newgidmap (in the uidmap or shadow-utils package) and make sure it is on PATH"},
 		{Name: "pasta", Met: has("pasta"), Remedy: "install pasta (the passt package) and make sure it is on PATH"},
-		{Name: "cgroups v2", Met: controllers != nil, Remedy: "boot the host with the unified cgroup v2 hierarchy"},
+		{Name: "cgroups v2", Met: cgroups.Unified, Remedy: "boot the host with the unified cgroup v2 hierarchy"},
 	}
 	for _, controller := range []struct{ key, name string }{{"cpu", "CPU"}, {"memory", "memory"}, {"pids", "process"}} {
-		results = append(results, Result{Name: controller.name, Met: controllers[controller.key], Remedy: "delegate the cgroup v2 " + controller.key + " controller to your user, for example with Delegate= in a user@.service drop-in"})
+		results = append(results, Result{Name: controller.name, Met: cgroups.Controllers[controller.key], Remedy: "delegate the cgroup v2 " + controller.key + " controller to your user, for example with Delegate= in a user@.service drop-in"})
 	}
 	for _, tool := range []string{"ssh", "ssh-keygen"} {
 		results = append(results, Result{Name: tool, Met: has(tool), Remedy: "install the OpenSSH client and make sure " + tool + " is on PATH"})
@@ -123,9 +127,13 @@ func hasRange(host Host, path string) bool {
 	if err != nil {
 		return false
 	}
+	username := host.Username
+	if username == "" {
+		username = os.Getenv("USER")
+	}
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Split(strings.TrimSpace(line), ":")
-		if len(fields) != 3 || (fields[0] != strconv.Itoa(host.UID) && (host.Username == "" || fields[0] != host.Username)) {
+		if len(fields) != 3 || (fields[0] != strconv.Itoa(host.UID) && (username == "" || fields[0] != username)) {
 			continue
 		}
 		start, startErr := strconv.ParseUint(fields[1], 10, 32)
@@ -137,24 +145,31 @@ func hasRange(host Host, path string) bool {
 	return false
 }
 
-func delegatedControllers(host Host) map[string]bool {
+type cgroupStatus struct {
+	Unified     bool
+	Controllers map[string]bool
+}
+
+func cgroupDelegation(host Host) cgroupStatus {
 	mounts, err := host.ReadFile("/proc/self/mountinfo")
 	if err != nil {
-		return nil
+		return cgroupStatus{}
 	}
 	membership, err := host.ReadFile("/proc/self/cgroup")
 	if err != nil {
-		return nil
+		return cgroupStatus{}
 	}
 	var group string
 	for _, line := range strings.Split(string(membership), "\n") {
+		if line != "" && !strings.HasPrefix(line, "0::") {
+			return cgroupStatus{}
+		}
 		if strings.HasPrefix(line, "0::/") {
 			group = strings.TrimPrefix(line, "0::")
-			break
 		}
 	}
 	if group == "" {
-		return nil
+		return cgroupStatus{}
 	}
 	for _, line := range strings.Split(string(mounts), "\n") {
 		parts := strings.SplitN(line, " - ", 2)
@@ -171,30 +186,34 @@ func delegatedControllers(host Host) map[string]bool {
 			continue
 		}
 		current := filepath.Join(mount, relative)
-		available := map[string]bool{}
+		status := cgroupStatus{Unified: true, Controllers: map[string]bool{}}
 		var candidates []string
+		var userManager string
 		for path := current; ; path = filepath.Dir(path) {
 			candidates = append(candidates, path)
 			if filepath.Base(path) == "user-"+strconv.Itoa(host.UID)+".slice" {
 				// systemd delegates to the user manager, a sibling of the login session scope, not an ancestor of it.
-				candidates = append(candidates, filepath.Join(path, "user@"+strconv.Itoa(host.UID)+".service"))
+				userManager = filepath.Join(path, "user@"+strconv.Itoa(host.UID)+".service")
 			}
 			if path == mount {
 				break
 			}
 		}
+		if userManager != "" {
+			candidates = append([]string{userManager}, candidates...)
+		}
 		for _, path := range candidates {
 			data, err := host.ReadFile(filepath.Join(path, "cgroup.controllers"))
 			if err == nil && host.Writable(path) && host.Writable(filepath.Join(path, "cgroup.procs")) && host.Writable(filepath.Join(path, "cgroup.subtree_control")) {
 				for _, name := range strings.Fields(string(data)) {
-					available[name] = true
+					status.Controllers[name] = true
 				}
-				return available
+				return status
 			}
 		}
-		return available
+		return status
 	}
-	return nil
+	return cgroupStatus{}
 }
 
 func unescapeMount(path string) string {

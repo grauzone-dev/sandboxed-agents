@@ -15,6 +15,7 @@ type Up struct {
 	limits       ResourceLimits
 	toolchains   toolchains.Set
 	withProvided bool
+	workspace    string
 }
 
 func NewUp(name, group, assetHash string, limits ResourceLimits, selection toolchains.Set, withProvided bool, run process.Runner, streams process.Streams) *Up {
@@ -40,6 +41,9 @@ func (up *Up) CheckOptions() error {
 	if !up.containerExists {
 		return nil
 	}
+	if err := up.checkWorkspace(); err != nil {
+		return err
+	}
 	if err := up.limits.checkRecorded(up.name, up.containerLabels); err != nil {
 		return err
 	}
@@ -63,6 +67,14 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		return err
 	}
 	for _, volume := range up.volumes {
+		if up.workspace != "" && volume.target == "/workspace" {
+			if volume.exists {
+				if _, err := fmt.Fprintln(up.streams.Stdout, fmt.Sprintf(workspaceUnusedVolumeMessage, volume.name)); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		verb := "Adopted"
 		if !volume.exists {
 			if err := up.runPodman(ctx, "volume", "create", "--label", OwnerLabel+"="+up.group, volume.name); err != nil {
@@ -75,16 +87,24 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		}
 	}
 
+	kind := "volume"
+	if up.workspace != "" {
+		kind = "bind"
+	}
 	args := []string{
 		"create", "--name", up.container,
 		"--label", OwnerLabel + "=" + up.group,
 		"--label", NameLabel + "=" + up.name,
-		"--label", WorkspaceKindLabel + "=volume",
+		"--label", WorkspaceKindLabel + "=" + kind,
 		"--label", images.ToolchainsLabel + "=" + up.toolchains.String(),
 		"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
 	}
 	args = append(args, up.limits.createArguments()...)
 	for _, volume := range up.volumes {
+		if up.workspace != "" && volume.target == "/workspace" {
+			args = append(args, "--mount", up.workspaceMount())
+			continue
+		}
 		args = append(args, "--mount", "type=volume,source="+volume.name+",target="+volume.target)
 	}
 	args = append(args, image)

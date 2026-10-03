@@ -161,7 +161,7 @@ func unexpectedArgument(arg string) error {
 	return fmt.Errorf("%s %q", message, arg)
 }
 
-func upCommand(assetHash string, group *string, run process.Runner, check Handler) Command {
+func upCommand(assetHash, hostOS string, group *string, run process.Runner, check Handler) Command {
 	ctx := context.Background()
 	var up *sandbox.Up
 	return Command{Name: "up", Checks: Checks{
@@ -172,15 +172,14 @@ func upCommand(assetHash string, group *string, run process.Runner, check Handle
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			selection, provided, remaining, err := parseToolchains(invocation.Args[1:])
-			if err != nil {
-				return err
-			}
-			limits, err := sandbox.ParseResourceLimits(remaining)
+			workspace, limits, selection, provided, err := parseUpArguments(invocation.Args[1:])
 			if err != nil {
 				return err
 			}
 			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, limits, selection, provided, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			if err := up.SetWorkspace(hostOS, workspace); err != nil {
+				return err
+			}
 			return nil
 		},
 		Preflight:         check,
@@ -194,11 +193,7 @@ func upCommand(assetHash string, group *string, run process.Runner, check Handle
 			if err := sandbox.ValidateName(args[0]); err != nil {
 				return err
 			}
-			_, _, remaining, err := parseToolchains(args[1:])
-			if err != nil {
-				return err
-			}
-			if _, err := sandbox.ParseResourceLimits(remaining); err != nil {
+			if _, _, _, _, err := parseUpArguments(args[1:]); err != nil {
 				return err
 			}
 		}
@@ -246,7 +241,7 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 	if host.OS == "windows" {
 		run = podman.run
 	}
-	return runWithCheck(args, stdout, stderr, version, assetHash, run, func(invocation *Invocation) error {
+	return runWithCheck(args, stdout, stderr, version, assetHash, host.OS, run, func(invocation *Invocation) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		report := preflight.CheckWindows(ctx, host, podman.invoke)
@@ -265,12 +260,12 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 }
 
 func RunWithHost(args []string, stdout, stderr io.Writer, version, assetHash string, host preflight.Host) int {
-	return runWithCheck(args, stdout, stderr, version, assetHash, host.Run, func(invocation *Invocation) error {
+	return runWithCheck(args, stdout, stderr, version, assetHash, host.Platform, host.Run, func(invocation *Invocation) error {
 		return preflight.Run(context.Background(), host, invocation.Stdout)
 	})
 }
 
-func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash string, run process.Runner, check Handler) int {
+func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash, hostOS string, run process.Runner, check Handler) int {
 	var group string
 	var buildSelection toolchains.Set
 	tree := Tree{Name: "sandboxed-agents", Usage: func(*Invocation) error {
@@ -278,7 +273,7 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 		group, err = controllergroup.CurrentGroup()
 		return err
 	}, Commands: []Command{
-		upCommand(assetHash, &group, run, check),
+		upCommand(assetHash, hostOS, &group, run, check),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return sandbox.List(context.Background(), group, run, invocation.Stdout)
 		}},
@@ -307,4 +302,18 @@ func runWithCheck(args []string, stdout, stderr io.Writer, version, assetHash st
 		{Name: "check", Checks: Checks{Usage: noArguments}, Action: check},
 	}}
 	return tree.Execute(args, stdout, stderr)
+}
+
+func parseUpArguments(args []string) (string, sandbox.ResourceLimits, toolchains.Set, bool, error) {
+	workspace := ""
+	if len(args) > 0 && args[0] != "" && !strings.HasPrefix(args[0], "-") {
+		workspace = args[0]
+		args = args[1:]
+	}
+	selection, provided, remaining, err := parseToolchains(args)
+	if err != nil {
+		return workspace, sandbox.ResourceLimits{}, selection, provided, err
+	}
+	limits, err := sandbox.ParseResourceLimits(remaining)
+	return workspace, limits, selection, provided, err
 }

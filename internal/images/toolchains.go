@@ -237,12 +237,8 @@ func buildToolchains(ctx context.Context, assetHash, baseID string, set toolchai
 	if err != nil {
 		return fmt.Errorf("read embedded toolchain build context: %w", err)
 	}
-	recipe, err := fs.Sub(buildContext, "toolchains/"+set.String())
-	if err != nil {
+	if err := writeToolchainRecipes(directory, buildContext, set); err != nil {
 		return err
-	}
-	if err := os.CopyFS(directory, recipe); err != nil {
-		return fmt.Errorf("write toolchain build context: %w", err)
 	}
 	versions, err := fs.ReadFile(buildContext, "record-versions.sh")
 	if err != nil {
@@ -262,6 +258,35 @@ func buildToolchains(ctx context.Context, assetHash, baseID string, set toolchai
 	}
 	if status != 0 {
 		return fmt.Errorf("podman toolchain build failed with exit status %d", status)
+	}
+	return nil
+}
+
+func writeToolchainRecipes(directory string, buildContext fs.FS, set toolchains.Set) error {
+	const header = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n\n"
+	var combined strings.Builder
+	combined.WriteString(header)
+	for _, name := range strings.Split(set.String(), ",") {
+		recipe, err := fs.Sub(buildContext, "toolchains/"+name)
+		if err != nil {
+			return fmt.Errorf("read %s build context: %w", name, err)
+		}
+		contents, err := fs.ReadFile(recipe, "Containerfile")
+		if err != nil {
+			return fmt.Errorf("read %s recipe: %w", name, err)
+		}
+		body, ok := strings.CutPrefix(string(contents), header)
+		if !ok {
+			return fmt.Errorf("toolchain %s recipe must start from BASE_IMAGE", name)
+		}
+		if err := os.CopyFS(filepath.Join(directory, name), recipe); err != nil {
+			return fmt.Errorf("write %s build context: %w", name, err)
+		}
+		combined.WriteString(body)
+		combined.WriteString("\n")
+	}
+	if err := os.WriteFile(filepath.Join(directory, "Containerfile"), []byte(combined.String()), 0644); err != nil {
+		return fmt.Errorf("write combined toolchain recipe: %w", err)
 	}
 	return nil
 }

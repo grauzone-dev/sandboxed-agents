@@ -1,6 +1,6 @@
 # Update a sandbox
 
-`sandboxed-agents update NAME` moves an existing sandbox to the image that the installed executable produces for the sandbox's toolchain set. It replaces the sandbox's container and keeps everything else. This page describes what `update` does when every step succeeds. What happens after a failed step, how an interrupted update is recovered, the session guard, `update --all`, and changing the toolchain set with `--with` come with later Stories ([Not in this version](#not-in-this-version)).
+`sandboxed-agents update NAME` moves an existing sandbox to the image that the installed executable produces for the sandbox's toolchain set. It replaces the sandbox's container and keeps everything else. This page describes what `update` does and how it rolls back when a step fails ([When a step fails](#when-a-step-fails)). Recovering an interrupted update, the session guard, `update --all`, and changing the toolchain set with `--with` come with later Stories ([Not in this version](#not-in-this-version)).
 
 ## What `update` keeps
 
@@ -12,7 +12,7 @@ The new container gets the configuration recorded on the old one:
 
 The agent selection, agent pins, credentials, the authorized key, and the SSH host keys live in the volumes. `update` does not rewrite or regenerate them, and it deletes no volume. It does not go through `remove` (ADR-0002): it creates, changes, and deletes no [SSH setup](ssh.md#ssh-setup), it leaves the SSH setup's files in host state unchanged, and it reads and writes no file in your SSH directory. Because the host keys stay in the SSH server state volume, a pinned host key still matches after the update. The only things `update` may create in host state are the separate `locks` directory and the empty [lifecycle lock](#lifecycle-lock) file in it.
 
-A sandbox that was running before the update is running afterwards, and a sandbox that was stopped is stopped afterwards.
+A sandbox that was running before the update is running afterwards, and a sandbox that was stopped is stopped afterwards. This also holds after a complete rollback. The exceptions are an [incomplete rollback](#when-the-rollback-fails), after which the running state is not promised, and the failures after a successful readiness wait, described in [When a step fails](#when-a-step-fails), which can leave a sandbox that was stopped running.
 
 ## When a sandbox is outdated
 
@@ -53,6 +53,37 @@ When one of these does not hold, `update` names the container and the label or t
 
 Nothing about an update is stored outside Podman. Whether the sandbox was running before the update is recorded only in the label on the new container, and an update in progress is visible only in the backup container's name (ADR-0005).
 
+## When a step fails
+
+A failed `update` names the failed step, such as `create the new container` or `readiness wait of the new container`, and exits non-zero. When a step up to the readiness wait fails and the rollback completes, it leaves the sandbox as it was: the original container under its name, running when it was running before and stopped when it was stopped. That covers the container, the volumes, and the configuration, not the processes that ran in the old container. An incomplete rollback gives no such guarantee ([When the rollback fails](#when-the-rollback-fails)).
+
+| Failed step | What `update` does |
+| --- | --- |
+| Preflight, a check, or the build | Stops there. It renames, stops, creates, and removes nothing, and a running sandbox keeps running. |
+| Rename to the backup name | Nothing has changed. A running sandbox keeps running. |
+| Creation of the new container | Removes whatever exists of the new container and renames the backup container back. It never stopped the old container and does not start it, so a running sandbox keeps running throughout. |
+| Stop of the old container, start of the new one, or the readiness wait | Removes the new container, renames the backup container back, and starts it when the sandbox was running before. A sandbox that was stopped stays stopped, and no start call is issued for it. |
+| Removal of the backup container | No rollback; see [Backup container left after a successful update](#backup-container-left-after-a-successful-update). |
+| Stop that ends the update of a sandbox that was stopped | No rollback; see [Sandbox left running after a successful update](#sandbox-left-running-after-a-successful-update). |
+
+The rollback removes the new container with `podman rm --force --ignore`, which also succeeds when creation left no container behind, and always before it starts the original container again, so two containers never run on the same volumes. After a complete rollback, `update` prints `Sandbox NAME was restored`, says that the original container is back under its name and running or stopped as before, and that processes that ended during the update were not restarted. The report keeps the original failure.
+
+The rollback calls run with their own time limit of 30 seconds in total, independent of the failed step, so a step that ended because its own time ran out or was cancelled does not cut the rollback short. A rollback renames, removes, and starts containers only. It deletes no named volume, changes nothing in the volumes, makes no call to the manager, and leaves an installed SSH setup and every file in your SSH directory unchanged.
+
+### When the rollback fails
+
+When a rollback call fails, `update` stops the rollback at once. It does not try further steps, so it never starts the original container while the new one may still exist. It reports that the rollback of the sandbox is incomplete, names the rollback step that failed, such as `remove the new container`, `rename the backup container back`, or `start the restored container`, and keeps the original failure in the report. It does not claim that the sandbox was restored. The original container is kept: under the backup name when the rollback failed before renaming it back, otherwise under the sandbox's name. Its running state is not promised, because the failed stop, start, or rollback call can have had an effect before it failed. Inspect the current state of the sandbox's containers with Podman. While the backup container remains, the sandbox counts as "update interrupted" ([Not in this version](#not-in-this-version)).
+
+### Backup container left after a successful update
+
+When the readiness wait succeeded but removing the backup container fails, the update itself succeeded and is not rolled back. The new container runs under the sandbox's name. `update` prints a warning and exits non-zero. The warning says that the update succeeded, names the backup container, says that the sandbox counts as "update interrupted" until the backup container is removed and that other commands refuse it, and that `sandboxed-agents update NAME` cleans up. In this version, however, `update` cannot clean up yet: it refuses a sandbox with a backup container, and the warning says so and points to Podman. Recovery through `update` comes with #54.
+
+For a sandbox that was stopped before the update, `update` does not stop the new container, because that stop comes only after the backup container was removed. The warning also says that the new container is still running.
+
+### Sandbox left running after a successful update
+
+For a sandbox that was stopped before the update, the new container is stopped again as the last step, after the backup container was removed. When that stop fails, the update counts as done and is not rolled back, and no backup container is left. `update` warns that the sandbox is still running, names `sandboxed-agents stop NAME`, and exits non-zero.
+
 ## Readiness wait
 
 After it starts the new container, `update` waits until both of these checks have succeeded once:
@@ -60,7 +91,7 @@ After it starts the new container, `update` waits until both of these checks hav
 - **Manager.** The manager answers its existing version query, `podman exec --user=0:0 CONTAINER /usr/local/bin/sandboxed-agents-manager version`, which runs as container root (ADR-0006).
 - **SSH.** On the host, `ssh-keyscan -T 1 -t ed25519 -p PORT 127.0.0.1` returns an Ed25519 host key for `[127.0.0.1]:PORT`, where `PORT` is the SSH port recorded on the container. A host key arrives only after sshd in the container has completed the SSH key exchange. An open TCP port is not enough, because rootless Podman's port forwarding can accept a connection before sshd listens. `ssh-keyscan` does not authenticate, uses no key of yours, and reads and writes no file in your SSH directory or in host state. It comes with the OpenSSH client and is part of the host prerequisites that every preflight checks, also for commands that do not run it ([Host prerequisites](host-prerequisites.md), ADR-0007).
 
-The wait lasts at most 60 seconds, including the time the probes take to run. The first attempt runs both checks right after the start. After that, every 250 milliseconds, it repeats only the checks that have not succeeded yet. Each probe has a timeout of 3 seconds, cut to the time left; `ssh-keyscan` also gives up after 1 second without an answer. When the wait ends before both checks have succeeded, `update` exits non-zero with `readiness wait for sandbox container CONTAINER failed`, followed by the reason and the last result of each check that had not succeeded.
+The wait lasts at most 60 seconds, including the time the probes take to run. The first attempt runs both checks right after the start. After that, every 250 milliseconds, it repeats only the checks that have not succeeded yet. Each probe has a timeout of 3 seconds, cut to the time left; `ssh-keyscan` also gives up after 1 second without an answer. When the wait ends before both checks have succeeded, `update` reports `readiness wait for sandbox container CONTAINER failed`, followed by the reason and the last result of each check that had not succeeded, [rolls back](#when-a-step-fails), and exits non-zero.
 
 On a cold start, the Podman machine, the container's initialization, the manager, and sshd can take several seconds to answer. 60 seconds leaves room for that and still bounds how long a failed update keeps you waiting (ADR-0007). Only offline tests check this value. No live run has measured it yet.
 
@@ -77,16 +108,16 @@ Know the limits of this lock:
 - **Coordination, not security.** Any program with your Podman authority can ignore the lock, delete the lock file, or change a sandbox's objects directly.
 - **Per sandbox only.** Commands on different sandbox names, or on the same name in different controller groups, run in parallel. Image builds and SSH port allocation are shared across sandboxes and are not serialized by this lock.
 
-When a Podman call fails unexpectedly, for example because something outside the executable removed or renamed a container, `update` stops, exits non-zero, and does not report success. It does not retry and does not undo earlier steps ([Not in this version](#not-in-this-version)).
+When a Podman call fails unexpectedly, for example because something outside the executable removed or renamed a container, `update` does not retry it. From the rename on, it handles the failure as described in [When a step fails](#when-a-step-fails), and a rollback can then fail as well.
 
 ## Not in this version
 
-- **Failed steps** (#53). When a build, the rename, the creation, a start, the readiness wait, the removal of the backup container, or the final stop fails, this version stops and reports the failure. It does not roll back what it already did. Depending on the step, the backup container can remain beside the new container or in its place. Every other command that takes the sandbox name then refuses the sandbox and names `sandboxed-agents update NAME` ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)), and `update` refuses it as described under Interrupted updates.
-- **Interrupted updates** (#54). Recovering a sandbox from a backup container that an earlier update left behind. In this version `update` refuses such a sandbox with its own message: recovering an interrupted update is not available yet, `update` changes nothing, and you can inspect the backup container with Podman. It neither completes nor undoes the interrupted update. The other commands that take a sandbox name still refuse such a sandbox and name `update NAME`; recovery through `update` comes with #54.
-- **Session guard and `--force`** (#58). This version does not refuse an update while an agent session runs. Stopping the old container ends every process in it.
-- **`update --all` and the usage errors of `update`** (#57).
-- **Changing the toolchain set with `update NAME --with SET`** (#71).
+- **Interrupted updates** (#54). Recovering a sandbox from a backup container that an earlier update left behind: after an interruption such as Ctrl+C, after a failed backup removal, or after an incomplete rollback. Every other command that takes the sandbox name refuses such a sandbox and names `sandboxed-agents update NAME` ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)). In this version `update` refuses such a sandbox with its own message: recovering an interrupted update is not available yet, `update` changes nothing, and you can inspect the backup container with Podman. It neither completes nor undoes the interrupted update; recovery through `update` comes with #54.
+- **Session guard and `--force`** (#58). This version does not refuse an update while an agent session runs. Stopping the old container ends every process in it, and a rollback does not restart them.
+- **`update --all` and the usage errors of `update`** (#57), including the rollback of one sandbox within `update --all`.
+- **Changing the toolchain set with `update NAME --with SET`** (#71), and its rollback.
+- **Rollback against real Podman** (#55). No live run has exercised a rollback yet.
 
 ## Verification
 
-`update` adds no new manager functionality: the readiness wait uses the manager's existing version query, which the existing manager tests cover. Offline tests cover the rest. The readiness tests run the manager and `ssh-keyscan` probes through injected process functions. The CLI tests run the executable against fake Podman and a fake `ssh-keyscan`, and check the order and arguments of the Podman calls, the already-up-to-date case, the refusals, and the lifecycle lock. These tests do not show that an update works against real Podman or a real sshd. No live run covers `update` yet; that coverage belongs to the live suite (#24, [Live suite](live-suite.md)).
+`update` adds no new manager functionality: the readiness wait uses the manager's existing version query, which the existing manager tests cover. Offline tests cover the rest. The readiness tests run the manager and `ssh-keyscan` probes through injected process functions. The CLI tests run the executable against fake Podman and a fake `ssh-keyscan`, and check the order and arguments of the Podman calls, the already-up-to-date case, the refusals, and the lifecycle lock. They inject a failure at each step, from the preflight, the build, and the rename through the creation, the stop of the old container, the start of the new one, each readiness probe, the removal of the backup container, and the final stop, and check the rollback calls and their order, the warnings, and that no call removes a volume and no SSH setup file changes. Readiness failures run the full 60-second deadline against a manager that never answers on a running sandbox and against an `ssh-keyscan` that never answers on a stopped and on a running sandbox. Further tests drive `update` through its public entry point against fake Podman and a fake `ssh-keyscan`, cancel the caller's context during each readiness probe of a stopped sandbox, and check that the rollback still runs with its own limit of at most 30 seconds and restores the sandbox. These tests do not show that an update or a rollback works against real Podman or a real sshd. No live run covers `update` yet; that coverage belongs to the live suite (#24, #55, [Live suite](live-suite.md)).

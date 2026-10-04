@@ -3,8 +3,6 @@ package cli_test
 import (
 	"encoding/csv"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -57,15 +55,7 @@ func TestUpdatePreservesStoppedSandboxesAndInstalledSSHFiles(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		t.Run(host.name, func(t *testing.T) {
 			fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
-			for _, path := range []string{filepath.Join(sshDir, "config"), filepath.Join(state, "group-default", "agent01", "id_ed25519"), filepath.Join(state, "group-default", "agent01", "known_hosts")} {
-				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte("unchanged SSH file\n"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			beforeSSH, beforeState := sshDirectoryContents(t, sshDir), managedSSHFiles(t, state)
+			checkSSH := installUpdateSSHFixture(t, sshDir, state)
 			responses := updateObjectResponses(t, false, "old-image", "", "")
 			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
 			responses = append(responses, make([]testutil.Response, 3)...)
@@ -89,9 +79,7 @@ func TestUpdatePreservesStoppedSandboxesAndInstalledSSHFiles(t *testing.T) {
 			if !reflect.DeepEqual(operations, want) {
 				t.Fatalf("operations=%v", operations)
 			}
-			if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
-				t.Fatal("update changed SSH files")
-			}
+			checkSSH()
 			assertNoSSH(t, fakes)
 		})
 	}

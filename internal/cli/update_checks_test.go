@@ -14,7 +14,9 @@ func TestUpdateReportsPreflightFailureBeforeUnknownSandboxOrOwnerConflict(t *tes
 	for _, host := range resourceLimitHosts {
 		for _, sandboxState := range []string{"unknown", "foreign"} {
 			t.Run(host.name+"/"+sandboxState, func(t *testing.T) {
-				fakes, fixture := resourceLimitHost(t, host.windows)
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				checkSSH := installUpdateSSHFixture(t, sshDir, state)
+				defer checkSSH()
 				var responses []testutil.Response
 				if sandboxState == "unknown" {
 					responses = upObjectResponses(nil, false, nil, nil)

@@ -2,8 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -118,33 +120,55 @@ func (update *Update) Apply(ctx context.Context) error {
 		return err
 	}
 	if err := update.runPodman(ctx, "rename", update.container, update.backup); err != nil {
-		return err
+		return fmt.Errorf(updateStepFailureFormat, update.name, updateRenameStep, err)
 	}
 	args := update.replacement.createArguments(update.image, UpdateWasRunningLabel+"="+strconv.FormatBool(update.containerRunning))
 	if err := update.runPodman(ctx, args...); err != nil {
-		return err
+		return update.rollback(ctx, updateCreateStep, err, false)
 	}
 	if update.containerRunning {
 		if err := update.runPodman(ctx, "stop", update.backup); err != nil {
-			return err
+			return update.rollback(ctx, updateStopOldStep, err, true)
 		}
 	}
 	if err := update.runPodman(ctx, "start", update.container); err != nil {
-		return err
+		return update.rollback(ctx, updateStartNewStep, err, true)
 	}
 	if err := WaitReady(ctx, update.container, update.replacement.port, update.run); err != nil {
-		return err
+		return update.rollback(ctx, updateReadinessStep, err, true)
 	}
 	if err := update.runPodman(ctx, "rm", update.backup); err != nil {
-		return err
+		failure := fmt.Errorf(updateBackupRemovalFailureFormat, update.name, update.backup, err)
+		if !update.containerRunning {
+			return fmt.Errorf("%w%s", failure, updateBackupStillRunningMessage)
+		}
+		return failure
 	}
 	if !update.containerRunning {
 		if err := update.runPodman(ctx, "stop", update.container); err != nil {
-			return err
+			return fmt.Errorf(updateFinalStopFailureFormat, update.name, err)
 		}
 	}
 	_, err := fmt.Fprintln(update.streams.Stdout, fmt.Sprintf(updateSuccessFormat, update.name))
 	return err
+}
+
+func (update *Update) rollback(ctx context.Context, step string, cause error, oldMayHaveStopped bool) error {
+	failure := fmt.Errorf(updateStepFailureFormat, update.name, step, cause)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := update.runPodman(ctx, "rm", "--force", "--ignore", update.container); err != nil {
+		return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, updateRollbackRemoveStep, err))
+	}
+	if err := update.runPodman(ctx, "rename", update.backup, update.container); err != nil {
+		return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, updateRollbackRenameStep, err))
+	}
+	if oldMayHaveStopped && update.containerRunning {
+		if err := update.runPodman(ctx, "start", update.container); err != nil {
+			return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, updateRollbackStartStep, err))
+		}
+	}
+	return fmt.Errorf("%w; %s", failure, fmt.Sprintf(updateRestoredFormat, update.name))
 }
 
 func (update *Update) CheckInterruptedUpdate() error {

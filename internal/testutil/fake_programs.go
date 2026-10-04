@@ -17,6 +17,7 @@ const fakeStateEnv = "SANDBOXED_AGENTS_FAKE_STATE"
 var fakeProgramNames = []string{"podman", "ssh", "getent", "ssh-keygen", "ssh-keyscan"}
 
 type Response struct {
+	RepeatForArgs       []string
 	Stdout              string
 	Stderr              string
 	ExitCode            int
@@ -178,6 +179,9 @@ func runFake(state, name string, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 99
 	}
+	for len(responses) > 0 && responses[0].RepeatForArgs != nil && !slices.Equal(responses[0].RepeatForArgs, args) {
+		responses = responses[1:]
+	}
 	if len(responses) == 0 {
 		fmt.Fprintln(os.Stderr, "unscripted call:", name)
 		return 99
@@ -231,7 +235,10 @@ func runFake(state, name string, args []string) int {
 			return 99
 		}
 	}
-	data, err = json.Marshal(responses[1:])
+	if response.RepeatForArgs == nil {
+		responses = responses[1:]
+	}
+	data, err = json.Marshal(responses)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 99

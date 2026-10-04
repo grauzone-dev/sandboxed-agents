@@ -75,12 +75,9 @@ func collectListObjects(ctx context.Context, group string, run process.Runner) (
 	if err != nil {
 		return nil, err
 	}
-	var volumes []volumeRecord
-	if err := queryPodmanJSON(ctx, run, []string{"volume", "ls", "--format", "json"}, "volume ls", &volumes); err != nil {
+	volumes, err := queryVolumes(ctx, run)
+	if err != nil {
 		return nil, err
-	}
-	if volumes == nil {
-		return nil, fmt.Errorf("invalid podman volume ls response")
 	}
 	objects := make(map[string]*listObjects)
 	get := func(name string) *listObjects {
@@ -110,12 +107,7 @@ func collectListObjects(ctx context.Context, group string, run process.Runner) (
 			row.containers = append(row.containers, podmanName)
 		}
 	}
-	seen := make(map[string]bool)
 	for _, record := range volumes {
-		if record.Name == "" || seen[record.Name] {
-			return nil, fmt.Errorf("invalid podman volume ls response")
-		}
-		seen[record.Name] = true
 		base, target, ok := splitSandboxVolume(record.Name)
 		if !ok {
 			continue

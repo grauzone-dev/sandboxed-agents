@@ -35,7 +35,7 @@ func assertUpdateChangesPreserveData(t *testing.T, fakes *testutil.FakePrograms)
 	var changes [][]string
 	for _, call := range fakes.Calls("podman") {
 		args := podmanUpdateArgs(call.Args)
-		if args[0] == "volume" && !slices.Contains([]string{"exists", "inspect"}, args[1]) {
+		if args[0] == "volume" && !slices.Contains([]string{"ls", "exists", "inspect"}, args[1]) {
 			t.Fatalf("failed update changed a volume: %v", args)
 		}
 		if args[0] == "rm" && (slices.Contains(args, "--volumes") || slices.Contains(args, "-v")) {

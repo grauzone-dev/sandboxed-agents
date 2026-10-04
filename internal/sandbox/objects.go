@@ -106,15 +106,26 @@ func (state *sandboxObjects) CheckContainer(ctx context.Context) error {
 	if err := state.CheckSandbox(ctx); err != nil {
 		return err
 	}
+	return state.checkContainerPresence()
+}
+
+func (state *sandboxObjects) checkContainerPresence() error {
 	if state.containerExists || state.backupExists {
 		return nil
 	}
-	for _, volume := range state.volumes {
-		if volume.exists {
-			return fmt.Errorf("sandbox %[1]s has no container; run sandboxed-agents up %[1]s, which adopts its volumes", state.name)
-		}
+	if state.hasVolumes() {
+		return fmt.Errorf("sandbox %[1]s has no container; run sandboxed-agents up %[1]s, which adopts its volumes", state.name)
 	}
 	return fmt.Errorf("sandbox %s does not exist in this controller group", state.name)
+}
+
+func (state *sandboxObjects) hasVolumes() bool {
+	for _, volume := range state.volumes {
+		if volume.exists {
+			return true
+		}
+	}
+	return false
 }
 
 func (state *sandboxObjects) CheckRunning() error {
@@ -285,6 +296,24 @@ func queryPodmanJSON(ctx context.Context, run process.Runner, args []string, ope
 type volumeRecord struct {
 	Name   string
 	Labels map[string]string
+}
+
+func queryVolumes(ctx context.Context, run process.Runner) ([]volumeRecord, error) {
+	var volumes []volumeRecord
+	if err := queryPodmanJSON(ctx, run, []string{"volume", "ls", "--format", "json"}, "volume ls", &volumes); err != nil {
+		return nil, err
+	}
+	if volumes == nil {
+		return nil, fmt.Errorf("invalid podman volume ls response")
+	}
+	seen := make(map[string]bool)
+	for _, volume := range volumes {
+		if volume.Name == "" || seen[volume.Name] {
+			return nil, fmt.Errorf("invalid podman volume ls response")
+		}
+		seen[volume.Name] = true
+	}
+	return volumes, nil
 }
 
 func (state *sandboxObjects) inspectVolume(ctx context.Context, name string) (volumeRecord, error) {

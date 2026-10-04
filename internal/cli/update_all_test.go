@@ -56,18 +56,20 @@ func scriptUpdateAll(t *testing.T, fakes *testutil.FakePrograms, windows bool, r
 	fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t), RepeatForArgs: []string{"-T", "1", "-t", "ed25519", "-p", "2300", "127.0.0.1"}})
 }
 
-func assertUpdateAllPreservesData(t *testing.T, fakes *testutil.FakePrograms) {
+func updateAllSandboxChanges(t *testing.T, fakes *testutil.FakePrograms, name string) [][]string {
 	t.Helper()
+	var changes [][]string
 	for _, call := range fakes.Calls("podman") {
 		args := podmanUpdateArgs(call.Args)
-		if args[0] == "volume" && !slices.Contains([]string{"ls", "exists", "inspect"}, args[1]) {
-			t.Fatalf("bulk update changed a volume: %v", args)
+		if !slices.Contains([]string{"rename", "create", "start", "stop", "rm"}, args[0]) || !(slices.Contains(args, "sandboxed-agents.default."+name) || slices.Contains(args, "sandboxed-agents-backup.default."+name)) {
+			continue
 		}
-		if args[0] == "rm" && (slices.Contains(args, "--volumes") || slices.Contains(args, "-v")) {
-			t.Fatalf("bulk update removed container volumes: %v", args)
+		if args[0] == "create" {
+			args = []string{"create"}
 		}
+		changes = append(changes, args)
 	}
-	assertNoSSH(t, fakes)
+	return changes
 }
 
 func TestUpdateAllBuildsDistinctMissingAndStaleImagesBeforeUpdatingEverySandbox(t *testing.T) {
@@ -78,10 +80,9 @@ func TestUpdateAllBuildsDistinctMissingAndStaleImagesBeforeUpdatingEverySandbox(
 				fixture = "linux-build"
 			}
 			responses := updateAllInventory("agent01", "agent02", "agent03")
-			for index, selection := range []string{"dotnet", "native", "dotnet"} {
-				name := []string{"agent01", "agent02", "agent03"}[index]
-				responses = append(responses, updateAllObjects(t, name, true, "old-"+selection, selection)...)
-				responses = append(responses, updateAllOutdatedImage(selection, selection == "native")...)
+			for _, sandbox := range []struct{ name, selection string }{{"agent01", "dotnet"}, {"agent02", "native"}, {"agent03", "dotnet"}} {
+				responses = append(responses, updateAllObjects(t, sandbox.name, true, "old-"+sandbox.selection, sandbox.selection)...)
+				responses = append(responses, updateAllOutdatedImage(sandbox.selection, sandbox.selection == "native")...)
 			}
 			responses = append(responses, updateAllBuildImage("dotnet", false)...)
 			responses = append(responses, updateAllBuildImage("native", true)...)
@@ -138,7 +139,7 @@ func TestUpdateAllBuildsDistinctMissingAndStaleImagesBeforeUpdatingEverySandbox(
 					t.Errorf("missing result for %s: %q", name, stdout)
 				}
 			}
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }
@@ -180,7 +181,7 @@ func TestUpdateAllLeavesCurrentSandboxesUntouchedAndKeepsStoppedSandboxesStopped
 				t.Fatalf("state changes=%v SSH probes=%v", stateChanges, fakes.Calls("ssh-keyscan"))
 			}
 			checkSSH()
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }
@@ -215,22 +216,12 @@ func TestUpdateAllRestoresAFailedSandboxAndContinuesWithTheRemainingSandboxes(t 
 				if status == 0 || !strings.Contains(stderr, "agent02") || !strings.Contains(stderr, "restored") || !strings.Contains(stderr, "42") || !strings.Contains(stdout, "Sandbox agent01 is updated.") || !strings.Contains(stdout, "Sandbox agent03 is updated.") || strings.Contains(stdout, "Sandbox agent02 is updated.") {
 					t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
 				}
-				var changes [][]string
-				for _, call := range fakes.Calls("podman") {
-					args := podmanUpdateArgs(call.Args)
-					if !slices.Contains([]string{"rename", "create", "stop", "start", "rm"}, args[0]) || !strings.Contains(strings.Join(args, " "), "agent02") {
-						continue
-					}
-					if args[0] == "create" {
-						args = []string{"create"}
-					}
-					changes = append(changes, args)
-				}
+				changes := updateAllSandboxChanges(t, fakes, "agent02")
 				if !reflect.DeepEqual(changes, want) {
 					t.Fatalf("failed sandbox changes=%v want=%v", changes, want)
 				}
 				checkSSH()
-				assertUpdateAllPreservesData(t, fakes)
+				assertUpdateChangesPreserveData(t, fakes)
 			})
 		}
 	}
@@ -242,10 +233,9 @@ func TestUpdateAllBuildFailureLeavesEverySandboxAndItsSSHFilesUnchanged(t *testi
 			fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 			checkSSH := installUpdateSSHFixture(t, sshDir, state)
 			responses := updateAllInventory("agent01", "agent02")
-			for index, selection := range []string{"dotnet", "native"} {
-				name := []string{"agent01", "agent02"}[index]
-				responses = append(responses, updateAllObjects(t, name, true, "old-"+selection, selection)...)
-				responses = append(responses, updateAllOutdatedImage(selection, false)...)
+			for _, sandbox := range []struct{ name, selection string }{{"agent01", "dotnet"}, {"agent02", "native"}} {
+				responses = append(responses, updateAllObjects(t, sandbox.name, true, "old-"+sandbox.selection, sandbox.selection)...)
+				responses = append(responses, updateAllOutdatedImage(sandbox.selection, false)...)
 			}
 			responses = append(responses, updateAllBuildImage("dotnet", false)...)
 			responses = append(responses, updateAllOutdatedImage("native", false)...)
@@ -269,7 +259,7 @@ func TestUpdateAllBuildFailureLeavesEverySandboxAndItsSSHFilesUnchanged(t *testi
 				t.Fatalf("builds=%d SSH probes=%v", builds, fakes.Calls("ssh-keyscan"))
 			}
 			checkSSH()
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }
@@ -312,10 +302,37 @@ func TestUpdateAllReportsASandboxThatDisappearsAfterDiscoveryAndContinues(t *tes
 			responses = append(responses, successfulRunningUpdateResponses()...)
 			scriptUpdateAll(t, fakes, host.windows, responses)
 			stdout, stderr, status := runCLI(t, fixture, "update", "--all")
-			if status == 0 || !strings.Contains(stderr, "agent02") || !strings.Contains(stdout, "Sandbox agent01 is updated.") || strings.Contains(stdout, "agent02") {
+			if status == 0 || !strings.Contains(stderr, "agent02 does not exist in this controller group") || strings.Contains(stderr, "adopts its volumes") || !strings.Contains(stdout, "Sandbox agent01 is updated.") || strings.Contains(stdout, "agent02") {
 				t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
 			}
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
+		})
+	}
+}
+
+func TestUpdateAllReportsCurrentSandboxesEvenWhenAnImageBuildFails(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		t.Run(host.name, func(t *testing.T) {
+			fakes, fixture := resourceLimitHost(t, host.windows)
+			responses := updateAllInventory("agent01", "agent02")
+			responses = append(responses, updateAllObjects(t, "agent01", true, "current-base", "")...)
+			responses = append(responses, updateAllCurrentImage("")...)
+			responses = append(responses, updateAllObjects(t, "agent02", true, "old-native", "native")...)
+			responses = append(responses, updateAllOutdatedImage("native", false)...)
+			responses = append(responses, updateAllOutdatedImage("native", false)...)
+			responses = append(responses, testutil.Response{ExitCode: 42})
+			scriptUpdateAll(t, fakes, host.windows, responses)
+			stdout, stderr, status := runCLI(t, fixture, "update", "--all")
+			if status == 0 || !strings.Contains(stderr, "42") || !strings.Contains(stdout, "Sandbox agent01 is already up to date.") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			for _, call := range fakes.Calls("podman") {
+				args := podmanUpdateArgs(call.Args)
+				if slices.Contains([]string{"rename", "create", "start", "stop", "rm", "exec"}, args[0]) {
+					t.Fatalf("image build failure changed or probed a sandbox: %v", args)
+				}
+			}
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }
@@ -356,7 +373,7 @@ func TestUpdateAllSkipsRetainedVolumesAndExcludesOtherControllerGroups(t *testin
 					t.Fatalf("changed retained volumes or built an unnecessary image: %v", args)
 				}
 			}
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }
@@ -381,13 +398,7 @@ func TestUpdateAllReportsOwnerConflictsWithoutBuildingOrChangingThoseSandboxes(t
 					} else if object != "container" {
 						objectName += "." + object
 					}
-					conflicting = updateObjectLabels(t, conflicting, objectName, func(labels map[string]any) {
-						if owner == "" {
-							delete(labels, "io.github.sandboxed-agents.owner")
-						} else {
-							labels["io.github.sandboxed-agents.owner"] = owner
-						}
-					})
+					conflicting = updateObjectOwner(t, conflicting, objectName, owner)
 					responses = append(responses, conflicting...)
 					responses = append(responses, updateAllBuildImage("dotnet", false)...)
 					responses = append(responses, successfulRunningUpdateResponses()...)
@@ -412,7 +423,7 @@ func TestUpdateAllReportsOwnerConflictsWithoutBuildingOrChangingThoseSandboxes(t
 					if builds != 1 {
 						t.Fatalf("builds=%d", builds)
 					}
-					assertUpdateAllPreservesData(t, fakes)
+					assertUpdateChangesPreserveData(t, fakes)
 				})
 			}
 		}
@@ -468,22 +479,12 @@ func TestUpdateAllContinuesAfterBackupRemovalOrFinalStopFails(t *testing.T) {
 						t.Errorf("missing %q: %q", phrase, stderr)
 					}
 				}
-				var changes [][]string
-				for _, call := range fakes.Calls("podman") {
-					args := podmanUpdateArgs(call.Args)
-					if !slices.Contains([]string{"rename", "create", "start", "stop", "rm"}, args[0]) || !strings.Contains(strings.Join(args, " "), "agent01") {
-						continue
-					}
-					if args[0] == "create" {
-						args = []string{"create"}
-					}
-					changes = append(changes, args)
-				}
+				changes := updateAllSandboxChanges(t, fakes, "agent01")
 				if !reflect.DeepEqual(changes, want) {
 					t.Fatalf("completed sandbox changes=%v want=%v", changes, want)
 				}
 				checkSSH()
-				assertUpdateAllPreservesData(t, fakes)
+				assertUpdateChangesPreserveData(t, fakes)
 			})
 		}
 	}

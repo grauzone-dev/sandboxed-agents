@@ -55,8 +55,8 @@ func UpdateAll(ctx context.Context, hostOS, group, assetHash string, run process
 			continue
 		}
 		if !update.containerExists {
-			if !slices.ContainsFunc(update.volumes, func(volume volume) bool { return volume.exists }) {
-				report(name, fmt.Errorf(updateNoContainerFormat, name))
+			if !update.hasVolumes() {
+				report(name, update.checkContainerPresence())
 				continue
 			}
 			if _, err := fmt.Fprintln(streams.Stdout, fmt.Sprintf(updateAllVolumesOnlyFormat, name)); err != nil {
@@ -67,6 +67,12 @@ func UpdateAll(ctx context.Context, hostOS, group, assetHash string, run process
 		set, missing, err := update.plan(ctx)
 		if err != nil {
 			report(name, err)
+			continue
+		}
+		if update.current {
+			if err := update.Apply(ctx); err != nil {
+				report(name, err)
+			}
 			continue
 		}
 		updates = append(updates, update)
@@ -105,37 +111,32 @@ func discoverGroupSandboxes(ctx context.Context, group string, run process.Runne
 	if err != nil {
 		return nil, err
 	}
-	var volumes []volumeRecord
-	if err := queryPodmanJSON(ctx, run, []string{"volume", "ls", "--format", "json"}, "volume ls", &volumes); err != nil {
+	volumes, err := queryVolumes(ctx, run)
+	if err != nil {
 		return nil, err
-	}
-	if volumes == nil {
-		return nil, fmt.Errorf("invalid podman volume ls response")
 	}
 	names := make(map[string]bool)
 	for _, container := range containers {
 		for _, prefix := range []string{containerPrefix, backupPrefix} {
 			if name, found := strings.CutPrefix(container.Names[0], prefix+group+"."); found {
+				if err := ValidateName(name); err != nil {
+					return nil, fmt.Errorf("invalid podman ps response: %w", err)
+				}
 				names[name] = true
 			}
 		}
 	}
-	seen := make(map[string]bool)
 	for _, volume := range volumes {
-		if volume.Name == "" || seen[volume.Name] {
-			return nil, fmt.Errorf("invalid podman volume ls response")
-		}
-		seen[volume.Name] = true
 		base, _, valid := splitSandboxVolume(volume.Name)
 		if name, found := strings.CutPrefix(base, containerPrefix+group+"."); valid && found {
+			if err := ValidateName(name); err != nil {
+				return nil, fmt.Errorf("invalid podman volume ls response: %w", err)
+			}
 			names[name] = true
 		}
 	}
 	result := make([]string, 0, len(names))
 	for name := range names {
-		if err := ValidateName(name); err != nil {
-			return nil, err
-		}
 		result = append(result, name)
 	}
 	slices.Sort(result)

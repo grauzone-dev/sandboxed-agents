@@ -44,7 +44,7 @@ func TestAgentLoginRunsTheCatalogWorkflowAsAgent(t *testing.T) {
 		t.Fatalf("requests=%v", requests)
 	}
 	request := requests[0]
-	if request.Name != home+"/.local/bin/copilot" || !reflect.DeepEqual(request.Args, []string{"login", "--device-code"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || request.Dir != home || request.Streams.Stdin != stdin || request.Streams.Stdout != &stdout || request.Streams.Stderr != &stderr {
+	if request.Name != filepath.Join(home, ".local", "bin", "copilot") || !reflect.DeepEqual(request.Args, []string{"login", "--device-code"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || request.Dir != home || request.Streams.Stdin != stdin || request.Streams.Stdout != &stdout || request.Streams.Stderr != &stderr {
 		t.Fatalf("request=%+v", request)
 	}
 	if !strings.Contains(stdout.String(), "GitHub Copilot CLI signs in") {

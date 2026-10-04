@@ -45,7 +45,8 @@ func loginAgentCommand(group *string, run process.Runner, catalog agentcatalog.C
 		Running:           func(*Invocation) error { return login.CheckRunning() },
 		Preconditions:     func(*Invocation) error { return login.CheckReady(ctx) },
 		Terminal: func(invocation *Invocation) error {
-			if !platform.IsTerminal(invocation.Stdin) || !platform.IsTerminal(os.Stdout) {
+			stdout, ok := invocation.Stdout.(*os.File)
+			if !platform.IsTerminal(invocation.Stdin) || !ok || !platform.IsTerminal(stdout) {
 				return errors.New(agentLoginNeedsTerminal)
 			}
 			return nil

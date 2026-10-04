@@ -1,6 +1,6 @@
 package cli
 
 const (
-	updateMissingNameMessage = "missing sandbox name; use sandboxed-agents update NAME"
-	updateUsageMessage       = "update takes exactly one argument, NAME; use sandboxed-agents update NAME"
+	updateMissingNameMessage = "missing update target; use sandboxed-agents update NAME or sandboxed-agents update --all"
+	updateUsageMessage       = "update takes exactly one target, either NAME or --all; use sandboxed-agents update NAME or sandboxed-agents update --all"
 )

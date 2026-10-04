@@ -17,7 +17,9 @@ type Up struct {
 	toolchains       toolchains.Set
 	agents           []string
 	withProvided     bool
-	workspace        string
+	workspaceSource  string
+	workspaceHost    string
+	workspaceOS      string
 	sshPortAvailable func(int) (bool, error)
 }
 
@@ -85,7 +87,7 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		return err
 	}
 	for _, volume := range up.volumes {
-		if up.workspace != "" && volume.target == "/workspace" {
+		if up.workspaceSource != "" && volume.target == "/workspace" {
 			if volume.exists {
 				if _, err := fmt.Fprintln(up.streams.Stdout, fmt.Sprintf(workspaceUnusedVolumeMessage, volume.name)); err != nil {
 					return err
@@ -106,7 +108,7 @@ func (up *Up) createSandbox(ctx context.Context) error {
 	}
 
 	kind := "volume"
-	if up.workspace != "" {
+	if up.workspaceSource != "" {
 		kind = "bind"
 	}
 	args := []string{
@@ -121,7 +123,7 @@ func (up *Up) createSandbox(ctx context.Context) error {
 	}
 	args = append(args, up.limits.createArguments()...)
 	for _, volume := range up.volumes {
-		if up.workspace != "" && volume.target == "/workspace" {
+		if up.workspaceSource != "" && volume.target == "/workspace" {
 			args = append(args, "--mount", up.workspaceMount())
 			continue
 		}

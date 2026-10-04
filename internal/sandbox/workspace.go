@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -18,10 +19,7 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 	if workspace == "" {
 		return nil
 	}
-	if host.OS == "windows" {
-		return errors.New(workspaceWindowsError)
-	}
-	if host.OS != "linux" {
+	if host.OS != "linux" && host.OS != "windows" {
 		return fmt.Errorf(workspaceUnsupportedError, host.OS)
 	}
 	path, err := absoluteHostPath(workspace)
@@ -39,20 +37,33 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 	if !info.IsDir() {
 		return fmt.Errorf(workspaceDirectoryError, resolved)
 	}
-	paths, err := protectedHostPaths(up.group)
+	if host.OS == "windows" {
+		if err := validateHostWorkspacePath(resolved); err != nil {
+			return err
+		}
+	}
+	paths, err := protectedHostPaths(host.OS, up.group)
 	if err != nil {
 		return err
 	}
-	mounts, err := host.mounts()
-	if err != nil {
-		return fmt.Errorf(workspaceAliasError, "/proc/self/mountinfo", err)
+	var mounts []hostMount
+	if host.OS == "linux" {
+		mounts, err = host.mounts()
+		if err != nil {
+			return fmt.Errorf(workspaceAliasError, "/proc/self/mountinfo", err)
+		}
 	}
+	var protectedPaths []string
 	for _, path := range paths {
 		protected, err := resolveHostPath(path)
 		if err != nil {
 			return fmt.Errorf(workspaceAliasError, path, err)
 		}
-		overlap, err := mountedPathsOverlap(resolved, protected, mounts)
+		protectedPaths = append(protectedPaths, protected)
+		var overlap bool
+		if host.OS == "linux" {
+			overlap, err = mountedPathsOverlap(resolved, protected, mounts)
+		}
 		if err == nil && !overlap {
 			overlap, err = hostPathsOverlap(resolved, protected)
 		}
@@ -63,16 +74,23 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 			return fmt.Errorf(workspaceProtectedError, resolved, protected)
 		}
 	}
-	up.workspace = resolved
+	if host.OS == "windows" {
+		if err := checkNestedWorkspaceAliases(resolved, protectedPaths); err != nil {
+			return err
+		}
+	}
+	up.workspaceSource = resolved
+	up.workspaceHost = resolved
+	up.workspaceOS = host.OS
 	return nil
 }
 
-func protectedHostPaths(group string) ([]string, error) {
+func protectedHostPaths(hostOS, group string) ([]string, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
-	state, err := controllergroup.StateDirectory("linux", group)
+	state, err := controllergroup.StateDirectory(hostOS, group)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +98,17 @@ func protectedHostPaths(group string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{executable, state, filepath.Dir(state), os.TempDir(), "/tmp", filepath.Join(home, ".ssh")}, nil
+	paths := []string{executable, state, filepath.Dir(state), os.TempDir(), filepath.Join(home, ".ssh")}
+	if hostOS == "linux" {
+		paths = append(paths, "/tmp")
+	}
+	return paths, nil
 }
 
 func absoluteHostPath(path string) (string, error) {
+	if runtime.GOOS == "windows" {
+		return filepath.Abs(path)
+	}
 	if !filepath.IsAbs(path) {
 		directory, err := os.Getwd()
 		if err != nil {
@@ -122,7 +147,7 @@ func resolveHostPath(path string) (string, error) {
 			resolved = candidate
 			continue
 		}
-		if info.Mode()&os.ModeSymlink == 0 {
+		if !hostPathAlias(info) {
 			resolved = candidate
 			continue
 		}
@@ -140,7 +165,7 @@ func resolveHostPath(path string) (string, error) {
 		}
 		parts = append(strings.Split(target, string(filepath.Separator)), parts...)
 	}
-	return resolved, nil
+	return normalizeHostPath(resolved)
 }
 
 func pathContains(parent, child string) bool {
@@ -149,7 +174,7 @@ func pathContains(parent, child string) bool {
 }
 
 func (up *Up) checkWorkspace() error {
-	if up.workspace == "" {
+	if up.workspaceSource == "" {
 		return nil
 	}
 	recorded := "volume"
@@ -164,25 +189,32 @@ func (up *Up) checkWorkspace() error {
 		for _, mount := range up.containerMounts {
 			if mount.Destination == "/workspace" && mount.Type == "bind" {
 				recorded = mount.Source
+				if up.workspaceOS == "windows" {
+					translated, ok := windowsWorkspacePath(recorded)
+					if !ok {
+						break
+					}
+					recorded = translated
+				}
 				resolved, err := resolveHostPath(recorded)
 				if err != nil {
 					return fmt.Errorf(workspaceAliasError, recorded, err)
 				}
-				if resolved == up.workspace {
+				if resolved == up.workspaceHost {
 					return nil
 				}
 				break
 			}
 		}
 	}
-	return fmt.Errorf(workspaceConflictError, recorded, up.workspace, up.name, up.name)
+	return fmt.Errorf(workspaceConflictError, recorded, up.workspaceHost, up.name, up.name)
 }
 
 func (up *Up) workspaceMount() string {
 	var output bytes.Buffer
 	writer := csv.NewWriter(&output)
 	// The CSV readers of Go and Podman drop one carriage return before a line feed, so doubling it keeps the validated path intact.
-	source := strings.ReplaceAll(up.workspace, "\r\n", "\r\r\n")
+	source := strings.ReplaceAll(up.workspaceSource, "\r\n", "\r\r\n")
 	_ = writer.Write([]string{"type=bind", "source=" + source, "target=/workspace"})
 	writer.Flush()
 	return strings.TrimSuffix(output.String(), "\n")
@@ -220,7 +252,11 @@ func hostPathsOverlap(workspace, protected string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if info.IsDir() || !fileHasAliases(info) {
+	aliases, err := fileHasAliases(protected, info)
+	if err != nil {
+		return false, err
+	}
+	if info.IsDir() || !aliases {
 		return false, nil
 	}
 	overlap := false

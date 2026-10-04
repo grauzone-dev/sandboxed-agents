@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/big"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -92,7 +93,25 @@ func parseHostPublicKey(text, algorithm string) ([]byte, bool) {
 		_, err := ecdh.P256().NewPublicKey(parts[2])
 		return blob, err == nil
 	case "ssh-rsa":
-		return blob, len(parts) == 3 && len(parts[1]) > 0 && len(parts[2]) > 0
+		if len(parts) != 3 {
+			return nil, false
+		}
+		exponent, ok := parsePositiveSSHInteger(parts[1])
+		if !ok || exponent.Cmp(big.NewInt(3)) < 0 || exponent.Bit(0) == 0 {
+			return nil, false
+		}
+		modulus, ok := parsePositiveSSHInteger(parts[2])
+		return blob, ok && modulus.Bit(0) == 1 && modulus.Cmp(exponent) > 0
 	}
 	return nil, false
+}
+
+func parsePositiveSSHInteger(data []byte) (*big.Int, bool) {
+	if len(data) == 0 || data[0]&0x80 != 0 {
+		return nil, false
+	}
+	if data[0] == 0 && (len(data) == 1 || data[1]&0x80 == 0) {
+		return nil, false
+	}
+	return new(big.Int).SetBytes(data), true
 }

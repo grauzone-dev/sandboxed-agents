@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -230,6 +231,18 @@ func TestFingerprintRejectsInvalidPublicKeysWithoutPartialOutput(t *testing.T) {
 			{name: "text type does not match blob", key: 0, data: strings.Replace(hostKeyResponses(t)[2].Stdout, "ssh-rsa", "ssh-ed25519", 1)},
 			{name: "multiple keys in file", key: 0, data: strings.Repeat(hostKeyResponses(t)[0].Stdout, 2)},
 			{name: "ECDSA point off curve", key: 1, data: "ecdsa-sha2-nistp256 " + base64.StdEncoding.EncodeToString(append([]byte("\x00\x00\x00\x13ecdsa-sha2-nistp256\x00\x00\x00\x08nistp256\x00\x00\x00\x41\x04"), make([]byte, 64)...)) + "\n"},
+			{name: "RSA empty exponent", key: 2, data: rsaHostPublicKey(nil, []byte{0, 0x81})},
+			{name: "RSA empty modulus", key: 2, data: rsaHostPublicKey([]byte{3}, nil)},
+			{name: "RSA one byte zero exponent", key: 2, data: rsaHostPublicKey([]byte{0}, []byte{0, 0x81})},
+			{name: "RSA one byte zero modulus", key: 2, data: rsaHostPublicKey([]byte{3}, []byte{0})},
+			{name: "RSA redundant exponent padding", key: 2, data: rsaHostPublicKey([]byte{0, 3}, []byte{0, 0x81})},
+			{name: "RSA redundant modulus padding", key: 2, data: rsaHostPublicKey([]byte{3}, []byte{0, 0x7f})},
+			{name: "RSA negative exponent", key: 2, data: rsaHostPublicKey([]byte{0x83}, []byte{0, 0x81})},
+			{name: "RSA negative modulus", key: 2, data: rsaHostPublicKey([]byte{3}, []byte{0x81})},
+			{name: "RSA exponent one", key: 2, data: rsaHostPublicKey([]byte{1}, []byte{0, 0x81})},
+			{name: "RSA even exponent", key: 2, data: rsaHostPublicKey([]byte{4}, []byte{0, 0x81})},
+			{name: "RSA even modulus", key: 2, data: rsaHostPublicKey([]byte{3}, []byte{0, 0x80})},
+			{name: "RSA modulus smaller than exponent", key: 2, data: rsaHostPublicKey([]byte{5}, []byte{3})},
 		} {
 			t.Run(fixture+"/"+test.name, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
@@ -244,6 +257,15 @@ func TestFingerprintRejectsInvalidPublicKeysWithoutPartialOutput(t *testing.T) {
 			})
 		}
 	}
+}
+
+func rsaHostPublicKey(exponent, modulus []byte) string {
+	var blob []byte
+	for _, field := range [][]byte{[]byte("ssh-rsa"), exponent, modulus} {
+		blob = binary.BigEndian.AppendUint32(blob, uint32(len(field)))
+		blob = append(blob, field...)
+	}
+	return "ssh-rsa " + base64.StdEncoding.EncodeToString(blob) + "\n"
 }
 
 func TestFingerprintIgnoresPublicKeyCommentsAndLineEndings(t *testing.T) {

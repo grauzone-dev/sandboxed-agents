@@ -2,15 +2,209 @@ package cli_test
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
+
+func TestWindowsUpRejectsNestedRootRelativeProtectedWorkspaceLinkBeforePodman(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	root := workspaceFixture(t)
+	protected := configureWindowsWorkspacePaths(t, root)["ssh"]
+	workspace := filepath.Join(root, "project")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(workspace, "protected-link")
+	target := strings.TrimPrefix(protected, filepath.VolumeName(protected))
+	if err := setWindowsWorkspaceRawRelativeSymlink(t, protected, target, alias); err != nil {
+		t.Fatal(err)
+	}
+	assertWindowsWorkspaceLinkTarget(t, alias, target, protected)
+	assertWindowsProtectedWorkspace(t, fakes, workspace, protected)
+}
+
+func TestWindowsUpBindsRootRelativeWorkspaceLinkFromItsCanonicalTarget(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	root := workspaceFixture(t)
+	configureWindowsWorkspacePaths(t, root)
+	workspace := filepath.Join(root, "project")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "workspace-link")
+	target := strings.TrimPrefix(workspace, filepath.VolumeName(workspace))
+	if err := setWindowsWorkspaceRawRelativeSymlink(t, workspace, target, alias); err != nil {
+		t.Fatal(err)
+	}
+	assertWindowsWorkspaceLinkTarget(t, alias, target, workspace)
+	responses := append(healthyWindowsPodman(), upObjectResponses(nil, false, nil, nil)[1:]...)
+	responses = append(responses, make([]testutil.Response, 5)...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "windows", "up", "agent01", alias)
+	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
+		t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
+	}
+	calls := fakes.Calls("podman")
+	if len(calls) < 9 {
+		t.Fatalf("no sandbox creation: %v", calls)
+	}
+	operations := windowsOperationCalls(t, calls[7:], "podman-machine-default")
+	create := operations[len(operations)-2].Args
+	mounts := windowsWorkspaceMounts(t, create)
+	want := []string{"type=bind", "source=" + windowsWorkspaceSource(t, workspace), "target=/workspace"}
+	if create[0] != "create" || len(mounts) != 3 || !reflect.DeepEqual(mounts[0], want) {
+		t.Fatalf("create=%v mounts=%v want workspace=%v", create, mounts, want)
+	}
+	assertNoSSH(t, fakes)
+}
+
+func TestWindowsUpRejectsDriveRelativeWorkspaceLinksBeforePodman(t *testing.T) {
+	for _, location := range []string{"workspace", "nested"} {
+		t.Run(location, func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			root := workspaceFixture(t)
+			configureWindowsWorkspacePaths(t, root)
+			workspace := filepath.Join(root, "project")
+			if err := os.Mkdir(workspace, 0700); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(root, "workspace-link")
+			if location == "nested" {
+				alias = filepath.Join(workspace, "nested-link")
+			}
+			target := filepath.VolumeName(workspace) + "project"
+			if err := setWindowsWorkspaceRawRelativeSymlink(t, workspace, target, alias); err != nil {
+				if errors.Is(err, syscall.Errno(4392)) || errors.Is(err, syscall.Errno(87)) {
+					t.Skipf("Windows rejects creation of a drive-relative symlink: %v", err)
+				}
+				t.Fatal(err)
+			}
+			got, err := os.Readlink(alias)
+			if err != nil || got != target {
+				t.Fatalf("raw drive-relative target=%q error=%v want=%q", got, err, target)
+			}
+			if location == "workspace" {
+				workspace = alias
+			}
+			stdout, stderr, status := runCLI(t, "windows", "up", "agent01", workspace)
+			if status == 0 || stdout != "" || !strings.Contains(stderr, fmt.Sprintf("%q", alias)) {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("podman")) != 0 {
+				t.Fatal("drive-relative workspace link called Podman")
+			}
+			assertNoSSH(t, fakes)
+		})
+	}
+}
+
+func setWindowsWorkspaceRawRelativeSymlink(t *testing.T, initialTarget, target, alias string) error {
+	t.Helper()
+	if err := os.Symlink(initialTarget, alias); err != nil {
+		return err
+	}
+	encoded, err := syscall.UTF16FromString(target)
+	if err != nil {
+		return err
+	}
+	encoded = encoded[:len(encoded)-1]
+	buffer := make([]byte, 20+len(encoded)*2)
+	binary.LittleEndian.PutUint32(buffer[:4], syscall.IO_REPARSE_TAG_SYMLINK)
+	binary.LittleEndian.PutUint16(buffer[4:6], uint16(len(buffer)-8))
+	binary.LittleEndian.PutUint16(buffer[10:12], uint16(len(encoded)*2))
+	binary.LittleEndian.PutUint16(buffer[14:16], uint16(len(encoded)*2))
+	binary.LittleEndian.PutUint32(buffer[16:20], 1)
+	for index, unit := range encoded {
+		binary.LittleEndian.PutUint16(buffer[20+index*2:], unit)
+	}
+	name, err := syscall.UTF16PtrFromString(alias)
+	if err != nil {
+		return err
+	}
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_WRITE, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.CloseHandle(handle)
+	var returned uint32
+	write := func() error {
+		return syscall.DeviceIoControl(handle, 0x000900a4, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil)
+	}
+	if err := write(); errors.Is(err, syscall.ERROR_PRIVILEGE_NOT_HELD) {
+		restore, err := enableWindowsWorkspaceSymlinkPrivilege()
+		if err != nil {
+			return err
+		}
+		defer restore()
+		return write()
+	} else {
+		return err
+	}
+}
+
+func enableWindowsWorkspaceSymlinkPrivilege() (func(), error) {
+	process, err := syscall.GetCurrentProcess()
+	if err != nil {
+		return nil, err
+	}
+	var token syscall.Token
+	if err := syscall.OpenProcessToken(process, syscall.TOKEN_ADJUST_PRIVILEGES|syscall.TOKEN_QUERY, &token); err != nil {
+		return nil, err
+	}
+	closeToken := func() { token.Close() }
+	name, err := syscall.UTF16PtrFromString("SeCreateSymbolicLinkPrivilege")
+	if err != nil {
+		closeToken()
+		return nil, err
+	}
+	api := syscall.NewLazyDLL("advapi32.dll")
+	lookup := api.NewProc("LookupPrivilegeValueW")
+	adjust := api.NewProc("AdjustTokenPrivileges")
+	var privileges [16]byte
+	binary.LittleEndian.PutUint32(privileges[:4], 1)
+	binary.LittleEndian.PutUint32(privileges[12:], 2)
+	result, _, callErr := lookup.Call(0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&privileges[4])))
+	if result == 0 {
+		closeToken()
+		return nil, callErr
+	}
+	var previous [16]byte
+	var length uint32
+	result, _, callErr = adjust.Call(uintptr(token), 0, uintptr(unsafe.Pointer(&privileges[0])), uintptr(len(previous)), uintptr(unsafe.Pointer(&previous[0])), uintptr(unsafe.Pointer(&length)))
+	if result == 0 || errors.Is(callErr, syscall.Errno(1300)) {
+		closeToken()
+		return nil, fmt.Errorf("enable symlink creation privilege: %v", callErr)
+	}
+	return func() {
+		adjust.Call(uintptr(token), 0, uintptr(unsafe.Pointer(&previous[0])), 0, 0, 0)
+		closeToken()
+	}, nil
+}
+
+func assertWindowsWorkspaceLinkTarget(t *testing.T, alias, target, resolved string) {
+	t.Helper()
+	got, err := os.Readlink(alias)
+	if err != nil || got != target {
+		t.Fatalf("raw link target=%q error=%v want=%q", got, err, target)
+	}
+	linkInfo, err := os.Stat(alias)
+	if err != nil {
+		t.Fatalf("raw link does not resolve on Windows: %v", err)
+	}
+	targetInfo, err := os.Stat(resolved)
+	if err != nil || !os.SameFile(linkInfo, targetInfo) {
+		t.Fatalf("raw link does not reach intended Windows target %q: error=%v", resolved, err)
+	}
+}
 
 func TestWindowsUpAcceptsWorkspaceContainingANonAliasReparseFile(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)

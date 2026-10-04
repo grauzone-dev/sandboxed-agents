@@ -362,6 +362,11 @@ func TestDisableMissingManagedCommandStillRemovesSelectionEntry(t *testing.T) {
 
 func TestDisableCanceledWhileWaitingForManagerLockLeavesHomeUnchanged(t *testing.T) {
 	home := t.TempDir()
+	writeHomeFile(t, home, ".local/state/sandboxed-agents/manager.lock", "", 0600)
+	writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", `{"codex":{"version":"1.2.3"}}`, 0600)
+	writeHomeFile(t, home, ".local/bin/codex", "managed", 0700)
+	writeHomeFile(t, home, ".config/credentials", "preserved", 0600)
+	before := homeFiles(t, home)
 	started, release := make(chan struct{}), make(chan struct{})
 	defer func() {
 		select {
@@ -377,7 +382,7 @@ func TestDisableCanceledWhileWaitingForManagerLockLeavesHomeUnchanged(t *testing
 	}, agentOptions(home))
 	done := make(chan struct{})
 	go func() {
-		runAgentCommand(app, "enable", "codex")
+		runAgentCommand(app, "enable", "claude")
 		close(done)
 	}()
 	select {
@@ -385,7 +390,6 @@ func TestDisableCanceledWhileWaitingForManagerLockLeavesHomeUnchanged(t *testing
 	case <-time.After(5 * time.Second):
 		t.Fatal("enable did not start")
 	}
-	before := homeFiles(t, home)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var diagnostic bytes.Buffer
@@ -393,14 +397,14 @@ func TestDisableCanceledWhileWaitingForManagerLockLeavesHomeUnchanged(t *testing
 	if status == 0 || !strings.Contains(diagnostic.String(), "context canceled") {
 		t.Fatalf("status=%d diagnostic=%q", status, diagnostic.String())
 	}
-	if !reflect.DeepEqual(before, homeFiles(t, home)) {
-		t.Fatal("canceled disable changed home")
-	}
 	close(release)
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("enable did not finish")
+	}
+	if !reflect.DeepEqual(before, homeFiles(t, home)) {
+		t.Fatal("canceled disable changed home")
 	}
 }
 

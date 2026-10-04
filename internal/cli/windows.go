@@ -40,15 +40,22 @@ func (podman *windowsPodman) run(ctx context.Context, request process.Request) (
 	if request.Name != "podman" {
 		return podman.runner(ctx, request)
 	}
+	if err := podman.selectTarget(ctx); err != nil {
+		return 1, err
+	}
+	request.Args = append([]string{"--connection", podman.connection}, request.Args...)
+	return podman.invoke(ctx, request)
+}
+
+func (podman *windowsPodman) selectTarget(ctx context.Context) error {
 	if podman.connection == "" {
 		selectionContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		connection, err := preflight.SelectWindowsConnection(selectionContext, podman.invoke)
 		if err != nil {
-			return 1, fmt.Errorf("%w; %s", err, windowsTargetHint)
+			return fmt.Errorf("%w; %s", err, windowsTargetHint)
 		}
 		podman.connection = connection
 	}
-	request.Args = append([]string{"--connection", podman.connection}, request.Args...)
-	return podman.invoke(ctx, request)
+	return nil
 }

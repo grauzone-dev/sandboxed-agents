@@ -97,3 +97,36 @@ func sshDirectoryContents(t *testing.T, directory string) map[string][]byte {
 	}
 	return contents
 }
+
+func managedSSHFiles(t *testing.T, directory string) map[string][]byte {
+	t.Helper()
+	var files map[string][]byte
+	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(directory, path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(filepath.ToSlash(relative), "/")
+		if len(parts) == 2 && strings.HasPrefix(parts[0], "group-") && parts[1] == "locks" && entry.IsDir() {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if files == nil {
+			files = make(map[string][]byte)
+		}
+		files[relative], err = os.ReadFile(path)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}

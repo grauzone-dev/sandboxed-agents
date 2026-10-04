@@ -13,7 +13,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
-var linuxPrerequisiteNames = []string{"podman", "Podman version", "rootless", "subordinate UID", "subordinate GID", "newuidmap", "newgidmap", "pasta", "cgroups v2", "CPU", "memory", "process", "ssh", "ssh-keygen"}
+var linuxPrerequisiteNames = []string{"podman", "Podman version", "rootless", "subordinate UID", "subordinate GID", "newuidmap", "newgidmap", "pasta", "cgroups v2", "CPU", "memory", "process", "ssh", "ssh-keygen", "ssh-keyscan"}
 
 func linuxHost(t *testing.T) *testutil.FakePrograms {
 	t.Helper()
@@ -86,7 +86,7 @@ func TestCheckNamesEachMissingLinuxPrerequisite(t *testing.T) {
 			service := "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service"
 			wantMissing := []string{name}
 			switch name {
-			case "podman", "newuidmap", "newgidmap", "pasta", "ssh", "ssh-keygen":
+			case "podman", "newuidmap", "newgidmap", "pasta", "ssh", "ssh-keygen", "ssh-keyscan":
 				if err := os.Remove(filepath.Join(filepath.Dir(fakes.Podman), name)); err != nil {
 					t.Fatal(err)
 				}

@@ -34,7 +34,7 @@ func TestCheckReportsWindowsPrerequisites(t *testing.T) {
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
-	for _, prerequisite := range []string{"Windows 11 x64", "Podman client", "Podman machine runs Podman", "machine is running", "WSL2", "rootless", "cgroups v2", "ssh is available", "ssh-keygen is available", "Windows drives"} {
+	for _, prerequisite := range []string{"Windows 11 x64", "Podman client", "Podman machine runs Podman", "machine is running", "WSL2", "rootless", "cgroups v2", "ssh is available", "ssh-keygen is available", "ssh-keyscan is available", "Windows drives"} {
 		if !strings.Contains(stdout, prerequisite) {
 			t.Errorf("missing %q from %q", prerequisite, stdout)
 		}
@@ -106,6 +106,7 @@ func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
 		}, missing: "Podman machine must use cgroups v2"},
 		{name: "ssh absent", remove: "ssh", missing: "ssh was not found on PATH"},
 		{name: "ssh-keygen absent", remove: "ssh-keygen", missing: "ssh-keygen was not found on PATH"},
+		{name: "ssh-keyscan absent", remove: "ssh-keyscan", missing: "ssh-keyscan was not found on PATH"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -117,7 +118,7 @@ func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
 			}
 			fakes.Script("podman", responses...)
 			if test.remove != "" {
-				programs := map[string]string{"podman": fakes.Podman, "ssh": fakes.SSH, "ssh-keygen": fakes.SSHKeygen}
+				programs := map[string]string{"podman": fakes.Podman, "ssh": fakes.SSH, "ssh-keygen": fakes.SSHKeygen, "ssh-keyscan": fakes.SSHKeyscan}
 				if err := os.Remove(programs[test.remove]); err != nil {
 					t.Fatal(err)
 				}
@@ -155,8 +156,8 @@ func TestCheckReportsEachMissingWindowsPrerequisite(t *testing.T) {
 		}
 		seen[message] = prerequisite
 	}
-	if len(missingMessages) != 9 {
-		t.Fatalf("covered %d prerequisite messages; want 9", len(missingMessages))
+	if len(missingMessages) != 10 {
+		t.Fatalf("covered %d prerequisite messages; want 10", len(missingMessages))
 	}
 
 }

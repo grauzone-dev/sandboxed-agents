@@ -31,7 +31,7 @@ func TestSSHConfigPrintsUninstalledEntryWithoutChangingFiles(t *testing.T) {
 				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 				owned := "default"
 				scriptLifecycleObjects(t, fakes, host.windows, upObjectResponses(&owned, running, nil, nil), map[string]string{"ssh-port": "2222"})
-				beforeSSH, beforeState := sshDirectoryContents(t, sshDir), sshDirectoryContents(t, state)
+				beforeSSH, beforeState := sshDirectoryContents(t, sshDir), managedSSHFiles(t, state)
 				stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01")
 				if status != 0 {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -44,7 +44,7 @@ func TestSSHConfigPrintsUninstalledEntryWithoutChangingFiles(t *testing.T) {
 				if !strings.Contains(stderr, "not installed") || !strings.Contains(stderr, "ssh-config agent01 --install") {
 					t.Errorf("note=%q", stderr)
 				}
-				if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) {
+				if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
 					t.Fatal("printing changed files")
 				}
 				assertNoSSH(t, fakes)
@@ -148,13 +148,13 @@ func TestSSHSetupInstallsDedicatedKeyPinAndSingleIncludeAndReinstallsWithoutChan
 					}
 				}
 			}
-			beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+			beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 			scriptSSHInstall(t, fakes, host.windows, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"})
 			stdout, stderr, status = runCLI(t, fixture, "ssh-config", "agent01", "--install")
 			if status != 0 || stderr != "" || !strings.Contains(stdout, "unchanged") {
 				t.Fatalf("repeat status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+			if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 				t.Fatal("reinstall changed files")
 			}
 			if len(fakes.Calls("ssh-keygen")) != 1 {
@@ -165,7 +165,7 @@ func TestSSHSetupInstallsDedicatedKeyPinAndSingleIncludeAndReinstallsWithoutChan
 			if status != 0 || stderr != "" || stdout != string(entry) {
 				t.Fatalf("installed print status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+			if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 				t.Fatal("installed print changed files")
 			}
 		})
@@ -191,7 +191,7 @@ func TestSSHSetupRefusesStoppedManagerUnavailableAndConfiguredNamesWithoutFileCh
 				if test.conflict {
 					fakes.Script("ssh", testutil.Response{Stdout: "host agent01\nhostname personal.example\nport 22\n"}, testutil.Response{Stdout: "host agent01\nhostname agent01\nport 22\n"})
 				}
-				beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+				beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 				stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
 				if status == 0 || !strings.Contains(stderr, test.want) {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -202,7 +202,7 @@ func TestSSHSetupRefusesStoppedManagerUnavailableAndConfiguredNamesWithoutFileCh
 				if test.conflict && !strings.Contains(stderr, "agent01") {
 					t.Fatalf("conflict not named: %q", stderr)
 				}
-				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+				if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 					t.Fatal("refusal changed files")
 				}
 				if len(fakes.Calls("ssh-keygen")) != 0 {
@@ -278,7 +278,7 @@ func TestSSHSetupRejectsChangedHostKeyAndUnavailableManagerAfterInstallation(t *
 			if status != 0 {
 				t.Fatalf("initial status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+			beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 			for _, managerDown := range []bool{false, true} {
 				responses := []testutil.Response{{Stdout: "sandboxed-agents-manager v1\n"}, {Stdout: sshChangedHostKey + "\n"}}
 				if managerDown {
@@ -296,7 +296,7 @@ func TestSSHSetupRejectsChangedHostKeyAndUnavailableManagerAfterInstallation(t *
 				} else if !strings.Contains(stderr, "ssh-config agent01 --remove") || !strings.Contains(stderr, "ssh-config agent01 --install") {
 					t.Fatalf("mismatch guidance=%q", stderr)
 				}
-				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+				if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 					t.Fatal("failure changed files")
 				}
 			}
@@ -426,7 +426,7 @@ func TestSSHSetupFailureAfterUpOrStartKeepsSandboxRunningAndNamesRetry(t *testin
 					if reason == "keygen" {
 						fakes.Script("ssh-keygen", testutil.Response{ExitCode: 1, Stderr: "injected key generation refusal"})
 					}
-					beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+					beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 					stdout, stderr, status := runCLI(t, fixture, command, "agent01", "--ssh-config")
 					if status == 0 || !strings.Contains(stdout, "Sandbox agent01 is running") || !strings.Contains(stderr, "ssh-config agent01 --install") {
 						t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -436,7 +436,7 @@ func TestSSHSetupFailureAfterUpOrStartKeepsSandboxRunningAndNamesRetry(t *testin
 							t.Fatalf("installation failure stopped or removed sandbox: %v", call.Args)
 						}
 					}
-					if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+					if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 						t.Fatal("failed installation changed host files")
 					}
 				})
@@ -477,7 +477,7 @@ func TestUpWithAgentsAndSSHNamesBothRetriesAfterAgentOrManagerFailure(t *testing
 					}
 				}
 				assertNoSSH(t, fakes)
-				if sshDirectoryContents(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
+				if managedSSHFiles(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
 					t.Fatal("failure created SSH files")
 				}
 			})
@@ -513,12 +513,12 @@ func TestSSHCommandsApplySandboxOwnerAndInterruptedUpdateChecksBeforeRunningAndI
 						responses = append(healthyWindowsPodman()[1:3], responses...)
 					}
 					fakes.Script("podman", responses...)
-					beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+					beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 					stdout, stderr, status := runCLI(t, fixture, args...)
 					if status == 0 || stdout != "" || !strings.Contains(stderr, test.want) || strings.Contains(stderr, "start agent01") {
 						t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 					}
-					if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+					if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 						t.Fatal("refusal changed files")
 					}
 					assertNoSSH(t, fakes)
@@ -545,7 +545,7 @@ func TestSSHUsageErrorsRunBeforePodmanOrHostWrites(t *testing.T) {
 				t.Fatal("usage error called Podman")
 			}
 			assertNoSSH(t, fakes)
-			if sshDirectoryContents(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
+			if managedSSHFiles(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
 				t.Fatal("usage error wrote files")
 			}
 		})
@@ -563,7 +563,7 @@ func TestUpSSHManagerCheckPrecedesOptionConflictAndNamesRetry(t *testing.T) {
 			if status == 0 || !strings.Contains(stderr, "manager does not answer") || !strings.Contains(stderr, "ssh-config agent01 --install") || strings.Contains(stderr, "conflict") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			if sshDirectoryContents(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
+			if managedSSHFiles(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
 				t.Fatal("manager failure wrote files")
 			}
 			assertNoSSH(t, fakes)
@@ -581,7 +581,7 @@ func TestStopAndStartPreserveInstalledSSHSetupWithoutAuthorizingAgain(t *testing
 			if status != 0 {
 				t.Fatalf("initial status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+			beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 			port := unusedSSHPort(t)
 			owned := "default"
 			stopResponses := append(upObjectResponses(&owned, true, nil, nil), testutil.Response{Stdout: "[]\n"}, testutil.Response{})
@@ -596,7 +596,7 @@ func TestStopAndStartPreserveInstalledSSHSetupWithoutAuthorizingAgain(t *testing
 			if status != 0 || stderr != "" {
 				t.Fatalf("start status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+			if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 				t.Fatal("lifecycle changed SSH files")
 			}
 			count := 0
@@ -626,7 +626,7 @@ func TestStartAndUpRefuseChangedPinAndKeepInstalledFiles(t *testing.T) {
 				if status != 0 {
 					t.Fatalf("initial status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+				beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 				owned := "default"
 				responses := upObjectResponses(&owned, true, nil, nil)
 				if command == "up" {
@@ -642,7 +642,7 @@ func TestStartAndUpRefuseChangedPinAndKeepInstalledFiles(t *testing.T) {
 				if status == 0 || !strings.Contains(stderr, "differs from the pinned") || !strings.Contains(stderr, "ssh-config agent01 --remove") || !strings.Contains(stderr, "ssh-config agent01 --install") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+				if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 					t.Fatal("mismatch changed files")
 				}
 				for _, call := range fakes.Calls("podman") {
@@ -665,7 +665,7 @@ func TestSSHConfigPrintsQualifiedUninstalledHostWithoutCreatingGroupState(t *tes
 			if status != 0 || !strings.HasPrefix(stdout, "Host agent01.extra.live\n") || !strings.Contains(stdout, "group-live") || !strings.Contains(stderr, "ssh-config agent01.extra --install") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
-			if sshDirectoryContents(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
+			if managedSSHFiles(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
 				t.Fatal("print created files")
 			}
 			assertNoSSH(t, fakes)
@@ -727,7 +727,7 @@ func TestSSHInstallationRollsBackHostPublicationFailuresAfterAuthorization(t *te
 				if err := os.RemoveAll(sshDir); err != nil {
 					t.Fatal(err)
 				}
-				beforeState := sshDirectoryContents(t, state)
+				beforeState := managedSSHFiles(t, state)
 				directory := filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743032")
 				blocker := filepath.Join(directory, "external-blocker")
 				faultRoot := directory
@@ -755,7 +755,7 @@ func TestSSHInstallationRollsBackHostPublicationFailuresAfterAuthorization(t *te
 				if err := os.RemoveAll(faultRoot); err != nil {
 					t.Fatal(err)
 				}
-				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) {
+				if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
 					t.Fatal("publication failure did not restore managed host state")
 				}
 				if fault != "user configuration rename" && sshDirectoryContents(t, sshDir) != nil {
@@ -823,7 +823,7 @@ func TestSSHInstallationRejectsPartialStateBeforeAuthorization(t *testing.T) {
 				}
 				scriptSSHInstall(t, fakes, host.windows, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n"})
 				scriptSSHDefaults(fakes, "agent01")
-				beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+				beforeState, beforeSSH := managedSSHFiles(t, state), sshDirectoryContents(t, sshDir)
 				stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
 				for _, call := range fakes.Calls("podman") {
 					if slices.Contains(call.Args, "authorize") {
@@ -834,7 +834,7 @@ func TestSSHInstallationRejectsPartialStateBeforeAuthorization(t *testing.T) {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
 				assertNoSSH(t, fakes)
-				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+				if !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
 					t.Fatal("partial state refusal changed files")
 				}
 			})

@@ -78,7 +78,7 @@ func Check(ctx context.Context, host Host) []Result {
 	for _, controller := range []struct{ key, name string }{{"cpu", "CPU"}, {"memory", "memory"}, {"pids", "process"}} {
 		results = append(results, Result{Name: controller.name, Met: cgroups.Controllers[controller.key], Remedy: "delegate the cgroup v2 " + controller.key + " controller to your user, for example with Delegate= in a user@.service drop-in"})
 	}
-	for _, tool := range []string{"ssh", "ssh-keygen"} {
+	for _, tool := range []string{"ssh", "ssh-keygen", "ssh-keyscan"} {
 		results = append(results, Result{Name: tool, Met: has(tool), Remedy: "install the OpenSSH client and make sure " + tool + " is on PATH"})
 	}
 	return results

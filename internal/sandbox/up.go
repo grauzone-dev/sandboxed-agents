@@ -107,6 +107,10 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		}
 	}
 
+	return up.runPodman(ctx, up.createArguments(image)...)
+}
+
+func (up *Up) createArguments(image string) []string {
 	kind := "volume"
 	if up.workspaceSource != "" {
 		kind = "bind"
@@ -130,8 +134,5 @@ func (up *Up) createSandbox(ctx context.Context) error {
 		args = append(args, "--mount", "type=volume,source="+volume.name+",target="+volume.target)
 	}
 	args = append(args, image)
-	if err := up.runPodman(ctx, args...); err != nil {
-		return err
-	}
-	return nil
+	return args
 }

@@ -163,7 +163,7 @@ func sshPortHostFixture(fixture string) preflight.Host {
 		Platform: "linux", UID: 1000, Username: "fixture", Run: platform.Run,
 		LookPath: func(name string) (string, error) {
 			switch name {
-			case "podman", "newuidmap", "newgidmap", "pasta", "ssh", "ssh-keygen":
+			case "podman", "newuidmap", "newgidmap", "pasta", "ssh", "ssh-keygen", "ssh-keyscan":
 				return name, nil
 			}
 			return "", os.ErrNotExist

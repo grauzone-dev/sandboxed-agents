@@ -14,7 +14,7 @@ import (
 
 const fakeStateEnv = "SANDBOXED_AGENTS_FAKE_STATE"
 
-var fakeProgramNames = []string{"podman", "ssh", "getent", "ssh-keygen"}
+var fakeProgramNames = []string{"podman", "ssh", "getent", "ssh-keygen", "ssh-keyscan"}
 
 type Response struct {
 	Stdout              string
@@ -30,12 +30,13 @@ type Response struct {
 type Call struct{ Args []string }
 
 type FakePrograms struct {
-	Podman    string
-	SSH       string
-	Getent    string
-	SSHKeygen string
-	t         testing.TB
-	state     string
+	Podman     string
+	SSH        string
+	Getent     string
+	SSHKeygen  string
+	SSHKeyscan string
+	t          testing.TB
+	state      string
 }
 
 func NewFakePrograms(t testing.TB) *FakePrograms {
@@ -67,9 +68,13 @@ func NewFakePrograms(t testing.TB) *FakePrograms {
 			f.Getent = path
 		case "ssh-keygen":
 			f.SSHKeygen = path
+		case "ssh-keyscan":
+			f.SSHKeyscan = path
 		}
 	}
 	t.Setenv(fakeStateEnv, dir)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "state"))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return f
 }

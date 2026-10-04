@@ -1,6 +1,6 @@
 package cli
 
-const upHelp = `Usage: sandboxed-agents up NAME [WORKSPACE] [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE] [--with SET] [--port N]
+const upHelp = `Usage: sandboxed-agents up NAME [WORKSPACE] [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE] [--with SET] [--port N] [--agents LIST]
 
 Create the sandbox NAME and start it, or start it if it already exists.
 
@@ -17,6 +17,7 @@ Options:
   --with SET         toolchains built into the image (default none)
   --port N           SSH port on 127.0.0.1 (default: the first free port
                      from 2222 upward, chosen when the sandbox is created)
+  --agents LIST      agents to enable once the sandbox runs (default none)
   --help             show this help
 
 WORKSPACE, when given, directly follows NAME. Options follow NAME and
@@ -32,6 +33,9 @@ Value formats (every number must be greater than zero; no sign, no exponent):
   --with SET     comma-separated toolchain names, or none alone for the
                  base image; valid values: native, none
   --port N       whole number from 1 to 65535
+  --agents LIST  comma-separated agent names from the agent catalog, for
+                 example claude,codex; no empty name, a repeated name counts
+                 once; valid names: claude, codex, copilot, opencode
 
 The workspace bind is the only host path a sandbox mounts. Symlinks and other
 aliases are resolved first. Before the preflight, up refuses a WORKSPACE that
@@ -49,4 +53,17 @@ SSH port that differs from the recorded value makes up fail without starting
 it. Omit them to start the sandbox unchanged. To change them, run
 sandboxed-agents remove NAME, which keeps the sandbox's volumes and never
 deletes a bound directory, then sandboxed-agents up NAME with the new values.
+
+--agents is not part of the configuration and is never compared. up checks
+every name before it calls Podman. Once the sandbox runs, new or existing,
+up enables each listed agent that is not enabled yet, as
+sandboxed-agents agents enable NAME AGENT does, and leaves enabled agents
+as they are. It prints the output of these installations after the last
+attempt. When an installation fails, up asks the manager for its version
+again. If it answers, the sandbox keeps running, the other agents are
+still attempted, and up exits with status 1 naming the failed agents and
+the command to retry each. If the manager does not answer, before the
+first or after a failed attempt, up prints no installation output, only
+one message naming sandboxed-agents check NAME and the commands to retry
+every listed agent; agents enabled before then stay enabled.
 `

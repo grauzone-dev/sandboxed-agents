@@ -167,7 +167,7 @@ type sandboxHost struct {
 	sshPortAvailable func(int) (bool, error)
 }
 
-func upCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler) Command {
+func upCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler, catalog agentcatalog.Catalog) Command {
 	ctx := context.Background()
 	var up *sandbox.Up
 	return Command{Name: "up", Checks: Checks{
@@ -178,12 +178,12 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			workspace, limits, port, selection, provided, err := parseUpArguments(invocation.Args[1:])
+			options, err := parseUpArguments(invocation.Args[1:], catalog)
 			if err != nil {
 				return err
 			}
-			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, sandbox.UpOptions{Limits: limits, Port: port, Toolchains: selection, WithProvided: provided, SSHPortAvailable: host.sshPortAvailable}, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
-			if err := up.BindWorkspace(host.workspace, workspace); err != nil {
+			up = sandbox.NewUp(invocation.Args[0], *group, assetHash, sandbox.UpOptions{Limits: options.limits, Port: options.port, Toolchains: options.toolchains, WithProvided: options.withProvided, Agents: options.agents, SSHPortAvailable: host.sshPortAvailable}, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			if err := up.BindWorkspace(host.workspace, options.workspace); err != nil {
 				return err
 			}
 			return nil
@@ -204,7 +204,7 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 			if err := sandbox.ValidateName(args[0]); err != nil {
 				return err
 			}
-			if _, _, _, _, _, err := parseUpArguments(args[1:]); err != nil {
+			if _, err := parseUpArguments(args[1:], catalog); err != nil {
 				return err
 			}
 		}
@@ -295,9 +295,9 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		return err
 	}, Commands: []Command{
 		{Name: "agents", Commands: []Command{enableAgentCommand(&group, run, catalog)}},
-		upCommand(assetHash, host, &group, run, check),
+		upCommand(assetHash, host, &group, run, check, catalog),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
-			return sandbox.List(context.Background(), group, run, invocation.Stdout)
+			return sandbox.List(context.Background(), group, run, invocation.Stdout, catalog)
 		}},
 		removeCommand(&group, run),
 		{Name: "integrations", Commands: []Command{
@@ -330,16 +330,30 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 	return tree.Execute(args, stdout, stderr)
 }
 
-func parseUpArguments(args []string) (string, sandbox.ResourceLimits, int, toolchains.Set, bool, error) {
-	workspace := ""
+type upArguments struct {
+	workspace    string
+	limits       sandbox.ResourceLimits
+	port         int
+	toolchains   toolchains.Set
+	withProvided bool
+	agents       []string
+}
+
+func parseUpArguments(args []string, catalog agentcatalog.Catalog) (upArguments, error) {
+	var options upArguments
 	if len(args) > 0 && args[0] != "" && !strings.HasPrefix(args[0], "-") {
-		workspace = args[0]
+		options.workspace = args[0]
 		args = args[1:]
 	}
-	selection, provided, remaining, err := parseToolchains(args)
+	agents, remaining, err := parseUpAgents(args, catalog)
 	if err != nil {
-		return workspace, sandbox.ResourceLimits{}, 0, selection, provided, err
+		return options, err
 	}
-	limits, port, err := sandbox.ParseUpOptions(remaining)
-	return workspace, limits, port, selection, provided, err
+	options.agents = agents
+	options.toolchains, options.withProvided, remaining, err = parseToolchains(remaining)
+	if err != nil {
+		return options, err
+	}
+	options.limits, options.port, err = sandbox.ParseUpOptions(remaining)
+	return options, err
 }

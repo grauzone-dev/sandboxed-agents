@@ -3,12 +3,15 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
@@ -32,14 +35,16 @@ const (
 
 type listRow struct {
 	name       string
+	container  string
 	state      sandboxState
 	workspace  string
 	sshPort    string
 	volumes    []string
 	toolchains string
+	agents     string
 }
 
-func List(ctx context.Context, group string, run process.Runner, output io.Writer) error {
+func List(ctx context.Context, group string, run process.Runner, output io.Writer, catalog agentcatalog.Catalog) error {
 	objects, err := collectListObjects(ctx, group, run)
 	if err != nil {
 		return err
@@ -56,6 +61,11 @@ func List(ctx context.Context, group string, run process.Runner, output io.Write
 			return err
 		}
 		rows = append(rows, row)
+	}
+	for index := range rows {
+		if rows[index].state == sandboxRunning {
+			rows[index].agents = objects[rows[index].name].agentsColumn(ctx, rows[index].container, catalog)
+		}
 	}
 	return renderList(output, rows)
 }
@@ -143,7 +153,11 @@ func renderList(output io.Writer, rows []listRow) error {
 		if selection == "" {
 			selection = "-"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t-\t%s\n", row.name, row.state, workspace, port, selection, existingVolumes)
+		agents := row.agents
+		if agents == "" {
+			agents = "-"
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.name, row.state, workspace, port, selection, agents, existingVolumes)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -189,6 +203,7 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 		}
 		conflict = conflict || !row.state.isOwned(record.Config.Labels[OwnerLabel])
 		if index == 0 || name == row.state.container {
+			result.container = name
 			result.state = sandboxStopped
 			if record.State.Running {
 				result.state = sandboxRunning
@@ -230,4 +245,30 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 		result.state = sandboxOwnerConflict
 	}
 	return result, nil
+}
+
+func (row *listObjects) agentsColumn(ctx context.Context, container string, catalog agentcatalog.Catalog) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var output bytes.Buffer
+	args := managerArgs(container, "agents", "list")
+	status, err := row.state.run(ctx, process.Request{Name: "podman", Args: args, Streams: process.Streams{Stdout: &output}})
+	if err != nil || status != 0 || ctx.Err() != nil {
+		return ""
+	}
+	var agents []string
+	if err := json.Unmarshal(output.Bytes(), &agents); err != nil || agents == nil {
+		return ""
+	}
+	for _, agent := range agents {
+		if _, ok := catalog.Find(agent); !ok {
+			return ""
+		}
+	}
+	slices.Sort(agents)
+	agents = slices.Compact(agents)
+	if len(agents) == 0 {
+		return "none"
+	}
+	return strings.Join(agents, ",")
 }

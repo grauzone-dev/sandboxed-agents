@@ -15,6 +15,7 @@ type Up struct {
 	limits           ResourceLimits
 	port             int
 	toolchains       toolchains.Set
+	agents           []string
 	withProvided     bool
 	workspace        string
 	sshPortAvailable func(int) (bool, error)
@@ -25,6 +26,7 @@ type UpOptions struct {
 	Port             int
 	Toolchains       toolchains.Set
 	WithProvided     bool
+	Agents           []string
 	SSHPortAvailable func(int) (bool, error)
 }
 
@@ -33,7 +35,7 @@ func NewUp(name, group, assetHash string, options UpOptions, run process.Runner,
 	if available == nil {
 		available = sshPortAvailable
 	}
-	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: options.Limits, port: options.Port, toolchains: options.Toolchains, withProvided: options.WithProvided, sshPortAvailable: available}
+	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: options.Limits, port: options.Port, toolchains: options.Toolchains, withProvided: options.WithProvided, agents: options.Agents, sshPortAvailable: available}
 }
 
 func (up *Up) Apply(ctx context.Context) error {
@@ -47,8 +49,10 @@ func (up *Up) Apply(ctx context.Context) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(up.streams.Stdout, "Sandbox %s is running.\n", up.name)
-	return err
+	if _, err := fmt.Fprintf(up.streams.Stdout, "Sandbox %s is running.\n", up.name); err != nil {
+		return err
+	}
+	return up.enableAgents(ctx)
 }
 
 func (up *Up) CheckOptions() error {

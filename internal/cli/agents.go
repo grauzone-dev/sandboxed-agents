@@ -3,8 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -28,12 +26,8 @@ func enableAgentCommand(group *string, run process.Runner, catalog agentcatalog.
 			if len(invocation.Args) > 2 {
 				return unexpectedArgument(invocation.Args[2])
 			}
-			if _, ok := catalog.Find(invocation.Args[1]); !ok {
-				names := catalog.Names()
-				if len(names) == 0 {
-					return fmt.Errorf("unknown agent %q; no valid agent names are available yet", invocation.Args[1])
-				}
-				return fmt.Errorf("unknown agent %q; valid agents: %s", invocation.Args[1], strings.Join(names, ", "))
+			if err := validateAgent(invocation.Args[1], catalog); err != nil {
+				return err
 			}
 			enable = sandbox.NewEnableAgent(invocation.Args[0], *group, invocation.Args[1], run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil

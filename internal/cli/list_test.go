@@ -332,6 +332,10 @@ func assertListReadOnly(t *testing.T, fakes *testutil.FakePrograms, windows bool
 			t.Fatal("empty Podman invocation")
 		}
 		switch call.Args[0] {
+		case "exec":
+			if len(call.Args) != 6 || call.Args[1] != "--user=0:0" || call.Args[3] != "/usr/local/bin/sandboxed-agents-manager" || call.Args[4] != "agents" || call.Args[5] != "list" {
+				t.Fatalf("unexpected manager query: %v", call.Args)
+			}
 		case "ps":
 			if !slices.Equal(call.Args, []string{"ps", "--all", "--format", "json"}) {
 				t.Fatalf("unexpected container inventory: %v", call.Args)

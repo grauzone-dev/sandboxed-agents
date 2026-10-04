@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
@@ -21,7 +22,12 @@ func (up *Up) enableAgents(ctx context.Context) error {
 	var failed []string
 	var reports, diagnostic bytes.Buffer
 	for _, agent := range up.agents {
-		status, err := up.run(ctx, process.Request{Name: "podman", Args: managerArgs(up.container, "agents", "enable", agent), Streams: process.Streams{Stdout: &reports, Stderr: &diagnostic}})
+		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+		status, err := up.run(attemptCtx, process.Request{Name: "podman", Args: managerArgs(up.container, "agents", "enable", agent), Streams: process.Streams{Stdout: &reports, Stderr: &diagnostic}})
+		if err == nil {
+			err = attemptCtx.Err()
+		}
+		cancel()
 		if err != nil || status != 0 {
 			if err := up.CheckManager(ctx); err != nil {
 				return managerUnavailable

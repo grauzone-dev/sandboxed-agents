@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/cli"
@@ -232,5 +233,68 @@ func TestUpReportsAManagerThatStopsAnsweringDuringAgentInstallationOnce(t *testi
 	}
 	if calls := fakes.Calls("podman"); len(calls) != len(responses) || calls[len(calls)-1].Args[len(calls[len(calls)-1].Args)-1] != "version" {
 		t.Fatal(calls)
+	}
+}
+
+func TestUpBoundsEachAgentInstallAndRechecksTheManagerWithAFreshContext(t *testing.T) {
+	for _, reachable := range []bool{false, true} {
+		t.Run(fmt.Sprint(reachable), func(t *testing.T) {
+			fakes := linuxHost(t)
+			owned := "default"
+			fakes.Script("podman", upObjectResponses(&owned, true, nil, nil)...)
+			probes := 0
+			var attempted []string
+			var previousAttempt context.Context
+			run := func(ctx context.Context, request process.Request) (int, error) {
+				if request.Args[0] != "exec" {
+					return platform.Run(ctx, request)
+				}
+				deadline, ok := ctx.Deadline()
+				if !ok || ctx.Err() != nil {
+					t.Fatalf("manager operation lacks a fresh deadline: %v", ctx.Err())
+				}
+				if request.Args[4] == "version" {
+					probes++
+					if time.Until(deadline) > 30*time.Second {
+						t.Fatalf("manager probe deadline=%v", deadline)
+					}
+					if probes > 1 {
+						if previousAttempt.Err() == nil {
+							t.Fatal("attempt context was not canceled before the recheck")
+						}
+						if !reachable {
+							return 127, nil
+						}
+					}
+					fmt.Fprintln(request.Streams.Stdout, "sandboxed-agents-manager dev")
+					return 0, nil
+				}
+				if time.Until(deadline) < 14*time.Minute || time.Until(deadline) > 15*time.Minute {
+					t.Fatalf("installation deadline=%v", deadline)
+				}
+				agent := request.Args[6]
+				attempted = append(attempted, agent)
+				previousAttempt = ctx
+				if agent == "codex" {
+					return 0, context.DeadlineExceeded
+				}
+				fmt.Fprintln(request.Streams.Stdout, "Agent claude is enabled (version 1.2.3).")
+				return 0, nil
+			}
+			host := sshPortHostFixture("ssh-ports-free")
+			host.Run = run
+			var stdout, stderr bytes.Buffer
+			status := cli.RunWithHost([]string{"up", "agent01", "--agents=codex,claude"}, &stdout, &stderr, "test", "assets", host)
+			if status == 0 || probes != 2 || previousAttempt.Err() == nil || !strings.Contains(stdout.String(), "Sandbox agent01 is running") {
+				t.Fatalf("status=%d probes=%d stdout=%q stderr=%q", status, probes, stdout.String(), stderr.String())
+			}
+			if reachable {
+				if !reflect.DeepEqual(attempted, []string{"codex", "claude"}) || !strings.Contains(stdout.String(), "Agent claude is enabled") || !strings.Contains(stderr.String(), "agents enable agent01 codex") || strings.Contains(stderr.String(), "manager does not answer") {
+					t.Fatalf("attempts=%v stdout=%q stderr=%q", attempted, stdout.String(), stderr.String())
+				}
+			} else if !reflect.DeepEqual(attempted, []string{"codex"}) || strings.Contains(stdout.String(), "Agent ") || !strings.Contains(stderr.String(), "manager does not answer") || !strings.Contains(stderr.String(), "check agent01") || !strings.Contains(stderr.String(), "agents enable agent01 claude") {
+				t.Fatalf("attempts=%v stdout=%q stderr=%q", attempted, stdout.String(), stderr.String())
+			}
+		})
 	}
 }

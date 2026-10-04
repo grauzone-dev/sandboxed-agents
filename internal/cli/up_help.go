@@ -59,7 +59,10 @@ every name before it calls Podman. Once the sandbox runs, new or existing,
 up enables each listed agent that is not enabled yet, as
 sandboxed-agents agents enable NAME AGENT does, and leaves enabled agents
 as they are. It prints the output of these installations after the last
-attempt. When an installation fails, up asks the manager for its version
+attempt. Each installation may take up to 15 minutes; one that takes
+longer counts as failed. Stopping the waiting podman exec may not stop the
+installation inside the sandbox, so check that it has finished before
+retrying it. When an installation fails, up asks the manager for its version
 again. If it answers, the sandbox keeps running, the other agents are
 still attempted, and up exits with status 1 naming the failed agents and
 the command to retry each. If the manager does not answer, before the

@@ -179,7 +179,9 @@ func TestUpdateImageBuildFailuresLeaveTheSandboxUnchanged(t *testing.T) {
 			name = "toolchain"
 		}
 		t.Run(name, func(t *testing.T) {
-			fakes := linuxHost(t)
+			fakes, _, sshDir, state := sshSetupHost(t, false)
+			checkSSH := installUpdateSSHFixture(t, sshDir, state)
+			defer checkSSH()
 			hash := imageBuildAssetHash(t)
 			missing := []testutil.Response{{ExitCode: 1}}
 			if selection != "" {

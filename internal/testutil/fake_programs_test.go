@@ -32,3 +32,18 @@ func TestFakeProgramsReturnScriptedOutputAndRecordExactArguments(t *testing.T) {
 		t.Fatalf("ssh calls = %#v", got)
 	}
 }
+
+func TestFakeProgramsRepeatAProbeUntilTheNextOperation(t *testing.T) {
+	f := testutil.NewFakePrograms(t)
+	f.Script("podman", testutil.Response{RepeatForArgs: []string{"exec", "version"}, Stdout: "not ready\n"}, testutil.Response{Stdout: "removed\n"})
+	for _, args := range [][]string{{"exec", "version"}, {"exec", "version"}, {"rm", "sandbox"}} {
+		output, err := exec.Command("podman", args...).Output()
+		want := "not ready\n"
+		if args[0] == "rm" {
+			want = "removed\n"
+		}
+		if err != nil || string(output) != want {
+			t.Fatalf("args=%v output=%q error=%v", args, output, err)
+		}
+	}
+}

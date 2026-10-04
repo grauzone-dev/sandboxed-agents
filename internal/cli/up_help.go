@@ -1,6 +1,7 @@
 package cli
 
 const upHelp = `Usage: sandboxed-agents up NAME [WORKSPACE] [--memory SIZE] [--cpus N] [--pids-limit N] [--shm-size SIZE] [--with SET] [--port N] [--agents LIST]
+       [--ssh-config]
 
 Create the sandbox NAME and start it, or start it if it already exists.
 
@@ -18,6 +19,8 @@ Options:
   --port N           SSH port on 127.0.0.1 (default: the first free port
                      from 2222 upward, chosen when the sandbox is created)
   --agents LIST      agents to enable once the sandbox runs (default none)
+  --ssh-config       after starting the sandbox, install its SSH setup as
+                     sandboxed-agents ssh-config NAME --install does
   --help             show this help
 
 WORKSPACE, when given, directly follows NAME. Options follow NAME and
@@ -69,4 +72,8 @@ the command to retry each. If the manager does not answer, before the
 first or after a failed attempt, up prints no installation output, only
 one message naming sandboxed-agents check NAME and the commands to retry
 every listed agent; agents enabled before then stay enabled.
+
+--ssh-config is not recorded on the container and never causes a conflict.
+When installing the SSH setup fails, the sandbox keeps running, and
+sandboxed-agents ssh-config NAME --install retries the installation.
 `

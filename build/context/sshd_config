@@ -9,5 +9,5 @@ AllowUsers agent
 AllowAgentForwarding no
 UsePAM yes
 StrictModes yes
-AuthorizedKeysFile .ssh/authorized_keys
+AuthorizedKeysFile /etc/ssh/authorized_keys
 Subsystem sftp internal-sftp

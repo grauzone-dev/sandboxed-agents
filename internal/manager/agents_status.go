@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -41,9 +43,10 @@ func (m *Manager) signInState(ctx context.Context, entry agentcatalog.Entry, run
 	_, err := run(ctx, process.Request{
 		Name: filepath.Join(m.options.Home, ".local", "bin", entry.Command), Args: entry.StatusProbe.Args,
 		User: &agentIdentity, Dir: m.options.Home, Env: agentEnvironment(m.options.Home),
-		Streams: process.Streams{Stdout: &output, Stderr: io.Discard},
+		CleanupGroup: true,
+		Streams:      process.Streams{Stdout: &output, Stderr: io.Discard},
 	})
-	if err != nil || ctx.Err() != nil {
+	if (err != nil && !errors.Is(err, exec.ErrWaitDelay)) || ctx.Err() != nil {
 		return "unknown"
 	}
 	var fields map[string]any

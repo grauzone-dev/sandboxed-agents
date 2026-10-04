@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -76,6 +77,8 @@ func TestAgentStatusInterpretsOnlyTheCatalogBooleanField(t *testing.T) {
 		want   string
 	}{
 		{"signed in", `{"authenticated":true}`, 0, nil, "signed in"},
+		{"output drain expired with boolean", `{"authenticated":true}`, 1, exec.ErrWaitDelay, "signed in"},
+		{"output drain expired without boolean", `{"authenticated":null}`, 1, exec.ErrWaitDelay, "unknown"},
 		{"not signed in", `{"authenticated":false}`, 0, nil, "not signed in"},
 		{"boolean on failure exit", `{"authenticated":false}`, 1, nil, "not signed in"},
 		{"boolean on nonzero signed in", `{"authenticated":true}`, 2, nil, "signed in"},
@@ -115,7 +118,7 @@ func TestAgentStatusInterpretsOnlyTheCatalogBooleanField(t *testing.T) {
 					return 0, nil
 				}
 				probes++
-				if request.Name != filepath.Join(home, ".local", "bin", "fifth-cli") || !reflect.DeepEqual(request.Args, []string{"auth", "status", "--json"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || request.Dir != home || request.Streams.Stdin != nil || !reflect.DeepEqual(request.Env, []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}) {
+				if request.Name != filepath.Join(home, ".local", "bin", "fifth-cli") || !reflect.DeepEqual(request.Args, []string{"auth", "status", "--json"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || request.Dir != home || request.Streams.Stdin != nil || !request.CleanupGroup || !reflect.DeepEqual(request.Env, []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}) {
 					t.Fatalf("unexpected probe: %+v", request)
 				}
 				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 30*time.Second {

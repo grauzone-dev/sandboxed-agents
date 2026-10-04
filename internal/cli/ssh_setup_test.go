@@ -309,7 +309,7 @@ func TestSSHSetupRejectsChangedHostKeyAndUnavailableManagerAfterInstallation(t *
 
 func TestUpAndStartInstallTheSameSSHSetupAfterStartingSandbox(t *testing.T) {
 	for _, host := range resourceLimitHosts {
-		for _, command := range []string{"up-new", "up-existing", "up-running", "start"} {
+		for _, command := range []string{"up-new", "up-existing", "up-running", "up-agents", "start"} {
 			t.Run(host.name+"/"+command, func(t *testing.T) {
 				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 				port := unusedSSHPort(t)
@@ -321,13 +321,17 @@ func TestUpAndStartInstallTheSameSSHSetupAfterStartingSandbox(t *testing.T) {
 					responses := append(upObjectResponses(nil, false, nil, nil), make([]testutil.Response, 6)...)
 					scriptResourceLimitObjects(t, fakes, host.windows, append(responses, install...), nil)
 					args = append(args, "--port", strconv.Itoa(port))
-				case "up-existing", "up-running":
+				case "up-existing", "up-running", "up-agents":
 					group := "default"
 					responses := upObjectResponses(&group, command == "up-running", nil, nil)
 					if command == "up-running" {
 						responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"})
 					} else {
 						responses = append(responses, testutil.Response{})
+					}
+					if command == "up-agents" {
+						args = append(args, "--agents", "codex")
+						responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: "Agent codex is enabled (version 1.2.3).\n"})
 					}
 					scriptResourceLimitObjects(t, fakes, host.windows, append(responses, install...), map[string]string{"ssh-port": strconv.Itoa(port)})
 				case "start":
@@ -341,6 +345,22 @@ func TestUpAndStartInstallTheSameSSHSetupAfterStartingSandbox(t *testing.T) {
 				stdout, stderr, status := runCLI(t, fixture, args...)
 				if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
 					t.Fatalf("%s status=%d stdout=%q stderr=%q", name, status, stdout, stderr)
+				}
+				if command == "up-agents" {
+					if !strings.Contains(stdout, "Agent codex is enabled") {
+						t.Fatalf("agent installation output missing: %q", stdout)
+					}
+					want := []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", "enable", "codex"}
+					if host.windows {
+						want = append([]string{"--connection", "podman-machine-default"}, want...)
+					}
+					var enabled bool
+					for _, call := range fakes.Calls("podman") {
+						enabled = enabled || slices.Equal(call.Args, want)
+					}
+					if !enabled {
+						t.Fatalf("agent installation call missing: %v", fakes.Calls("podman"))
+					}
 				}
 				entry, err := os.ReadFile(filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743031", "entry"))
 				if err != nil {
@@ -421,6 +441,46 @@ func TestSSHSetupFailureAfterUpOrStartKeepsSandboxRunningAndNamesRetry(t *testin
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestUpWithAgentsAndSSHNamesBothRetriesAfterAgentOrManagerFailure(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, failure := range []string{"agent", "running manager", "started manager"} {
+			t.Run(host.name+"/"+failure, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				owned := "default"
+				responses := upObjectResponses(&owned, failure == "running manager", nil, nil)
+				if failure != "running manager" {
+					responses = append(responses, testutil.Response{})
+				}
+				if failure == "agent" {
+					responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{ExitCode: 1, Stderr: "injected agent installation failure\n"}, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"})
+				} else {
+					responses = append(responses, testutil.Response{ExitCode: 1})
+				}
+				scriptResourceLimitObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": strconv.Itoa(unusedSSHPort(t))})
+				stdout, stderr, status := runCLI(t, fixture, "up", "agent01", "--agents", "codex", "--ssh-config")
+				if status == 0 || !strings.Contains(stderr, "agents enable agent01 codex") || !strings.Contains(stderr, "ssh-config agent01 --install") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				if failure == "running manager" && (!strings.Contains(stderr, "check agent01") || !strings.Contains(stderr, "restart agent01")) {
+					t.Fatalf("manager recovery missing: %q", stderr)
+				}
+				if failure != "running manager" && !strings.Contains(stdout, "Sandbox agent01 is running") {
+					t.Fatalf("running sandbox not reported: %q", stdout)
+				}
+				for _, call := range fakes.Calls("podman") {
+					if slices.Contains(call.Args, "exec") && slices.Contains(call.Args, "ssh") || slices.Contains(call.Args, "stop") || slices.Contains(call.Args, "rm") {
+						t.Fatalf("failure changed SSH state or stopped sandbox: %v", call.Args)
+					}
+				}
+				assertNoSSH(t, fakes)
+				if sshDirectoryContents(t, state) != nil || sshDirectoryContents(t, sshDir) != nil {
+					t.Fatal("failure created SSH files")
+				}
+			})
 		}
 	}
 }

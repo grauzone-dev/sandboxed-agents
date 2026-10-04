@@ -200,7 +200,7 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
 		Preconditions: func(invocation *Invocation) error {
 			if installSSH {
-				if err := up.CheckSSHManager(ctx, host.workspace.OS); err != nil {
+				if err := up.CheckSSHManager(ctx); err != nil {
 					return fmt.Errorf(sshRetryFormat, err, invocation.Args[0])
 				}
 			}
@@ -211,6 +211,9 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 		},
 	}, Action: func(invocation *Invocation) error {
 		if err := up.Apply(ctx); err != nil {
+			if installSSH {
+				return fmt.Errorf(sshDeferredRetryFormat, err, invocation.Args[0])
+			}
 			return err
 		}
 		if installSSH {

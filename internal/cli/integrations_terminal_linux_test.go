@@ -37,7 +37,7 @@ func TestGitIdentityForwardsATerminalForMissingValues(t *testing.T) {
 	responses := sandboxObjectResponses(&owner, true, nil, nil)
 	responses = append(responses, testutil.Response{Stdout: "[]"}, testutil.Response{})
 	fakes.Script("podman", responses...)
-	command := exec.Command(os.Args[0], "-test.run=^TestCLIProcess$", "--", "integrations", "config", "agent01", "git", "--email=E")
+	command := exec.Command(os.Args[0], "-test.run=^TestCLIProcess$", "--", "integrations", "config", "agent01", "git", "identity", "--email=E")
 	command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE=sandbox-host")
 	command.Stdin, command.Stdout = slave, slave
 	var stderr bytes.Buffer

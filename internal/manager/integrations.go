@@ -20,6 +20,9 @@ func runIntegrationWorkflow(ctx context.Context, args []string, streams process.
 	if err != nil {
 		return err
 	}
+	if request.Workflow == "credentials" {
+		return configureGit(ctx, "credential.helper", "store --file=/home/agent/.git-credentials", streams, run)
+	}
 	return setGitIdentity(ctx, request, streams, run)
 }
 
@@ -61,17 +64,24 @@ func setGitIdentity(ctx context.Context, request integrations.Request, streams p
 		{"user.name", *request.CommitName},
 		{"user.email", *request.CommitEmail},
 	} {
-		status, err := run(ctx, process.Request{
-			Name: "git", Args: []string{"config", "--global", "--replace-all", "--", value.key, value.value},
-			Env:     []string{"HOME=/home/agent", "USER=agent", "LOGNAME=agent", "PATH=/usr/local/bin:/usr/bin:/bin"},
-			Streams: streams,
-		})
-		if err != nil {
-			return fmt.Errorf(integrations.GitStartFailure, err)
+		if err := configureGit(ctx, value.key, value.value, streams, run); err != nil {
+			return err
 		}
-		if status != 0 {
-			return fmt.Errorf(integrations.GitFailure, status)
-		}
+	}
+	return nil
+}
+
+func configureGit(ctx context.Context, key, value string, streams process.Streams, run process.Runner) error {
+	status, err := run(ctx, process.Request{
+		Name: "git", Args: []string{"config", "--global", "--replace-all", "--", key, value},
+		Env:     []string{"HOME=/home/agent", "USER=agent", "LOGNAME=agent", "PATH=/usr/local/bin:/usr/bin:/bin"},
+		Streams: streams,
+	})
+	if err != nil {
+		return fmt.Errorf(integrations.GitStartFailure, err)
+	}
+	if status != 0 {
+		return fmt.Errorf(integrations.GitFailure, status)
 	}
 	return nil
 }

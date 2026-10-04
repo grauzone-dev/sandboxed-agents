@@ -12,30 +12,34 @@ import (
 )
 
 func TestNoninteractiveIntegrationExecHasABoundedContext(t *testing.T) {
-	request, err := integrations.Parse("config", []string{"git", "--name=N", "--email=E"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := time.Now()
-	var execution context.Context
-	workflow := sandbox.NewIntegrationWorkflow("agent01", "default", request, func(ctx context.Context, _ process.Request) (int, error) {
-		execution = ctx
-		deadline, ok := ctx.Deadline()
-		if !ok || deadline.Before(started) || deadline.After(time.Now().Add(30*time.Second)) {
-			t.Errorf("exec deadline=%v bounded=%v", deadline, ok)
-		}
-		return 0, nil
-	}, process.Streams{})
-	if err := workflow.Apply(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if execution == nil || !errors.Is(execution.Err(), context.Canceled) {
-		t.Fatalf("exec context was not canceled after completion: %v", execution)
+	for _, args := range [][]string{{"git", "identity", "--name=N", "--email=E"}, {"git", "credentials"}} {
+		t.Run(args[1], func(t *testing.T) {
+			request, err := integrations.Parse("config", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			var execution context.Context
+			workflow := sandbox.NewIntegrationWorkflow("agent01", "default", request, func(ctx context.Context, _ process.Request) (int, error) {
+				execution = ctx
+				deadline, ok := ctx.Deadline()
+				if !ok || deadline.Before(started) || deadline.After(time.Now().Add(30*time.Second)) {
+					t.Errorf("exec deadline=%v bounded=%v", deadline, ok)
+				}
+				return 0, nil
+			}, process.Streams{})
+			if err := workflow.Apply(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if execution == nil || !errors.Is(execution.Err(), context.Canceled) {
+				t.Fatalf("exec context was not canceled after completion: %v", execution)
+			}
+		})
 	}
 }
 
 func TestPromptingIntegrationExecKeepsTheCallerContext(t *testing.T) {
-	request, err := integrations.Parse("config", []string{"git", "--email=E"})
+	request, err := integrations.Parse("config", []string{"git", "identity", "--email=E"})
 	if err != nil {
 		t.Fatal(err)
 	}

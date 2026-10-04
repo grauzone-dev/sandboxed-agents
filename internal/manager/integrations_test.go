@@ -46,7 +46,7 @@ func TestGitIdentityRejectsIncompleteInputBeforeAnyWrite(t *testing.T) {
 				return 0, nil
 			}
 			var stderr bytes.Buffer
-			status := manager.New("test", run).Run(context.Background(), []string{"integrations", "config", "git"}, process.Streams{Stdin: strings.NewReader(input), Stderr: &stderr})
+			status := manager.New("test", run).Run(context.Background(), []string{"integrations", "config", "git", "identity"}, process.Streams{Stdin: strings.NewReader(input), Stderr: &stderr})
 			if status != 1 || stderr.Len() == 0 {
 				t.Fatalf("status=%d stderr=%q", status, stderr.String())
 			}
@@ -72,7 +72,7 @@ func TestGitIdentityNormalizesProcessFailuresAndStopsWriting(t *testing.T) {
 					return 0, nil
 				}
 				var stderr bytes.Buffer
-				status := manager.New("test", run).Run(context.Background(), []string{"integrations", "config", "git", "--name=N", "--email=E"}, process.Streams{Stderr: &stderr})
+				status := manager.New("test", run).Run(context.Background(), []string{"integrations", "config", "git", "identity", "--name=N", "--email=E"}, process.Streams{Stderr: &stderr})
 				if status != 1 || calls != failAt || stderr.Len() == 0 {
 					t.Fatalf("status=%d calls=%d stderr=%q", status, calls, stderr.String())
 				}
@@ -84,7 +84,7 @@ func TestGitIdentityNormalizesProcessFailuresAndStopsWriting(t *testing.T) {
 func TestManagerRejectsUndeliveredIntegrationWorkflowsWithoutProcesses(t *testing.T) {
 	for _, args := range [][]string{
 		{"config", "git", "identity", "--name=", "--email=E"},
-		{}, {"config"}, {"login", "github"}, {"login", "git"}, {"config", "github"}, {"config", "git", "credentials"}, {"config", "git", "identity", "--unknown"}, {"config", "git", "identity", "--name=N\x00", "--email=E"},
+		{}, {"config"}, {"login", "github"}, {"login", "git"}, {"config", "github"}, {"config", "git"}, {"config", "git", "identity", "--unknown"}, {"config", "git", "identity", "--name=N\x00", "--email=E"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			run := func(context.Context, process.Request) (int, error) {
@@ -117,7 +117,7 @@ func TestGitIdentityPromptsOnlyForMissingValuesBeforeChangingConfiguration(t *te
 				return 0, nil
 			}
 			var stdout, stderr bytes.Buffer
-			args := append([]string{"integrations", "config", "git"}, test.options...)
+			args := append([]string{"integrations", "config", "git", "identity"}, test.options...)
 			status := manager.New("test", run).Run(context.Background(), args, process.Streams{Stdin: strings.NewReader(test.input), Stdout: &stdout, Stderr: &stderr})
 			if status != 0 || stdout.Len() != 0 || stderr.String() != test.prompts || !reflect.DeepEqual(values, []string{"Typed Name", "typed@example.org"}) {
 				t.Fatalf("status=%d stdout=%q stderr=%q values=%v", status, stdout.String(), stderr.String(), values)

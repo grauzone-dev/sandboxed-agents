@@ -284,6 +284,8 @@ When a query exits non-zero, for example because your SSH configuration contains
 
 Steps 1 to 4 write nothing. When the manager does not answer, the command fails with the same message as `agents enable`, which names `sandboxed-agents check NAME` and `sandboxed-agents restart NAME`, and creates no key, pin, host entry, or `Include` line.
 
+Without an `entry` file, the `sandbox-HEX` path must not exist at all. When anything exists there, even an empty directory, for example left over from an interrupted installation, the installation refuses before it creates or authorizes a key, names the path, and changes nothing. Move that path aside, then run the installation again.
+
 When a later step fails, the installation removes the staging directory, the `sandbox-HEX` directory, and the directories it created, and restores the managed configuration to its previous content. An authorization that step 6 already wrote stays in the sandbox; the next installation replaces it.
 
 A repeated installation with an unchanged host key creates no new key, writes no file, prints that the SSH setup is already installed and nothing changed, and exits with status 0. It checks only the pin and the host entry in the managed configuration; an `Include` line you removed from your SSH configuration afterwards is not added again.
@@ -317,7 +319,7 @@ When the installation fails, whatever the reason, the sandbox stays and keeps ru
 | 4. Owner | reports an owner conflict on the container, a volume, or the backup container, names the Podman objects, and points to Podman |
 | 5. Interrupted update | reports a backup container with the current owner and names `sandboxed-agents update NAME` |
 | 6. Running state | `--install` only: reports a stopped sandbox and names `sandboxed-agents start NAME`; it starts nothing |
-| 7. Preconditions | `--install` only: reports a manager that does not answer. A host key that cannot be read, a host key that differs from the pin, and a host entry conflict are reported afterwards by the installation, before it writes anything. |
+| 7. Preconditions | `--install` only: reports a manager that does not answer. A host key that cannot be read, a host key that differs from the pin, a host entry conflict, and an existing `sandbox-HEX` path without an `entry` file are reported afterwards by the installation, before it writes anything. |
 
 The preflight (step 2), the terminal check (step 8), and the session guard (step 9) do not apply to `ssh-config`. On Windows, the machine selection runs after step 1 and before step 3, as for `shell`. An owner conflict on a stopped sandbox is therefore reported instead of the message naming `start NAME`.
 

@@ -198,6 +198,11 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if _, err := os.Lstat(paths.sandboxDirectory); err == nil {
+		return fmt.Errorf(sshExistingStateFormat, paths.sandboxDirectory)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := setup.checkHostEntryConflict(ctx, paths.userConfig); err != nil {
 		return err
 	}

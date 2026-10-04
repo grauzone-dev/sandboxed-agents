@@ -215,7 +215,7 @@ func TestAgentCommandsReportTheEarliestSandboxFailure(t *testing.T) {
 	}
 }
 
-func TestAgentChangesRejectInvalidUsageBeforePodman(t *testing.T) {
+func TestEnableAndDisableAgentsRejectInvalidUsageBeforePodman(t *testing.T) {
 	for _, operation := range []string{"enable", "disable"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, fixture := range []string{"sandbox-host", "windows"} {
@@ -240,7 +240,7 @@ func TestAgentChangesRejectInvalidUsageBeforePodman(t *testing.T) {
 	}
 }
 
-func TestAgentChangesStopAfterAManagerRequestFailure(t *testing.T) {
+func TestEnableAndDisableAgentsStopAfterAManagerRequestFailure(t *testing.T) {
 	for _, operation := range []string{"enable", "disable"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)

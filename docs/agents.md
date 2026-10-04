@@ -107,7 +107,7 @@ On Windows, both calls also name the selected Podman machine with `--connection`
 
 The manager serializes changes to the agent installations with one lock, the file `/home/agent/.local/state/sandboxed-agents/manager.lock` in the home volume. It is an advisory lock held through the operating system, so the operating system releases it when the process that holds it ends, also after a crash.
 
-`agents enable` and `agents disable` hold the lock from before they read the selection until their change is complete. One exception keeps `agents disable` from creating files: when the lock file does not exist yet, it first reads the selection without the lock, and if the agent is not listed there, it reports that nothing was to do and stops. A second `agents enable` or `agents disable` on the same sandbox, for the same or another agent, waits until the first has released the lock. Two concurrent `agents enable` calls for different agents therefore leave both agents in the selection.
+`agents enable` and `agents disable` hold the lock from before they read the selection until their change is complete. One exception keeps `agents disable` from creating files: when the lock file does not exist yet, it first reads the selection without the lock, and if the agent is not listed there, it reports that nothing was to do and stops. A second `agents enable` or `agents disable` that takes the lock on the same sandbox, for the same or another agent, waits until the first has released it. Two concurrent `agents enable` calls for different agents therefore leave both agents in the selection.
 
 ## Enable agents with `up`
 

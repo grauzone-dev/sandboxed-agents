@@ -3,12 +3,23 @@ package cli_test
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
+
+type toolchainSelectionExample struct{ selection, set, tagNames string }
+
+func toolchainCLIHost(t *testing.T, fixture string) (*testutil.FakePrograms, []testutil.Response) {
+	t.Helper()
+	if strings.HasPrefix(fixture, "windows") {
+		return testutil.NewFakePrograms(t), healthyWindowsPodman()
+	}
+	return linuxHost(t), []testutil.Response{{Stdout: "podman version 5.0.0\n"}}
+}
 
 func TestToolchainSelectionRejectsUndeliveredNamesBeforeExternalCalls(t *testing.T) {
 	for _, selection := range []string{"nosuch", "playwright", "none,dotnet", "dotnet,none", "none,native", "none,azure", "azure,none", "native,none", "none,none", "", "native,", ",native", " native", "native ", "native, native"} {
@@ -262,4 +273,58 @@ func TestListReadsTheToolchainSetOfTheSandbox(t *testing.T) {
 			assertListReadOnly(t, fakes, false)
 		})
 	}
+}
+
+func checkToolchainCreation(t *testing.T, fixture string, example toolchainSelectionExample, assertContext func(*testing.T, string)) {
+	t.Helper()
+	fakes, preflight := toolchainCLIHost(t, fixture)
+	captured := filepath.Join(t.TempDir(), "up-context")
+	responses := append(preflight, upObjectResponses(nil, false, nil, nil)[1:]...)
+	responses = append(responses,
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"sha256:current-base"}]`},
+		testutil.Response{ExitCode: 1},
+		testutil.Response{CaptureBuildContext: captured},
+		testutil.Response{Stdout: `[{"Id":"sha256:toolchain-set","Labels":{"io.github.sandboxed-agents.base-image":"sha256:current-base"}}]`},
+	)
+	responses = append(responses, make([]testutil.Response, 5)...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, fixture, "up", "agent01", "--with", example.selection)
+	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	calls := fakes.Calls("podman")[len(preflight):]
+	if fixture == "windows" {
+		calls = windowsOperationCalls(t, calls, "podman-machine-default")
+	}
+	var build, create []string
+	for _, call := range calls {
+		if call.Args[0] == "build" {
+			build = call.Args
+		}
+		if call.Args[0] == "create" {
+			create = call.Args
+		}
+	}
+	assertImageBuild(t, build, "fixture-assets", "localhost/sandboxed-agents:toolchains-"+example.tagNames+"-fixture-assets", example.set, "sha256:current-base")
+	if len(create) == 0 || create[len(create)-1] != "sha256:toolchain-set" || !strings.Contains(strings.Join(create, " "), "--label io.github.sandboxed-agents.toolchains="+example.set) {
+		t.Fatalf("create=%v", create)
+	}
+	assertContext(t, captured)
+}
+
+func checkListedToolchains(t *testing.T, set string) {
+	t.Helper()
+	fakes := testutil.NewFakePrograms(t)
+	owner := "default"
+	responses := listOneSandboxResponses("default", "agent01", &owner, true, map[string]string{"workspace": owner}, nil)
+	for index := range responses {
+		responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, fmt.Sprintf(`"io.github.sandboxed-agents.workspace-kind":"volume","io.github.sandboxed-agents.toolchains":%q`, set))
+	}
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
+	if status != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "agent01 running volume - "+set+" -") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	assertListReadOnly(t, fakes, false)
 }

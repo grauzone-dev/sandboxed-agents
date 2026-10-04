@@ -1,6 +1,9 @@
+//go:build windows
+
 package platform
 
 import (
+	"errors"
 	"os"
 	"syscall"
 	"unsafe"
@@ -14,7 +17,13 @@ const (
 	sshProtectedDACLInformation = 0x80000000
 )
 
-func RestrictSSHAccess(path string) error {
+func RestrictSSHAccess(path string) (err error) {
+	defer func() {
+		var pathError *os.PathError
+		if err != nil && !errors.As(err, &pathError) {
+			err = &os.PathError{Op: "acl", Path: path, Err: err}
+		}
+	}()
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -44,18 +53,18 @@ func RestrictSSHAccess(path string) error {
 	var descriptor unsafe.Pointer
 	ok, _, callErr := advapi.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW").Call(uintptr(unsafe.Pointer(text)), sshDescriptorRevision, uintptr(unsafe.Pointer(&descriptor)), 0)
 	if ok == 0 {
-		return &os.PathError{Op: "acl", Path: path, Err: callErr}
+		return callErr
 	}
 	defer syscall.LocalFree(syscall.Handle(descriptor))
 	var owner, acl unsafe.Pointer
 	var present, defaulted int32
 	ok, _, callErr = advapi.NewProc("GetSecurityDescriptorOwner").Call(uintptr(descriptor), uintptr(unsafe.Pointer(&owner)), uintptr(unsafe.Pointer(&defaulted)))
 	if ok == 0 {
-		return &os.PathError{Op: "acl", Path: path, Err: callErr}
+		return callErr
 	}
 	ok, _, callErr = advapi.NewProc("GetSecurityDescriptorDacl").Call(uintptr(descriptor), uintptr(unsafe.Pointer(&present)), uintptr(unsafe.Pointer(&acl)), uintptr(unsafe.Pointer(&defaulted)))
 	if ok == 0 {
-		return &os.PathError{Op: "acl", Path: path, Err: callErr}
+		return callErr
 	}
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
@@ -63,12 +72,12 @@ func RestrictSSHAccess(path string) error {
 	}
 	status, _, _ := advapi.NewProc("SetNamedSecurityInfoW").Call(uintptr(unsafe.Pointer(name)), sshFileObject, sshOwnerInformation|sshDACLInformation|sshProtectedDACLInformation, uintptr(owner), 0, uintptr(acl), 0)
 	if status != 0 {
-		return &os.PathError{Op: "acl", Path: path, Err: syscall.Errno(status)}
+		return syscall.Errno(status)
 	}
 	return nil
 }
 
-func ReplaceSSHFile(source, target string) error {
+func ReplaceFilePreservingDACL(source, target string) error {
 	from, err := syscall.UTF16PtrFromString(source)
 	if err != nil {
 		return err

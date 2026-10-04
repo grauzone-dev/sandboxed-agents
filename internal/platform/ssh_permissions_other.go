@@ -8,6 +8,6 @@ func RestrictSSHAccess(path string) error {
 	return nil
 }
 
-func ReplaceSSHFile(source, target string) error {
+func ReplaceFilePreservingDACL(source, target string) error {
 	return os.Rename(source, target)
 }

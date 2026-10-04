@@ -221,7 +221,7 @@ On Windows, the installation sets permissions instead ([Permissions on Windows](
 
 ### Permissions on Windows
 
-OpenSSH for Windows checks the owner and the permissions of a private key and of every SSH configuration file it reads, the managed configuration included, and ignores a key or refuses a configuration file whose permissions fail its check. On Windows, the installation restricts the files and directories it creates to your Windows account, which is enough for that check:
+OpenSSH for Windows checks the owner and the permissions of a private key, of your default SSH configuration `%USERPROFILE%\.ssh\config`, and of every file that configuration includes, the managed configuration among them, and ignores a key or refuses a configuration file whose permissions fail its check. On Windows, the installation restricts the files and directories it creates to your Windows account, which is enough for that check:
 
 - **Created files and directories.** The key pair, the pin `known_hosts`, the `entry` file, the managed configuration, the directories the installation creates for host state, and `%USERPROFILE%\.ssh` and `%USERPROFILE%\.ssh\config` when the installation creates them, are owned by your account and grant full control to your account only. They do not inherit permissions from their parent directory. New files and folders in a created directory inherit its permissions.
 - **No entry for SYSTEM or Administrators.** OpenSSH for Windows does not need one. Other accounts on the computer cannot open these files; an administrator can still take ownership of them, and any program that runs under your account can read them.

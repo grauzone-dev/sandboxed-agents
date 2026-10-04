@@ -369,7 +369,7 @@ func (setup *SSHSetup) restrictSSHAccess(path string) error {
 	return nil
 }
 
-func (setup *SSHSetup) writeSSHFile(path string, data []byte, mode os.FileMode, preserve bool) error {
+func (setup *SSHSetup) writeSSHFile(path string, data []byte, mode os.FileMode, preservePermissions bool) error {
 	info, err := os.Lstat(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -400,8 +400,8 @@ func (setup *SSHSetup) writeSSHFile(path string, data []byte, mode os.FileMode, 
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if setup.hostOS == "windows" && preserve && info != nil {
-		return platform.ReplaceSSHFile(file.Name(), path)
+	if setup.hostOS == "windows" && preservePermissions && info != nil {
+		return platform.ReplaceFilePreservingDACL(file.Name(), path)
 	}
 	return os.Rename(file.Name(), path)
 }

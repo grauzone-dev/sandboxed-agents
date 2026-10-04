@@ -41,13 +41,13 @@ When the standard input of `shell` is not a terminal, for example a pipe or a fi
 printf 'pwd\nid -u\n' | sandboxed-agents shell agent01
 ```
 
-A missing terminal is therefore never an error for `shell`. This version has no command that runs a single command line in a sandbox.
+A missing terminal is therefore never an error for `shell`. This version has no command that runs an arbitrary shell command in a sandbox; [`agents run`](agents.md#run-an-agent) runs only agents from the catalog.
 
 ### Exit status
 
 `shell` exits with the exit status of `podman exec`. When the shell starts, that is the shell's own exit status: `exit 7` in the shell makes `shell` exit with status 7. When Podman cannot run the shell, its own exit statuses apply, such as 125 for an error in Podman itself ([podman-exec(1), Exit Status](https://docs.podman.io/en/latest/markdown/podman-exec.1.html#exit-status)).
 
-`shell` is the only command of this version that passes through another program's exit status; `agents run`, planned for the first version, is to do the same. When `shell` refuses before it opens the shell, it exits with status 1, which a shell can also return. A non-zero status alone therefore does not tell whether the shell ran.
+`shell` and [`agents run`](agents.md#run-an-agent) are the commands of this version that pass through another program's exit status. When `shell` refuses before it opens the shell, it exits with status 1, which a shell can also return. A non-zero status alone therefore does not tell whether the shell ran.
 
 ### Command line
 

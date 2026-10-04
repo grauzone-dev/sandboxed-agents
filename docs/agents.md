@@ -145,7 +145,7 @@ sandboxed-agents agents run NAME AGENT [ARG...]
 
 The agent runs as `agent`, UID and GID 1000, in `/workspace`, with a fixed environment, so variables from your host environment do not reach it. `agents run` allocates no terminal. Standard input, standard output, and standard error stay three separate streams whose bytes pass through unchanged, so a script can pipe input into the agent and redirect its output and errors separately.
 
-`agents run` exits with the agent's exit status. When it refuses or cannot start the agent, it exits with status 1. An agent can exit with status 1 itself, so the status alone does not tell the two apart.
+`agents run` exits with the agent's exit status. When a signal ends the agent, the status is 128 plus the signal number, as in a Unix shell: 143 for `SIGTERM` and 137 for `SIGKILL`. When it refuses or cannot start the agent, it exits with status 1. An agent can exit with status 1 itself, so the status alone does not tell the two apart.
 
 `agents run` checks the names, the sandbox, and the manager in the same [order](#refusals) as `agents enable`, and starts no agent when a check fails. It starts, updates, and repairs nothing on its own. An owner conflict names the Podman objects concerned, and these refusals name the next step:
 

@@ -58,7 +58,7 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 func (m *Manager) catalogEntry(name string) (agentcatalog.Entry, error) {
 	entry, ok := m.options.Catalog.Find(name)
 	if !ok {
-		return entry, fmt.Errorf("unknown agent %q; valid agents: %s", name, strings.Join(m.options.Catalog.Names(), ", "))
+		return entry, fmt.Errorf(agentUnknownFormat, name, strings.Join(m.options.Catalog.Names(), ", "))
 	}
 	return entry, nil
 }
@@ -139,10 +139,10 @@ func readSelection(path string) (map[string]selectedAgent, error) {
 		return selection, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read agent selection: %w", err)
+		return nil, fmt.Errorf(agentSelectionReadFormat, err)
 	}
 	if err := json.Unmarshal(content, &selection); err != nil || selection == nil {
-		return nil, errors.New("agent selection is not a valid JSON object")
+		return nil, errors.New(agentSelectionInvalid)
 	}
 	return selection, nil
 }

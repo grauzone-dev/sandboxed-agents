@@ -308,6 +308,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		lifecycleCommand(sandbox.Stop, &group, run),
 		lifecycleCommand(sandbox.Restart, &group, run),
 		shellCommand(&group, run),
+		fingerprintCommand(&group, run),
 		{Name: "build", Checks: Checks{Usage: func(invocation *Invocation) error {
 			selection, _, remaining, err := parseToolchains(invocation.Args)
 			if err != nil {

@@ -18,6 +18,9 @@ func TestDisableSelectionIsSharedWithListStatusLoginAndRun(t *testing.T) {
 	writeInstalledPackage(t, home, "@github/copilot", "4.5.6")
 	requests := []process.Request{}
 	app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
+		if request.Name == "/usr/bin/tmux" {
+			return 0, nil
+		}
 		requests = append(requests, request)
 		return 0, nil
 	}, agentOptions(home))
@@ -31,10 +34,10 @@ func TestDisableSelectionIsSharedWithListStatusLoginAndRun(t *testing.T) {
 		diagnostic string
 	}{
 		{[]string{"agents", "list"}, 0, "[\"copilot\"]\n", ""},
-		{[]string{"agents", "status", "codex"}, 0, "Agent codex is not enabled.\n", ""},
+		{[]string{"agents", "status", "codex"}, 0, "Agent codex is not enabled.\nAgent session: not running.\n", ""},
 		{[]string{"agents", "check-enabled", "codex"}, 0, "false\n", ""},
 		{[]string{"agents", "check-enabled", "copilot"}, 0, "true\n", ""},
-		{[]string{"agents", "status", "copilot"}, 0, "Agent copilot is enabled (version 4.5.6).\nSign-in state: unknown.\n", ""},
+		{[]string{"agents", "status", "copilot"}, 0, "Agent copilot is enabled (version 4.5.6).\nSign-in state: unknown.\nAgent session: not running.\n", ""},
 		{[]string{"agents", "login", "codex", "chatgpt"}, 1, "", "is not enabled"},
 		{[]string{"agents", "run", "agent01", "codex", "--help"}, 1, "", "is not enabled"},
 	} {

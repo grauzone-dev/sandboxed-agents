@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"os"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
@@ -45,8 +44,7 @@ func loginAgentCommand(group *string, run process.Runner, catalog agentcatalog.C
 		Running:           func(*Invocation) error { return login.CheckRunning() },
 		Preconditions:     func(*Invocation) error { return login.CheckReady(ctx) },
 		Terminal: func(invocation *Invocation) error {
-			stdout, ok := invocation.Stdout.(*os.File)
-			if !platform.IsTerminal(invocation.Stdin) || !ok || !platform.IsTerminal(stdout) {
+			if !platform.HasInteractiveTerminal(process.Streams{Stdin: invocation.Stdin, Stdout: invocation.Stdout}) {
 				return errors.New(agentLoginNeedsTerminal)
 			}
 			return nil

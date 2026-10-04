@@ -34,6 +34,9 @@ func TestAgentStatusReportsInstalledVersionAfterEnable(t *testing.T) {
 					writeInstalledPackage(t, home, test.pkg, "1.2.3")
 					return 0, nil
 				}
+				if request.Name == "/usr/bin/tmux" {
+					return 0, nil
+				}
 				probes++
 				if request.Name != filepath.Join(home, ".local", "bin", "claude") || !reflect.DeepEqual(request.Args, []string{"auth", "status"}) {
 					t.Fatalf("unexpected process: %+v", request)
@@ -53,7 +56,7 @@ func TestAgentStatusReportsInstalledVersionAfterEnable(t *testing.T) {
 			writeInstalledPackage(t, home, test.pkg, "9.8.7")
 			stdout.Reset()
 			status := app.Run(context.Background(), []string{"agents", "status", test.agent}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			want := "Agent " + test.agent + " is enabled (version 9.8.7).\nSign-in state: " + test.state + ".\n"
+			want := "Agent " + test.agent + " is enabled (version 9.8.7).\nSign-in state: " + test.state + ".\nAgent session: not running.\n"
 			if status != 0 || stdout.String() != want || stderr.Len() != 0 || installs != 1 {
 				t.Fatalf("status=%d stdout=%q stderr=%q installs=%d", status, stdout.String(), stderr.String(), installs)
 			}
@@ -117,6 +120,9 @@ func TestAgentStatusInterpretsOnlyTheCatalogBooleanField(t *testing.T) {
 					writeInstalledPackage(t, home, "@example/fifth", "4.5.6")
 					return 0, nil
 				}
+				if request.Name == "/usr/bin/tmux" {
+					return 0, nil
+				}
 				probes++
 				if request.Name != filepath.Join(home, ".local", "bin", "fifth-cli") || !reflect.DeepEqual(request.Args, []string{"auth", "status", "--json"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || request.Dir != home || request.Streams.Stdin != nil || !request.CleanupGroup || !reflect.DeepEqual(request.Env, []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}) {
 					t.Fatalf("unexpected probe: %+v", request)
@@ -135,7 +141,7 @@ func TestAgentStatusInterpretsOnlyTheCatalogBooleanField(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			status := app.Run(context.Background(), []string{"agents", "status", "fifth"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			want := "Agent fifth is enabled (version 4.5.6).\nSign-in state: " + test.want + ".\n"
+			want := "Agent fifth is enabled (version 4.5.6).\nSign-in state: " + test.want + ".\nAgent session: not running.\n"
 			if status != 0 || stdout.String() != want || stderr.Len() != 0 || probes != 1 {
 				t.Fatalf("status=%d stdout=%q stderr=%q probes=%d", status, stdout.String(), stderr.String(), probes)
 			}
@@ -143,17 +149,19 @@ func TestAgentStatusInterpretsOnlyTheCatalogBooleanField(t *testing.T) {
 	}
 }
 
-func TestAgentStatusReportsNotEnabledWithoutProcessesOrHomeWrites(t *testing.T) {
+func TestAgentStatusReportsNotEnabledWithoutProbesOrHomeWrites(t *testing.T) {
 	for _, agent := range []string{"copilot", "claude", "codex", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			home := t.TempDir()
-			app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
-				t.Fatal("not-enabled status started a process")
-				return 1, nil
+			app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
+				if request.Name != "/usr/bin/tmux" {
+					t.Fatalf("not-enabled status started a probe: %+v", request)
+				}
+				return 0, nil
 			}, manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
 			var stdout, stderr bytes.Buffer
 			status := app.Run(context.Background(), []string{"agents", "status", agent}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			if status != 0 || stdout.String() != "Agent "+agent+" is not enabled.\n" || stderr.Len() != 0 {
+			if status != 0 || stdout.String() != "Agent "+agent+" is not enabled.\nAgent session: not running.\n" || stderr.Len() != 0 {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
 			}
 			files, err := os.ReadDir(home)
@@ -179,12 +187,12 @@ func TestRootAgentStatusStartsOnlyTheTrustedWorker(t *testing.T) {
 		if request.Name != "/usr/local/bin/sandboxed-agents-manager" || !reflect.DeepEqual(request.Args, []string{"agents", "status", "claude"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || request.Dir != "/" || !reflect.DeepEqual(request.Env, []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}) {
 			t.Fatalf("unsafe root process: %+v", request)
 		}
-		fmt.Fprint(request.Streams.Stdout, "Agent claude is not enabled.\n")
+		fmt.Fprint(request.Streams.Stdout, "Agent claude is not enabled.\nAgent session: not running.\n")
 		return 0, nil
 	}, manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 0, GID: 0} }})
 	var stdout, stderr bytes.Buffer
 	status := app.Run(context.Background(), []string{"agents", "status", "claude"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-	if status != 0 || calls != 1 || stdout.String() != "Agent claude is not enabled.\n" || stderr.Len() != 0 {
+	if status != 0 || calls != 1 || stdout.String() != "Agent claude is not enabled.\nAgent session: not running.\n" || stderr.Len() != 0 {
 		t.Fatalf("status=%d stdout=%q stderr=%q calls=%d", status, stdout.String(), stderr.String(), calls)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,15 +94,20 @@ func TestInvalidUsageFailsWithoutRunningProcesses(t *testing.T) {
 	}
 }
 
-func TestSessionQueryReturnsAnEmptyListWithoutRunningProcesses(t *testing.T) {
+func TestSessionQueryReturnsAnEmptyListWhenNoTmuxServerIsRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := manager.New("test", func(context.Context, process.Request) (int, error) {
-		t.Fatal("session placeholder invoked a process")
+	calls := 0
+	app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
+		calls++
+		if request.Name != "/usr/bin/tmux" || !reflect.DeepEqual(request.Args, []string{"-L", "sandboxed-agents", "-f", "/dev/null", "list-sessions", "-F", "#{session_name}"}) || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) {
+			t.Fatalf("unexpected session query: %+v", request)
+		}
+		fmt.Fprintln(request.Streams.Stderr, "no server running on /tmp/tmux-1000/sandboxed-agents")
 		return 1, nil
-	})
+	}, manager.Options{User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
 	status := app.Run(context.Background(), []string{"sessions", "list"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-	if status != 0 || stdout.String() != "[]\n" || stderr.Len() != 0 {
-		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	if status != 0 || stdout.String() != "[]\n" || stderr.Len() != 0 || calls != 1 {
+		t.Fatalf("status=%d stdout=%q stderr=%q calls=%d", status, stdout.String(), stderr.String(), calls)
 	}
 }
 

@@ -8,9 +8,27 @@ import (
 	"syscall"
 )
 
-func hostPathAlias(info os.FileInfo) bool {
+const windowsMountPointTag = 0xa0000003
+
+func hostPathAlias(path string, info os.FileInfo) (bool, error) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true, nil
+	}
 	data, ok := info.Sys().(*syscall.Win32FileAttributeData)
-	return info.Mode()&os.ModeSymlink != 0 || ok && data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	if !ok || data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+		return false, nil
+	}
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return false, err
+	}
+	var found syscall.Win32finddata
+	handle, err := syscall.FindFirstFile(name, &found)
+	if err != nil {
+		return false, err
+	}
+	defer syscall.FindClose(handle)
+	return found.Reserved0 == syscall.IO_REPARSE_TAG_SYMLINK || found.Reserved0 == windowsMountPointTag, nil
 }
 
 func validateHostWorkspacePath(path string) error {
@@ -35,11 +53,15 @@ func checkNestedWorkspaceAliases(workspace string, protectedPaths []string) erro
 			if entry.Type()&(os.ModeSymlink|os.ModeIrregular) == 0 {
 				return nil
 			}
-			alias, err := entry.Info()
+			info, err := entry.Info()
 			if err != nil {
 				return err
 			}
-			if !hostPathAlias(alias) {
+			alias, err := hostPathAlias(path, info)
+			if err != nil {
+				return err
+			}
+			if !alias {
 				return nil
 			}
 			target, err := resolveHostPath(path)
@@ -55,14 +77,14 @@ func checkNestedWorkspaceAliases(workspace string, protectedPaths []string) erro
 					return fmt.Errorf(workspaceProtectedError, workspace, protected)
 				}
 			}
-			info, err := os.Stat(target)
+			targetInfo, err := os.Stat(target)
 			if os.IsNotExist(err) {
 				return nil
 			}
 			if err != nil {
 				return err
 			}
-			if info.IsDir() {
+			if targetInfo.IsDir() {
 				roots = append(roots, target)
 			}
 			return nil

@@ -200,7 +200,11 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 				return err
 			}
 			if host.workspace.OS == "windows" {
-				return up.TranslateWorkspace(*host.automountRoot)
+				root := ""
+				if host.automountRoot != nil {
+					root = *host.automountRoot
+				}
+				return up.TranslateWorkspace(root)
 			}
 			return nil
 		},

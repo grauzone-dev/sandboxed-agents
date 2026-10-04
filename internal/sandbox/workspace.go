@@ -147,7 +147,11 @@ func resolveHostPath(path string) (string, error) {
 			resolved = candidate
 			continue
 		}
-		if !hostPathAlias(info) {
+		alias, err := hostPathAlias(candidate, info)
+		if err != nil {
+			return candidate, err
+		}
+		if !alias {
 			resolved = candidate
 			continue
 		}

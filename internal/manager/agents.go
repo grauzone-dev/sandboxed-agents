@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
@@ -21,16 +23,22 @@ const ExecutablePath = "/usr/local/bin/sandboxed-agents-manager"
 var agentIdentity = process.Identity{UID: 1000, GID: 1000}
 
 func (m *Manager) agents(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
-	if len(args) != 2 || args[0] != "enable" {
-		return errors.New("usage: sandboxed-agents-manager agents enable AGENT")
-	}
-	entry, ok := m.options.Catalog.Find(args[1])
-	if !ok {
-		return fmt.Errorf("unknown agent %q; valid agents: %s", args[1], strings.Join(m.options.Catalog.Names(), ", "))
+	var apply func() error
+	switch {
+	case len(args) == 1 && args[0] == "list":
+		apply = func() error { return m.listAgents(streams.Stdout) }
+	case len(args) == 2 && args[0] == "enable":
+		entry, err := m.catalogEntry(args[1])
+		if err != nil {
+			return err
+		}
+		apply = func() error { return m.enable(ctx, entry, streams, run) }
+	default:
+		return errors.New(agentUsageMessage)
 	}
 	identity := m.options.User()
 	if identity.UID == 0 {
-		code, err := run(ctx, process.Request{Name: ExecutablePath, Args: []string{"agents", "enable", entry.Name}, User: &agentIdentity, Dir: "/", Env: agentEnvironment(m.options.Home), Streams: streams})
+		code, err := run(ctx, process.Request{Name: ExecutablePath, Args: append([]string{"agents"}, args...), User: &agentIdentity, Dir: "/", Env: agentEnvironment(m.options.Home), Streams: streams})
 		if err != nil {
 			return fmt.Errorf("start manager worker as agent: %w", err)
 		}
@@ -40,9 +48,37 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		return nil
 	}
 	if identity != agentIdentity {
-		return errors.New("agents enable must run as root or as UID and GID 1000")
+		return errors.New(agentIdentityMessage)
 	}
-	return m.enable(ctx, entry, streams, run)
+	return apply()
+}
+
+func (m *Manager) catalogEntry(name string) (agentcatalog.Entry, error) {
+	entry, ok := m.options.Catalog.Find(name)
+	if !ok {
+		return entry, fmt.Errorf("unknown agent %q; valid agents: %s", name, strings.Join(m.options.Catalog.Names(), ", "))
+	}
+	return entry, nil
+}
+
+func (m *Manager) selectionPath() string {
+	return filepath.Join(m.options.Home, ".local", "state", "sandboxed-agents", "selection.json")
+}
+
+func (m *Manager) listAgents(output io.Writer) error {
+	selection, err := readSelection(m.selectionPath())
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(selection))
+	for name := range selection {
+		if _, err := m.catalogEntry(name); err != nil {
+			return err
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return json.NewEncoder(output).Encode(names)
 }
 
 func agentEnvironment(home string) []string {
@@ -56,7 +92,8 @@ type selectedAgent struct {
 func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams, run process.Runner) error {
 	prefix := filepath.Join(m.options.Home, ".local")
 	cache := filepath.Join(prefix, "cache", "sandboxed-agents", "npm")
-	state := filepath.Join(prefix, "state", "sandboxed-agents")
+	selectionPath := m.selectionPath()
+	state := filepath.Dir(selectionPath)
 	if err := os.MkdirAll(state, 0700); err != nil {
 		return fmt.Errorf("create agent state: %w", err)
 	}
@@ -65,15 +102,9 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 		return err
 	}
 	defer unlock()
-	selectionPath := filepath.Join(state, "selection.json")
-	selection := map[string]selectedAgent{}
-	content, err := os.ReadFile(selectionPath)
-	if err == nil {
-		if err := json.Unmarshal(content, &selection); err != nil || selection == nil {
-			return errors.New("agent selection is not a valid JSON object")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read agent selection: %w", err)
+	selection, err := readSelection(selectionPath)
+	if err != nil {
+		return err
 	}
 	_, enabled := selection[entry.Name]
 	if !enabled {
@@ -97,6 +128,21 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 	}
 	_, err = fmt.Fprintf(streams.Stdout, "Agent %s is enabled (version %s).\n", entry.Name, version)
 	return err
+}
+
+func readSelection(path string) (map[string]selectedAgent, error) {
+	selection := map[string]selectedAgent{}
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return selection, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read agent selection: %w", err)
+	}
+	if err := json.Unmarshal(content, &selection); err != nil || selection == nil {
+		return nil, errors.New("agent selection is not a valid JSON object")
+	}
+	return selection, nil
 }
 func installedVersion(home, pkg string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(home, ".local", "lib", "node_modules", filepath.FromSlash(pkg), "package.json"))

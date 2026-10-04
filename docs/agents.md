@@ -2,7 +2,7 @@
 
 An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT`, which takes no options.
+This page covers `agents enable NAME AGENT`, which takes no options, `up NAME --agents LIST`, which enables agents as part of `up`, and the `AGENTS` column of `list`.
 
 ## Agent catalog
 
@@ -80,6 +80,36 @@ The manager serializes changes to the agent installations with one lock, the fil
 
 `agents enable` holds the lock from before it reads the selection until after it has written it. A second `agents enable` on the same sandbox, for the same or another agent, waits until the first has released the lock. Two concurrent calls for different agents therefore leave both agents in the selection.
 
+## Enable agents with `up`
+
+```sh
+sandboxed-agents up NAME --agents a,b
+```
+
+`--agents` takes a comma-separated list of agent names. It is given as `--agents VALUE` or `--agents=VALUE`, at most once. A name given more than once is enabled once. An option without a value, given twice, or with an empty agent name, such as `--agents=` or `--agents claude,,codex`, is a usage error that names `--agents`.
+
+`up` checks every name against the [agent catalog](#agent-catalog) embedded in the executable before it calls Podman, at the same step as its other usage checks. An unknown name, or a catalog name whose agent is not delivered yet, makes `up` exit with status 1 and list the valid agent names. It creates no sandbox, volume, or image.
+
+`up NAME --agents a,b` has the same result as `up NAME` followed by `agents enable NAME a` and `agents enable NAME b`: the same selection and the same installations. `--agents` is not part of the sandbox's configuration, so it also applies to a sandbox that exists already. `up` starts such a sandbox as it would without `--agents` and enables each listed agent that is not enabled yet. An agent that is already enabled stays as it is, without an installation, as with a repeated `agents enable`. `up` exits with status 0 when every listed agent is enabled at the end.
+
+`up` collects the output of the installations and prints it after the last attempt. When an installation fails, `up` asks the manager for its version again. When the manager answers, `up` still attempts the remaining agents. The sandbox stays and keeps running, and agents already enabled stay enabled. `up` exits with status 1 and names the failed agents together with `sandboxed-agents agents enable NAME AGENT` to retry each.
+
+When the manager does not answer, before the first agent or after a failed one, the sandbox stays, and agents enabled before then stay enabled. `up` discards the collected output, exits with status 1, and prints a single message about the manager, not one per agent. The message says that `up` cannot confirm which agents were enabled and names `sandboxed-agents check NAME` for diagnosis and the `agents enable` command for every listed agent.
+
+[Enable agents with `up`](sandboxes.md#enable-agents-with-up) describes how this step fits into `up`.
+
+## See the enabled agents
+
+The agent selection lives only in the home volume; host state keeps no copy of it. `sandboxed-agents list` therefore reads it through the manager of each running sandbox:
+
+```sh
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents list
+```
+
+The manager answers with a JSON array of the enabled agent names, sorted by name, and `list` waits at most 5 seconds for it. Like `agents enable`, the manager starts its trusted worker as `agent`, UID and GID 1000, which reads the selection. The query takes no [manager lock](#manager-lock) and creates no file, also when the selection does not exist yet. The manager saves the selection atomically, so the query reads either the selection before a concurrent `agents enable` or the one after it.
+
+The `AGENTS` column shows the names in alphabetical order, separated by commas, or `none` when the manager answers and no agent is enabled. It shows `-`, meaning "not available", for a sandbox that is not running and for one whose manager does not answer in time, fails, or answers with anything but a JSON array of names from the catalog. A selection file that cannot be read as a JSON object, or that names an unknown agent, makes the query fail. `list` starts nothing to read the agents and still exits with status 0 ([`AGENTS` column](sandboxes.md#agents-column)).
+
 ## Refusals
 
 `agents enable` exits with status 1 and installs nothing in these cases. When several apply, it reports the first in the [order of checks](development.md#order-of-checks):
@@ -151,8 +181,11 @@ Offline tests cover the behavior on this page ([Test seams](development.md#test-
 
 - `agents enable` at the CLI boundary against a fake `podman`, on the Linux and the Windows target, including the order of checks and a fifth catalog entry;
 - the manager's catalog reading, installation, selection handling, and lock with injected process functions. These tests check the identity and arguments each process is requested with, including two concurrent calls and a failed installation;
-- a selection in a temporary home directory that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` runs no installation. The test does not stop or start a real container.
+- a selection in a temporary home directory that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` runs no installation. The test does not stop or start a real container;
+- `up NAME --agents` at the CLI boundary against a fake `podman`, on the Linux and the Windows target: a new sandbox; a stopped and a running existing sandbox, routed to a real manager with injected process functions, where an enabled agent is not reinstalled; invalid selections and undelivered names without a Podman call; failed installations with retry commands; and a manager that does not answer before the first or after a failed installation;
+- the `AGENTS` column of `list` against a fake `podman`: names, `none`, a stopped sandbox, unusable or failed answers, the 5-second bound, the Windows target, and `agents enable` followed by `list` with a fifth catalog entry;
+- the manager's `agents list` query: a missing and a written selection, the worker started as UID and GID 1000, a refused identity, and invalid selection files left unchanged.
 
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
-The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Neither is a change of identity inside a sandbox. No test runs npm against the registry, starts a real container, or signs in to an agent. Nothing on this page has been confirmed on a live host. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet.
+The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Neither is a change of identity inside a sandbox. No test runs npm against the registry, starts a real container, or signs in to an agent. Nothing on this page has been confirmed on a live host. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.

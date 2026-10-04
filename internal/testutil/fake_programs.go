@@ -24,6 +24,7 @@ type Response struct {
 	CaptureBuildContext string
 	WantStdin           string
 	GenerateSSHKey      string
+	MakeDirectories     []string
 }
 
 type Call struct{ Args []string }
@@ -177,6 +178,12 @@ func runFake(state, name string, args []string) int {
 		return 99
 	}
 	response := responses[0]
+	for _, directory := range response.MakeDirectories {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 99
+		}
+	}
 	if response.GenerateSSHKey != "" {
 		if name != "ssh-keygen" {
 			return 99

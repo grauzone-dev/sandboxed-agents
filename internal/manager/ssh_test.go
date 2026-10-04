@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -83,6 +84,84 @@ func TestSSHHostKeyReturnsCanonicalSandboxKeyWithoutStartingProcesses(t *testing
 	status := app.Run(context.Background(), []string{"ssh", "host-key"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
 	if status != 0 || stderr.Len() != 0 || stdout.String() != setupPublicKey+"\n" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+}
+
+func TestSSHHostKeyWaitObservesSandboxKeyWhenGenerationFinishes(t *testing.T) {
+	for _, incomplete := range []bool{false, true} {
+		t.Run(fmt.Sprint(incomplete), func(t *testing.T) {
+			state := t.TempDir()
+			path := filepath.Join(state, "ssh_host_ed25519_key.pub")
+			if incomplete {
+				if err := os.WriteFile(path, []byte("ssh-ed25519"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			created := make(chan error, 1)
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				created <- os.WriteFile(path, []byte(setupPublicKey+" generated host key\n"), 0644)
+			}()
+			app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
+				t.Fatal("waiting for the host key started a process")
+				return 1, nil
+			}, manager.Options{SSHStateDirectory: state})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			var stdout, stderr bytes.Buffer
+			status := app.Run(ctx, []string{"ssh", "host-key", "--wait"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
+			if err := <-created; err != nil {
+				t.Fatal(err)
+			}
+			if status != 0 || stderr.Len() != 0 || stdout.String() != setupPublicKey+"\n" {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+			}
+			contents, err := os.ReadFile(path)
+			entries, entriesErr := os.ReadDir(state)
+			if err != nil || string(contents) != setupPublicKey+" generated host key\n" || entriesErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+				t.Fatalf("state contents=%q error=%v entries=%v error=%v", contents, err, entries, entriesErr)
+			}
+		})
+	}
+}
+
+func TestSSHHostKeyWaitStopsOnCancellationWithoutChangingSandboxState(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		context func() (context.Context, context.CancelFunc)
+	}{
+		{name: "already canceled", context: func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx, cancel
+		}},
+		{name: "deadline", context: func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 20*time.Millisecond)
+		}},
+		{name: "canceled while waiting", context: func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(20*time.Millisecond, cancel)
+			return ctx, cancel
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "missing-state")
+			app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
+				t.Fatal("waiting for the host key started a process")
+				return 1, nil
+			}, manager.Options{SSHStateDirectory: state})
+			ctx, cancel := test.context()
+			defer cancel()
+			started := time.Now()
+			var stdout, stderr bytes.Buffer
+			status := app.Run(ctx, []string{"ssh", "host-key", "--wait"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
+			if time.Since(started) > time.Second || status == 0 || stdout.Len() != 0 || ctx.Err() == nil || !strings.Contains(stderr.String(), ctx.Err().Error()) {
+				t.Fatalf("status=%d stdout=%q stderr=%q context error=%v elapsed=%v", status, stdout.String(), stderr.String(), ctx.Err(), time.Since(started))
+			}
+			if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("host key wait changed state: %v", err)
+			}
+		})
 	}
 }
 
@@ -359,7 +438,7 @@ func TestSSHServerReusesSandboxHostKeysAndRequiresAgentKeyAuthentication(t *test
 }
 
 func TestSSHServerRejectsInvalidUsageBeforeChangingSandboxState(t *testing.T) {
-	for _, args := range [][]string{{"ssh"}, {"ssh", "other"}, {"ssh", "--unknown"}, {"ssh", "start", "extra"}, {"ssh", "start", "--unknown"}, {"ssh", "host-key", "extra"}, {"ssh", "authorize", "extra"}, {"ssh", "remove"}} {
+	for _, args := range [][]string{{"ssh"}, {"ssh", "other"}, {"ssh", "--unknown"}, {"ssh", "start", "extra"}, {"ssh", "start", "--unknown"}, {"ssh", "start", "--wait"}, {"ssh", "host-key", "extra"}, {"ssh", "host-key", "--unknown"}, {"ssh", "host-key", "--wait", "extra"}, {"ssh", "authorize", "extra"}, {"ssh", "authorize", "--wait"}, {"ssh", "remove"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			state := filepath.Join(t.TempDir(), "missing-state")
 			app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {

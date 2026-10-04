@@ -179,7 +179,7 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			args, requested, err := parseSSHFlag(invocation.Args[1:])
+			args, requested, err := parseSSHConfigFlag(invocation.Args[1:])
 			if err != nil {
 				return err
 			}
@@ -225,7 +225,7 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 			if err := sandbox.ValidateName(args[0]); err != nil {
 				return err
 			}
-			options, _, err := parseSSHFlag(args[1:])
+			options, _, err := parseSSHConfigFlag(args[1:])
 			if err != nil {
 				return err
 			}
@@ -254,7 +254,7 @@ func lifecycleCommand(action sandbox.LifecycleAction, hostOS string, group *stri
 			args := invocation.Args[1:]
 			if action == sandbox.Start {
 				var err error
-				args, installSSH, err = parseSSHFlag(args)
+				args, installSSH, err = parseSSHConfigFlag(args)
 				if err != nil {
 					return err
 				}

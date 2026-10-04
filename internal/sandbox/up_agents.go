@@ -14,8 +14,9 @@ func (up *Up) enableAgents(ctx context.Context) error {
 	if len(up.agents) == 0 {
 		return nil
 	}
+	managerUnavailable := fmt.Errorf(upAgentsManagerUnavailableFormat, up.name, up.agentRetryCommands(up.agents))
 	if err := up.CheckManager(ctx); err != nil {
-		return fmt.Errorf(upAgentsManagerUnavailableFormat, up.name, up.agentRetryCommands(up.agents))
+		return managerUnavailable
 	}
 	var failed []string
 	var reports, diagnostic bytes.Buffer
@@ -23,7 +24,7 @@ func (up *Up) enableAgents(ctx context.Context) error {
 		status, err := up.run(ctx, process.Request{Name: "podman", Args: managerArgs(up.container, "agents", "enable", agent), Streams: process.Streams{Stdout: &reports, Stderr: &diagnostic}})
 		if err != nil || status != 0 {
 			if err := up.CheckManager(ctx); err != nil {
-				return fmt.Errorf(upAgentsManagerUnavailableFormat, up.name, up.agentRetryCommands(up.agents))
+				return managerUnavailable
 			}
 			failed = append(failed, agent)
 		}

@@ -144,6 +144,7 @@ func readSelection(path string) (map[string]selectedAgent, error) {
 	}
 	return selection, nil
 }
+
 func installedVersion(home, pkg string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(home, ".local", "lib", "node_modules", filepath.FromSlash(pkg), "package.json"))
 	if err != nil {

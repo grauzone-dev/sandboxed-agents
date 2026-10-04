@@ -294,7 +294,9 @@ A repeated installation with an unchanged host key creates no new key, writes no
 
 `up NAME --ssh-config` and `start NAME --ssh-config` first do everything `up NAME` and `start NAME` do, and then install the SSH setup exactly as `ssh-config NAME --install` does, with the same files and calls. `--ssh-config` is not part of the container configuration: `up NAME --ssh-config` on an existing sandbox starts it and installs the SSH setup without an option conflict.
 
-When the installation fails, whatever the reason, the sandbox stays and keeps running. The command exits with status 1, names the reason, and names `sandboxed-agents ssh-config NAME --install` to retry; it issues no Podman call that stops or removes the container. Checks that `up` and `start` run before they start the sandbox, such as the owner check, refuse as they do without `--ssh-config`. On a sandbox that is already running, `up NAME --ssh-config` checks at step 7 that the manager answers; when it does not, it fails before it changes anything, with the manager message and the retry hint.
+When the installation fails, whatever the reason, the sandbox stays and keeps running. The command exits with status 1, names the reason, and names `sandboxed-agents ssh-config NAME --install` to retry; it issues no Podman call that stops or removes the container. Checks that `up` and `start` run before they start the sandbox, such as the owner check, refuse as they do without `--ssh-config`. On a sandbox that is already running, `up NAME --ssh-config` checks at step 7 that the manager answers; when it does not, it fails before it changes anything, with the manager message and the retry hint, and with `--agents` also the `agents enable` commands to retry.
+
+With `--agents` as well, `up` enables the agents first and installs the SSH setup afterwards. When `up` fails before the installation, for example because the sandbox does not start or an agent is not enabled, it skips the SSH setup, exits with status 1, and names `sandboxed-agents ssh-config NAME --install` to run once the sandbox runs, besides its own retry commands.
 
 ### Print the host entry
 

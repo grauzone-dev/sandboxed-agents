@@ -184,11 +184,11 @@ These Podman calls name the machine with `--connection NAME`, where `NAME` is th
 
 - the preflight's version and info queries;
 - after a passing preflight, every call of `build` and `up`: the lookups, the image build, the volume and container calls, and the start;
-- every call of `start`, `stop`, `restart`, `remove`, `shell`, and `fingerprint` after their selection, including the session query to the in-container manager, the `podman exec` call that opens a shell, and the `podman exec` calls that read the host keys.
+- every call of `start`, `stop`, `restart`, `remove`, `shell`, `ssh-config`, and `fingerprint` after their selection, including the session query to the in-container manager, the `podman exec` call that opens a shell, and the `podman exec` calls that read the host keys.
 
 The preflight's read-only commands inside the machine use `podman machine ssh NAME`, which names the machine directly instead of through `--connection`.
 
-`start`, `stop`, `restart`, `remove`, `shell`, and `fingerprint` run no preflight. On Windows they select the machine with the same rule, through `podman machine list` and `podman machine inspect`, after the usage and name checks and before their first lookup of the sandbox. They stop without looking at the sandbox when no machine can be selected, when the machine list or inspect output cannot be read, when the selected machine's name starts with `-` or contains a line break or a NUL character, or when the selected machine is not running, does not use WSL2, is rootful, or does not report whether it is rootful ([Sandboxes](sandboxes.md#target-on-windows)).
+`start`, `stop`, `restart`, `remove`, `shell`, `ssh-config`, and `fingerprint` run no preflight. On Windows they select the machine with the same rule, through `podman machine list` and `podman machine inspect`, after the usage and name checks and before their first lookup of the sandbox. They stop without looking at the sandbox when no machine can be selected, when the machine list or inspect output cannot be read, when the selected machine's name starts with `-` or contains a line break or a NUL character, or when the selected machine is not running, does not use WSL2, is rootful, or does not report whether it is rootful ([Sandboxes](sandboxes.md#target-on-windows)).
 
 No command starts a machine. When a call to the selected machine fails, the command stops and does not retry it against another connection.
 

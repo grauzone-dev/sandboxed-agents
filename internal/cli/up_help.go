@@ -75,5 +75,8 @@ every listed agent; agents enabled before then stay enabled.
 
 --ssh-config is not recorded on the container and never causes a conflict.
 When installing the SSH setup fails, the sandbox keeps running, and
-sandboxed-agents ssh-config NAME --install retries the installation.
+sandboxed-agents ssh-config NAME --install retries the installation. With
+--agents, up enables the agents first; when up fails before the SSH setup,
+for example on an agent, it skips the SSH setup and exits with status 1,
+naming the commands to retry.
 `

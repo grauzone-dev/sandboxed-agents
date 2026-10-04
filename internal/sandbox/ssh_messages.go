@@ -13,4 +13,5 @@ const (
 	sshKeyGenerationFailureFormat = "ssh-keygen could not create the SSH key: %s; nothing was changed. Make sure OpenSSH is installed, then retry the installation"
 	sshAuthorizationFailureFormat = "the manager could not authorize the SSH key: %s; your SSH configuration and host state were not changed. Restart the sandbox, then retry the installation"
 	sshExistingStateFormat        = "host state path %s already exists without its host entry; nothing was changed. Move that path aside, then retry the installation"
+	sshAgentsRetryFormat          = "%w; agent installation was not attempted; once the manager answers, retry it with %s"
 )

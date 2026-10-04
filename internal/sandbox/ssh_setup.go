@@ -382,11 +382,15 @@ func writeSSHFile(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(file.Name(), path)
 }
 
-func (up *Up) CheckSSHManager(ctx context.Context, hostOS string) error {
+func (up *Up) CheckSSHManager(ctx context.Context) error {
 	if !up.containerExists || !up.containerRunning {
 		return nil
 	}
-	return (&SSHSetup{sandboxObjects: up.sandboxObjects, hostOS: hostOS}).CheckManager(ctx)
+	err := up.CheckManager(ctx)
+	if err != nil && len(up.agents) > 0 {
+		return fmt.Errorf(sshAgentsRetryFormat, err, up.agentRetryCommands(up.agents))
+	}
+	return err
 }
 
 func (up *Up) InstallSSH(ctx context.Context, hostOS string) error {

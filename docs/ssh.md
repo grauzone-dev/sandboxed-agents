@@ -196,7 +196,7 @@ Include "/home/alice/.local/state/sandboxed-agents/group-default/ssh/config"
 
 - **Placed first.** The installation adds the line in front of the first line of the file. An `Include` that follows a `Host` or `Match` line applies only within that block ([ssh_config(5), `Include`](https://man.openbsd.org/ssh_config#Include)); in front of all blocks it applies to every host name.
 - **Once per controller group.** The line is added with the group's first SSH setup. When any line of the file is identical to it, a further installation in the group adds a host entry to the managed configuration and leaves your SSH configuration unchanged. Each controller group has its own line, so an installation in `live` after one in `default` adds the line of `live` and leaves the line of `default` and all host state of `default` unchanged.
-- **Everything else preserved.** The installation changes nothing else in the file: your host entries, the `Include` lines of other groups, and comments stay as they were. The installation writes the new content to a temporary file beside the file and renames it over the file. When `~/.ssh/config` is a symlink, it follows the link, replaces the target this way, and keeps the symlink. On Unix the new file gets the replaced file's mode, and an existing `.ssh` directory is not changed.
+- **Everything else preserved.** The installation changes nothing else in the file: your host entries, the `Include` lines of other groups, and comments stay as they were. The installation writes the new content to a temporary file beside the file and puts it in place of the file. When `~/.ssh/config` is a symlink, it follows the link, replaces the target this way, and keeps the symlink. On Unix the new file gets the replaced file's mode, on Windows it keeps the replaced file's permissions ([Permissions on Windows](#permissions-on-windows)), and an existing `.ssh` directory is not changed.
 - **Created when missing.** When the file or the `.ssh` directory does not exist, the installation creates it, and the new file contains only the `Include` line.
 
 No controller group writes the files or the `Include` line of another group.
@@ -217,7 +217,18 @@ On Unix, the installation creates its files and directories with modes that Open
 
 An existing `~/.ssh` directory keeps its mode, and a rewritten `~/.ssh/config`, or its symlink target, gets the mode of the file it replaces.
 
-On Windows, this version sets no ACLs. The files and directories the installation creates get the permissions they inherit from their parent directory, and whether OpenSSH for Windows accepts them has not been checked. ACLs that OpenSSH for Windows accepts come with #34.
+On Windows, the installation sets permissions instead ([Permissions on Windows](#permissions-on-windows)).
+
+### Permissions on Windows
+
+OpenSSH for Windows checks the owner and the permissions of a private key and of every SSH configuration file it reads, the managed configuration included, and ignores a key or refuses a configuration file whose permissions fail its check. On Windows, the installation restricts the files and directories it creates to your Windows account, which is enough for that check:
+
+- **Created files and directories.** The key pair, the pin `known_hosts`, the `entry` file, the managed configuration, the directories the installation creates for host state, and `%USERPROFILE%\.ssh` and `%USERPROFILE%\.ssh\config` when the installation creates them, are owned by your account and grant full control to your account only. They do not inherit permissions from their parent directory. New files and folders in a created directory inherit its permissions.
+- **No entry for SYSTEM or Administrators.** OpenSSH for Windows does not need one. Other accounts on the computer cannot open these files; an administrator can still take ownership of them, and any program that runs under your account can read them.
+- **Existing paths keep their permissions.** Only directories that the installation itself creates get the permissions above. An existing `.ssh` directory and host state directories that exist already, including those that `up` or `start` creates for its lifecycle lock before it installs the SSH setup, are not changed. An existing `%USERPROFILE%\.ssh\config` keeps its permissions, including whether it inherits them from its folder, when the `Include` line is added. The installation does not tighten them, so a configuration file that OpenSSH for Windows refused before is still refused.
+- **Managed configuration set again.** Every installation that adds a host entry, also for a second sandbox, writes the managed configuration with the permissions above. A repeated installation with an unchanged host key changes no file, so it does not repair permissions you changed by hand.
+
+When Windows does not let the installation set these permissions, the installation fails. That it works under a standard account without administrator rights is not confirmed yet ([Verification](#verification)).
 
 ### Authorized key
 
@@ -336,7 +347,6 @@ VS Code Remote SSH and other desktop UIs read the same SSH configuration, so the
 ### Not in this version
 
 - **Removing an SSH setup.** ADR-0002 states that `remove` deletes a sandbox's SSH setup. This is delivered in stages: #19 installs the SSH setup, and `ssh-config NAME --remove` and the cleanup of the host side by `remove NAME` come with #37. Until then, `remove NAME` leaves the host entry, the key pair, the pin, and the `Include` line in place. The messages for a host key mismatch and an incomplete SSH setup still name `ssh-config NAME --remove`, as #19 requires, although it is not available yet.
-- **ACLs on Windows** for the key files, the managed configuration, and a `.ssh` directory or SSH configuration the installation creates come with #34.
 - **Reporting SSH access in `check NAME`** comes with #20.
 - **A real SSH connection against real Podman** comes with #35.
 
@@ -348,4 +358,6 @@ The terminal tests give `shell` a real terminal handle of the test host as stand
 
 The SSH setup is covered by offline tests at the CLI boundary against the same fake programs, on Linux and with the fake Windows host identity. They check the files that `ssh-config`, `up --ssh-config`, and `start --ssh-config` change in host state and in the SSH directory, byte for byte, the Podman calls of the manager probe, the host key query, and the authorization, the `ssh -G` queries of the conflict check, the `ssh-keygen` call, and the refusals in the order of checks. The Unix permission modes are checked on Linux only. The manager's side, reading the host key and replacing `/etc/ssh/authorized_keys`, is covered by manager tests with injected process functions and files.
 
-No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, and not that OpenSSH for Windows accepts the files of the SSH setup. That evidence needs the live suite (#24) and the live SSH tests (#35).
+The Windows permissions are checked only in the Windows job of the offline suite, on the real file system of the test machine. After `ssh-config --install`, `up --ssh-config`, and `start --ssh-config` against the same fake programs, the tests read back the owner, whether inheritance is turned off, and every permission entry of each file and directory the installation creates, also after a second sandbox. They also check that an existing `.ssh` directory and an existing SSH configuration, with and without inherited permissions, keep their permissions. They show which permissions the installation sets, not that OpenSSH for Windows accepts them, and they do not run under a standard account.
+
+No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, not that OpenSSH for Windows accepts the files of the SSH setup with their permissions, and not that the installation sets these permissions under a standard account without administrator rights. That evidence needs the live suite (#24) and the live SSH tests (#35).

@@ -2,7 +2,7 @@
 
 An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT`, which takes no options, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, and `agents run NAME AGENT [ARG...]`, which runs an enabled agent once.
+This page covers `agents enable NAME AGENT` and `agents status NAME AGENT`, which take no options, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, and `agents run NAME AGENT [ARG...]`, which runs an enabled agent once.
 
 ## Agent catalog
 
@@ -118,9 +118,39 @@ The manager answers with a JSON array of the enabled agent names, sorted by name
 
 The `AGENTS` column shows the names in alphabetical order, separated by commas, or `none` when the manager answers and no agent is enabled. It shows `-`, meaning "not available", for a sandbox that is not running and for one whose manager does not answer in time, fails, or answers with anything but a JSON array of names from the catalog. A selection file that cannot be read as a JSON object, or that names an unknown agent, makes the query fail. `list` starts nothing to read the agents and still exits with status 0 ([`AGENTS` column](sandboxes.md#agents-column)).
 
+## Show an agent's status
+
+```sh
+sandboxed-agents agents status NAME AGENT
+```
+
+`NAME` is the sandbox and `AGENT` is a name from the [agent catalog](#agent-catalog). The sandbox must be running. The request reaches the manager as for `agents enable`, with `agents status AGENT` in place of `agents enable AGENT`.
+
+For an enabled agent, it prints the installed version and the sign-in state:
+
+```text
+Agent claude is enabled (version 1.2.3).
+Sign-in state: signed in.
+```
+
+The sign-in state is `signed in`, `not signed in`, or `unknown`. For an agent that is not enabled, it prints only `Agent AGENT is not enabled.` and runs nothing of the agent.
+
+The sign-in state comes from the agent's status probe in the catalog. The manager's worker runs the installed command `/home/agent/.local/bin/COMMAND` with the probe's arguments as the user `agent`, never as root, and with the same fixed environment as an installation. It reads the probe's standard output and does not show it; the probe's standard error is discarded. When the output is one JSON object whose field named by the probe is `true`, the state is `signed in`; when it is `false`, the state is `not signed in`. This holds also when the command exits with a non-zero status. The state is `unknown` when:
+
+- the catalog entry declares no status probe, as for `copilot`, `codex`, and `opencode`;
+- the command cannot start, or does not finish within 30 seconds, after which the manager stops waiting for it;
+- its standard output is not exactly one JSON object, for example no output, text, trailing data after the object, `null`, or an array;
+- the named field is missing or not a boolean.
+
+`unknown` means only that the manager could not tell; it says nothing about whether the agent is signed in. The report shows what the agent's own command answered at the moment of the call.
+
+`agents status` exits with status 0 whenever it can report, whatever it reports: also for an agent that is not enabled, not signed in, or in the `unknown` state. It changes neither the installation nor the agent selection, and for an agent that is not enabled it writes nothing to the home volume. The report contains no pin and does not say whether an agent session is running.
+
+`agents status` refuses in the same cases and in the same order as `agents enable` ([Refusals](#refusals)), and reports no state of the agent then.
+
 ## Refusals
 
-`agents enable` exits with status 1 and installs nothing in these cases. When several apply, it reports the first in the [order of checks](development.md#order-of-checks):
+`agents enable` and `agents status` share these refusals. In each case the command exits with status 1: `agents enable` installs nothing, and `agents status` reports no state of the agent. When several apply, the command reports the first in the [order of checks](development.md#order-of-checks):
 
 | Step | Refusal |
 | --- | --- |
@@ -129,11 +159,11 @@ The `AGENTS` column shows the names in alphabetical order, separated by commas, 
 | 4. Owner | The container, one of the volumes, or the backup container has a missing or different owner label. The message names each such Podman object and points to Podman, also when the container carries the current owner and only a volume does not ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)). |
 | 5. Interrupted update | A backup container with the current owner exists. The message names `sandboxed-agents update NAME`. |
 | 6. Running state | The sandbox is stopped. The message names `sandboxed-agents start NAME`, and nothing starts on its own. |
-| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. `agents enable` issues no further call into the sandbox. |
+| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. |
 
 This version has no `check NAME` yet; the check of one sandbox comes with #20. Until then, `sandboxed-agents check` without a name checks only the host prerequisites and does not diagnose a sandbox or its manager. `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
 
-An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. If npm or another step of the installation fails, `agents enable` reports the failure, leaves the selection unchanged, and exits with status 1.
+An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. If npm or another step of the installation fails, `agents enable` reports the failure, leaves the selection unchanged, and exits with status 1. If the manager cannot read the agent selection or, for an enabled agent, the installed version, `agents status` reports the failure, prints no report, and exits with status 1; it runs no status probe then.
 
 ## Run an agent
 
@@ -161,7 +191,7 @@ An agent selection that cannot be read or is not a valid JSON object is refused 
 
 ## Catalog data format
 
-The catalog is the file `internal/agentcatalog/catalog.json` in the repository. The host executable `sandboxed-agents` and the manager `sandboxed-agents-manager` both embed it and read it through the same Go types in `internal/agentcatalog` (ADR-0001). The host uses it to check agent names before any Podman call; the manager uses it to install.
+The catalog is the file `internal/agentcatalog/catalog.json` in the repository. The host executable `sandboxed-agents` and the manager `sandboxed-agents-manager` both embed it and read it through the same Go types in `internal/agentcatalog` (ADR-0001). The host uses it to check agent names before any Podman call; the manager uses it to install and to run status probes.
 
 The file is one JSON object with two fields:
 
@@ -213,7 +243,9 @@ Offline tests cover the behavior on this page ([Test seams](development.md#test-
 
 - `agents run` at the CLI boundary and in the manager ([Agent runs](development.md#test-seams));
 - `agents enable` at the CLI boundary against a fake `podman`, on the Linux and the Windows target, including the order of checks and a fifth catalog entry;
+- `agents status` at the CLI boundary against a fake `podman`: the manager calls for each of the four agents, exit status 0 for each kind of report, a failure of the manager passed on with a non-zero status, and the same refusals and order of checks as `agents enable`, on the Linux and the Windows target;
 - the manager's catalog reading, installation, selection handling, and lock with injected process functions. These tests check the identity and arguments each process is requested with, including two concurrent calls and a failed installation;
+- the manager's `agents status` with injected process functions: the version of each of the four agents read after `agents enable`, a not-enabled agent without any process or write to the home directory, and the root manager starting only its worker. For a fifth catalog entry, they check the probe's command, arguments, identity, environment, and 30-second deadline, and how each probe answer maps to a sign-in state, including non-zero exit statuses, invalid or non-object JSON, missing or non-boolean fields, a failed start, and a timeout. An unreadable selection or installed version fails without a probe;
 - a selection in a temporary home directory that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` runs no installation. The test does not stop or start a real container;
 - `up NAME --agents` at the CLI boundary against a fake `podman`, on the Linux and the Windows target: a new sandbox; a stopped and a running existing sandbox, routed to a real manager with injected process functions, where an enabled agent is not reinstalled; invalid selections and undelivered names without a Podman call; failed installations with retry commands; a manager that does not answer before the first or after a failed installation; and the 15-minute bound of each installation with a fresh manager check afterwards;
 - the `AGENTS` column of `list` against a fake `podman`: names, `none`, a stopped sandbox, unusable or failed answers, the 5-second bound, the Windows target, and `agents enable` followed by `list` with a fifth catalog entry;
@@ -221,4 +253,4 @@ Offline tests cover the behavior on this page ([Test seams](development.md#test-
 
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
-The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Neither is a change of identity inside a sandbox. No test runs npm against the registry, starts a real container, or signs in to an agent. Nothing on this page has been confirmed on a live host. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.
+The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Neither is a change of identity inside a sandbox. No test runs npm against the registry, starts a real container, runs a real agent's status probe, or signs in to an agent. Nothing on this page has been confirmed on a live host. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.

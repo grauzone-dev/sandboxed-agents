@@ -6,17 +6,18 @@ A sandbox is created from an image: the base contents every sandbox needs plus t
 
 A toolchain is a set of SDKs or system packages built into a sandbox's image. All toolchains are off by default. `build --with SET` and `up NAME --with SET` select a toolchain set: a comma-separated list of toolchain names, such as `--with native`.
 
-This version delivers one toolchain:
+This version delivers two toolchains, which can be selected alone or together:
 
-| Toolchain | Debian packages |
+| Toolchain | Contents |
 | --- | --- |
-| `native` | `build-essential`, `cmake`, `pkg-config`, `ninja-build` |
+| `azure` | Azure CLI from Microsoft's APT repository, with the Azure DevOps extension |
+| `native` | the Debian packages `build-essential`, `cmake`, `pkg-config`, and `ninja-build` |
 
-`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected. The catalog also plans `dotnet`, `playwright`, and `azure`; until each of them is delivered, its name is rejected like an unknown name.
+`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected. The catalog also plans `dotnet` and `playwright`; until each of them is delivered, its name is rejected like an unknown name.
 
-The selection is a set. Order and repetition do not matter, so `--with native,native` selects the same set as `--with native`. The executable records a set in its canonical form: the names sorted and deduplicated, separated by commas, and the empty string for the base image.
+The selection is a set. Order and repetition do not matter, so `--with native,azure,native` selects the same set as `--with azure,native`. The executable records a set in its canonical form: the names sorted and deduplicated, separated by commas, and the empty string for the base image.
 
-An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `native` and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
+An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `azure`, `native`, and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
 
 ## Build images
 
@@ -40,13 +41,13 @@ For the base image, the executable writes the embedded build context and the in-
 podman build --pull=always --no-cache --tag TAG --label ... --file CONTEXT/Containerfile CONTEXT
 ```
 
-For each toolchain image, it writes the toolchain's recipe and the version recording script to a new temporary directory with the prefix `sandboxed-agents-toolchains-` and runs:
+For each toolchain image, it writes the recipe directory of each toolchain in the set, as `NAME/`, and the version recording script to a new temporary directory with the prefix `sandboxed-agents-toolchains-`. It composes one `Containerfile` there: `ARG BASE_IMAGE` and `FROM ${BASE_IMAGE}` once, then each toolchain's `Containerfile.fragment` in canonical order, then one final step that copies and runs the version recording script after all toolchains have installed. It runs one Podman build on that `Containerfile`:
 
 ```sh
 podman build --pull=never --no-cache --build-arg BASE_IMAGE=BASE_ID --tag TAG ... --label ... --file CONTEXT/Containerfile CONTEXT
 ```
 
-`BASE_ID` is the Podman image ID of the base image just built or found, so the recipe starts from exactly the image its `base-image` label records. An image that is rebuilt under several tags gets one `--tag` for each. The executable removes each temporary directory whether its build succeeded or failed.
+`BASE_ID` is the Podman image ID of the base image just built or found, so the image starts from exactly the image its `base-image` label records. The set `azure,native` is therefore one image built on the base image, not an `azure` image layered on a `native` one. An image that is rebuilt under several tags gets one `--tag` for each. The executable removes each temporary directory whether its build succeeded or failed.
 
 On Windows, the builds run in the Podman machine that the preflight checked: each call is `podman --connection NAME build …`, with the name of the [selected Podman machine](host-prerequisites.md#selected-podman-machine). `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or another default connection does not redirect them. On Linux, `build` calls the local `podman` without a connection.
 
@@ -58,7 +59,7 @@ When the base image fails to build, `build` reports `podman build failed with ex
 
 ## Image names and labels
 
-The base image is named `localhost/sandboxed-agents:base-HASH`. A toolchain image is named `localhost/sandboxed-agents:toolchains-NAMES-HASH`, where `NAMES` are the names of its canonical toolchain set joined by `-`; the image for `native` is `localhost/sandboxed-agents:toolchains-native-HASH`. `HASH` is the full lowercase SHA-256 asset hash that `sandboxed-agents version` prints. The same set therefore always yields the same tag, and a new executable version yields new tags.
+The base image is named `localhost/sandboxed-agents:base-HASH`. A toolchain image is named `localhost/sandboxed-agents:toolchains-NAMES-HASH`, where `NAMES` are the names of its canonical toolchain set joined by `-`; the image for `native` is `localhost/sandboxed-agents:toolchains-native-HASH`, and the image for `azure,native` is `localhost/sandboxed-agents:toolchains-azure-native-HASH`. `HASH` is the full lowercase SHA-256 asset hash that `sandboxed-agents version` prints. The same set therefore always yields the same tag, and a new executable version yields new tags.
 
 The names contain no controller group, so every controller group on the host that runs the same executable shares the same images (ADR-0005). A build in one group therefore rebuilds the images that the sandboxes of every group use.
 
@@ -93,22 +94,47 @@ The entrypoint runs as root. It creates `/run/sshd` and runs `sandboxed-agents-m
 
 `/usr/local/share/sandboxed-agents/versions.tsv` records what the image contains. It is UTF-8 text with LF line endings and no header. Each line is a component name and its version, separated by one tab. The file lists every installed Debian package as reported by `dpkg-query`, followed by the lines for `node`, `npm`, and `manager`.
 
-A toolchain image records its inventory again after its packages are installed, so its `versions.tsv` replaces the base image's file and also lists the toolchain's Debian packages and their dependencies.
+A toolchain image records the inventory once more, in its final step after every toolchain of the set has installed, so its `versions.tsv` replaces the base image's file and also lists the toolchains' Debian packages and their dependencies. A toolchain that installs something `dpkg-query` does not see adds a recorder script to `/usr/local/share/sandboxed-agents/versions.d/`; the recording script runs every `*.sh` file there and appends its lines after `manager`. The Azure CLI version is the `azure-cli` line among the `dpkg-query` lines, such as `2.90.0-1~bookworm`. The `azure` recorder adds one line, `azure-devops`, with the extension version that `az version` reports.
 
 ## Toolchain image contents
 
-A toolchain image is layered on the base image, so all toolchain images share the base layers. The `native` image adds:
+A toolchain image is layered on the base image, so all toolchain images share the base layers. Neither the base image nor the `native` toolchain installs anything from Azure.
+
+The `native` toolchain adds:
 
 - **Packages:** `build-essential`, `cmake`, `pkg-config`, and `ninja-build`, installed with APT without recommended packages.
-- **Smoke check:** `/usr/local/share/sandboxed-agents/smoke/native.sh`, which checks that it runs as UID and GID 1000, then compiles a trivial C program with `cc` in a temporary directory and runs it. It is meant to run as `agent` inside a sandbox created from the image. No command runs it in this version; running each toolchain's smoke check against real Podman comes with #29.
+- **Smoke check:** `/usr/local/share/sandboxed-agents/smoke/native.sh`, which checks that it runs as UID and GID 1000, then compiles a trivial C program with `cc` in a temporary directory and runs it.
 
-The `native` recipe is covered by offline tests of the build context and of the Podman calls; it has not been built or run against real Podman.
+The `azure` toolchain adds:
+
+- **APT repository:** `https://packages.microsoft.com/repos/azure-cli/` for `bookworm`, component `main`, architecture `amd64`. APT accepts it only when it is signed with Microsoft's key. The recipe downloads that key from `https://packages.microsoft.com/keys/microsoft.asc`, stores it as `/etc/apt/keyrings/microsoft.gpg`, and names that file in the repository's `signed-by` option.
+- **Azure CLI:** the `azure-cli` package, without a pinned version.
+- **Azure DevOps extension:** the latest stable `azure-devops` extension from the official extension index, installed with `az extension add --system --name azure-devops --allow-preview false`. `--system` installs it into the system extension directory of the Python that the Azure CLI bundles under `/opt/az`, so `agent` sees it without `AZURE_EXTENSION_DIR`. The recipe then makes the extension readable for every user with `chmod -R a+rX`. During the build, the Azure CLI writes its configuration to a temporary `AZURE_CONFIG_DIR` that is removed afterwards, so the image keeps no Azure configuration. In a sandbox, `HOME` stays `/home/agent`, so the Azure CLI keeps its configuration, and any sign-in a later Story adds, in the home volume.
+- **Version recorder:** `/usr/local/share/sandboxed-agents/versions.d/azure.sh` ([Version inventory](#version-inventory)).
+- **Smoke check:** the command `az version`, run as UID and GID 1000, with no script file of its own. Its output is expected to list the `azure-devops` extension; #29 checks that against a real image.
+
+The image contains no Azure credentials, and the `azure` toolchain adds no login or config workflow. Changing the toolchain set of an existing sandbox comes with #71.
+
+Each smoke check is meant to run as `agent` inside a sandbox created from the image. No command runs it in this version; running each toolchain's smoke check against real Podman comes with #29. No toolchain image has been built or run against real Podman.
+
+### Azure versions
+
+The `azure` recipe pins no version. The Azure CLI and the extension are resolved again at each build without the layer cache, like every other package, so a `build` installs their current stable releases (#3). `versions.tsv` records the versions an image actually contains ([Version inventory](#version-inventory)).
+
+On 2026-10-04, these were the current releases:
+
+| Component | Version | Source |
+| --- | --- | --- |
+| `azure-cli` package | `2.90.0-1~bookworm` | [Microsoft package index for bookworm, amd64](https://packages.microsoft.com/repos/azure-cli/dists/bookworm/main/binary-amd64/Packages) |
+| `azure-devops` extension | `1.0.8`, release `20260902.1`, published 2026-09-03 | [Release 20260902.1](https://github.com/Azure/azure-devops-cli-extension/releases/tag/20260902.1) |
+
+The repository setup follows [Install the Azure CLI on Linux](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux). `--system` is documented in the [`az extension add` reference](https://learn.microsoft.com/en-us/cli/azure/extension#az-extension-add), and the location of the system extension directory is defined in the [Azure CLI 2.90.0 source](https://github.com/Azure/azure-cli/blob/azure-cli-2.90.0/src/azure-cli-core/azure/cli/core/extension/__init__.py).
 
 ## Toolchain availability on Debian 12
 
 Debian 12 was chosen because every planned toolchain has packages for it. The Azure CLI documentation lists Debian 11 and 12 as tested distributions for its APT packages, but not Debian 13.
 
-This record is based on the upstream documentation listed below. Of these toolchains, only native build tools are delivered, as `native`; .NET, Playwright, and Azure CLI come with #31, #32, and #30. #29 validates the images against real Podman.
+This record is based on the upstream documentation listed below. Of these toolchains, native build tools and Azure CLI are delivered, as `native` and `azure`; .NET and Playwright come with #31 and #32. #29 validates the images against real Podman.
 
 | Toolchain | Upstream statement for Debian 12 | Source |
 | --- | --- | --- |

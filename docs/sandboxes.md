@@ -64,7 +64,7 @@ sandboxed-agents up NAME [WORKSPACE] [--memory SIZE] [--cpus N] [--pids-limit N]
 
 A `SIZE` is a positive whole number of bytes, optionally followed by one of the suffixes `k`, `m`, `g`, or `t`, in upper or lower case, which multiply it by 1024, 1024², 1024³, or 1024⁴. For example, `512m` is 512 MiB and `16g` is 16 GiB. The result is at most 9223372036854775807 bytes.
 
-`--with SET` selects the toolchains built into the sandbox's image: a comma-separated list of toolchain names, or `none` alone for the base image. Without `--with`, a new sandbox uses the base image, as with `--with none`. In this version the only toolchain is `native`, so the valid values are `native` and `none` ([Toolchains](images.md#toolchains)). Order and repetition of names do not matter.
+`--with SET` selects the toolchains built into the sandbox's image: a comma-separated list of toolchain names, or `none` alone for the base image. Without `--with`, a new sandbox uses the base image, as with `--with none`. In this version the toolchains are `azure` and `native`, alone or together, so the valid values are `azure`, `native`, and `none` ([Toolchains](images.md#toolchains)). Order and repetition of names do not matter.
 
 `--help` prints the help of `up`, with `WORKSPACE`, the option formats, the defaults, and how to change the workspace, a limit, the toolchain set, or the SSH port, and exits with status 0. It may stand anywhere after `up`, as long as the other words form a valid `up` command line: `up --help`, `up NAME --help`, and `up NAME --memory 16g --help` all print the help. Otherwise `up` reports the usage error instead. `--help` runs no preflight and calls no Podman command.
 
@@ -183,7 +183,7 @@ The container and the volumes carry these labels:
 | `io.github.sandboxed-agents.cpus` | the number of CPUs as a decimal number whose trailing zeros after the point are trimmed, with the point dropped when no decimals remain: `--cpus 1.50` records `1.5`, `--cpus 10.000` records `10`, and `--cpus 10` stays `10`; `4` by default | the container |
 | `io.github.sandboxed-agents.pids-limit` | the process limit, `2048` by default | the container |
 | `io.github.sandboxed-agents.shm-size` | the shared memory size in bytes, `1073741824` by default | the container |
-| `io.github.sandboxed-agents.toolchains` | the canonical toolchain set: sorted, deduplicated names separated by commas, such as `native`; empty for a sandbox without toolchains | the container |
+| `io.github.sandboxed-agents.toolchains` | the canonical toolchain set: sorted, deduplicated names separated by commas, such as `native` or `azure,native`; empty for a sandbox without toolchains | the container |
 | `io.github.sandboxed-agents.ssh-port` | the SSH port on `127.0.0.1`, for example `2222` | the container |
 
 `up` records all four limits, the toolchain set, and the SSH port on every container it creates, the defaults included, so `podman container inspect` shows the values in effect under `Config.Labels`. Containers created before these labels existed carry none of them. Podman cannot change the labels of an existing container, so the toolchain set and the SSH port of a sandbox change only when its container is replaced.

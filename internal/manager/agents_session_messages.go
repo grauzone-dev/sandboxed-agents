@@ -5,6 +5,7 @@ const (
 	agentSessionIdentity           = "agents session must run as UID and GID 1000"
 	agentSessionNeedsTerminal      = "agents session needs an interactive terminal to start or attach to a session; use --stop to end a session without one"
 	agentSessionNotRunningFormat   = "No agent session of %s is running; nothing to do.\n"
+	agentSessionNotEnabledFormat   = "Agent %s is not enabled; nothing to do.\n"
 	agentSessionStoppedFormat      = "Ended the agent session of %s.\n"
 	agentSessionStartFailure       = "could not start the agent session: %w"
 	agentSessionStartStatusFormat  = "starting the agent session failed with exit status %d"

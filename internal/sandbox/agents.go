@@ -11,16 +11,16 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-type AgentOperation struct {
+type AgentCommand struct {
 	*sandboxObjects
-	agent     string
-	operation string
+	agent      string
+	subcommand string
 }
 
 var managerVersionResponse = regexp.MustCompile(`^sandboxed-agents-manager [^\s]+\n$`)
 
-func NewAgentOperation(name, group, agent, operation string, run process.Runner, streams process.Streams) *AgentOperation {
-	return &AgentOperation{sandboxObjects: newSandboxObjects(name, group, run, streams), agent: agent, operation: operation}
+func NewAgentCommand(name, group, agent, subcommand string, run process.Runner, streams process.Streams) *AgentCommand {
+	return &AgentCommand{sandboxObjects: newSandboxObjects(name, group, run, streams), agent: agent, subcommand: subcommand}
 }
 
 func (objects *sandboxObjects) CheckManager(ctx context.Context) error {
@@ -38,6 +38,6 @@ func managerArgs(container string, args ...string) []string {
 	return append([]string{"exec", "--user=0:0", container, manager.ExecutablePath}, args...)
 }
 
-func (operation *AgentOperation) Apply(ctx context.Context) error {
-	return operation.runPodman(ctx, managerArgs(operation.container, "agents", operation.operation, operation.agent)...)
+func (request *AgentCommand) Execute(ctx context.Context) error {
+	return request.runPodman(ctx, managerArgs(request.container, "agents", request.subcommand, request.agent)...)
 }

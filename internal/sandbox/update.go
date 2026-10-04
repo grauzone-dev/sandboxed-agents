@@ -27,45 +27,56 @@ func NewUpdate(name, group, assetHash string, run process.Runner, streams proces
 }
 
 func (update *Update) Prepare(ctx context.Context) error {
+	set, missing, err := update.plan(ctx)
+	if err != nil || !missing {
+		return err
+	}
+	return update.ensureImage(ctx, set)
+}
+
+func (update *Update) plan(ctx context.Context) (toolchains.Set, bool, error) {
+	var set toolchains.Set
 	if !update.containerExists {
-		return fmt.Errorf(updateNoContainerFormat, update.name)
+		return set, false, fmt.Errorf(updateNoContainerFormat, update.name)
 	}
 	if update.containerImage == "" {
-		return fmt.Errorf(updateMissingImageIDFormat, update.container)
+		return set, false, fmt.Errorf(updateMissingImageIDFormat, update.container)
 	}
-	var set toolchains.Set
 	recorded := update.containerLabels[images.ToolchainsLabel]
 	if recorded != "" {
 		var err error
 		set, err = toolchains.Parse(recorded)
 		if err != nil {
-			return fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, update.container, "toolchain set"), err)
+			return set, false, fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, update.container, "toolchain set"), err)
 		}
+	}
+	image, current, err := images.Current(ctx, update.assetHash, set, update.run, update.streams)
+	if err != nil {
+		return set, false, err
+	}
+	if current && image == update.containerImage {
+		update.current = true
+		return set, false, nil
+	}
+	replacement, err := update.recordedConfiguration(set)
+	if err != nil {
+		return set, false, err
+	}
+	update.replacement = replacement
+	update.image = image
+	return set, !current, nil
+}
+
+func (update *Update) ensureImage(ctx context.Context, set toolchains.Set) error {
+	if _, err := images.Ensure(ctx, update.assetHash, set, update.run, update.streams); err != nil {
+		return err
 	}
 	image, current, err := images.Current(ctx, update.assetHash, set, update.run, update.streams)
 	if err != nil {
 		return err
 	}
-	if current && image == update.containerImage {
-		update.current = true
-		return nil
-	}
-	replacement, err := update.recordedConfiguration(set)
-	if err != nil {
-		return err
-	}
-	update.replacement = replacement
 	if !current {
-		if _, err = images.Ensure(ctx, update.assetHash, set, update.run, update.streams); err != nil {
-			return err
-		}
-		image, current, err = images.Current(ctx, update.assetHash, set, update.run, update.streams)
-		if err != nil {
-			return err
-		}
-		if !current {
-			return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name)
-		}
+		return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name)
 	}
 	update.image = image
 	return nil

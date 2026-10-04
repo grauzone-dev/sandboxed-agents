@@ -50,7 +50,7 @@ func TestEnableAgentInstallsThroughTheSandboxManager(t *testing.T) {
 }
 
 func TestAgentCommandsRejectUnknownAgentsBeforePodman(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, fixture := range []string{"sandbox-host", "windows"} {
 				t.Run(fixture, func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestAgentCommandsRejectUnknownAgentsBeforePodman(t *testing.T) {
 }
 
 func TestAgentCommandsRejectUndeliveredCatalogEntriesBeforePodman(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, data := range []string{
 				`{"schema_version":1,"entries":[{"name":"future","delivered":false,"command":"future","install":{"kind":"npm","package":"future"}},{"name":"codex","delivered":true,"command":"codex","install":{"kind":"npm","package":"@openai/codex"}}]}`,
@@ -132,7 +132,7 @@ func TestEnableAgentCanUseAnAdditionalCatalogEntry(t *testing.T) {
 }
 
 func TestAgentCommandsBoundManagerQueriesAndStopOnProcessFailure(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, failure := range []string{"start", "timeout", "canceled"} {
 				t.Run(failure, func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestAgentCommandsBoundManagerQueriesAndStopOnProcessFailure(t *testing.T) {
 }
 
 func TestAgentCommandsReportTheEarliestSandboxFailure(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			owned, foreign, unlabeled := "default", "other", ""
 			for _, test := range []struct {
@@ -215,42 +215,50 @@ func TestAgentCommandsReportTheEarliestSandboxFailure(t *testing.T) {
 	}
 }
 
-func TestEnableAgentRejectsInvalidUsageBeforePodman(t *testing.T) {
-	for _, fixture := range []string{"sandbox-host", "windows"} {
-		for _, args := range [][]string{
-			{"agents"}, {"agents", "enable"}, {"agents", "enable", "agent01"},
-			{"agents", "enable", ".bad", "codex"}, {"agents", "enable", "--bad", "codex"},
-			{"agents", "enable", "agent01", "codex", "extra"},
-			{"agents", "enable", "agent01", "codex", "--force"},
-			{"agents", "enable", "agent01", "codex", "--version", "1.0.0"},
-		} {
-			t.Run(fixture+"/"+strings.Join(args, " "), func(t *testing.T) {
-				fakes := testutil.NewFakePrograms(t)
-				stdout, stderr, status := runCLI(t, fixture, args...)
-				if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") || len(fakes.Calls("podman")) != 0 {
-					t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
+func TestAgentChangesRejectsInvalidUsageBeforePodman(t *testing.T) {
+	for _, operation := range []string{"enable", "disable"} {
+		t.Run(operation, func(t *testing.T) {
+			for _, fixture := range []string{"sandbox-host", "windows"} {
+				for _, args := range [][]string{
+					{"agents"}, {"agents", operation}, {"agents", operation, "agent01"},
+					{"agents", operation, ".bad", "codex"}, {"agents", operation, "--bad", "codex"},
+					{"agents", operation, "agent01", "codex", "extra"},
+					{"agents", operation, "agent01", "codex", "--force"},
+					{"agents", operation, "agent01", "codex", "--version", "1.0.0"},
+				} {
+					t.Run(fixture+"/"+strings.Join(args, " "), func(t *testing.T) {
+						fakes := testutil.NewFakePrograms(t)
+						stdout, stderr, status := runCLI(t, fixture, args...)
+						if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") || len(fakes.Calls("podman")) != 0 {
+							t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
+						}
+						assertNoSSH(t, fakes)
+					})
 				}
-				assertNoSSH(t, fakes)
-			})
-		}
+			}
+		})
 	}
 }
 
-func TestEnableAgentStopsAfterAnInstallationFailure(t *testing.T) {
-	fakes := testutil.NewFakePrograms(t)
-	owned := "default"
-	responses := sandboxObjectResponses(&owned, true, nil, nil)
-	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{ExitCode: 1, Stderr: "npm install failed\n"})
-	fakes.Script("podman", responses...)
-	stdout, stderr, status := runCLI(t, "sandbox-host", "agents", "enable", "agent01", "codex")
-	if status == 0 || stdout != "" || !strings.Contains(stderr, "npm install failed") || !strings.Contains(stderr, "exit status 1") || len(fakes.Calls("podman")) != len(responses) {
-		t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
+func TestAgentChangesStopsAfterAnInstallationFailure(t *testing.T) {
+	for _, operation := range []string{"enable", "disable"} {
+		t.Run(operation, func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			owned := "default"
+			responses := sandboxObjectResponses(&owned, true, nil, nil)
+			responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{ExitCode: 1, Stderr: "npm install failed\n"})
+			fakes.Script("podman", responses...)
+			stdout, stderr, status := runCLI(t, "sandbox-host", "agents", operation, "agent01", "codex")
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "npm install failed") || !strings.Contains(stderr, "exit status 1") || len(fakes.Calls("podman")) != len(responses) {
+				t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
+			}
+			assertNoSSH(t, fakes)
+		})
 	}
-	assertNoSSH(t, fakes)
 }
 
 func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			for _, name := range []string{"CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY"} {
@@ -286,7 +294,7 @@ func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
 }
 
 func TestWindowsAgentCommandsRefuseAnUnavailableTarget(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			fakes.Script("podman", testutil.Response{Stdout: "[]"})
@@ -299,7 +307,7 @@ func TestWindowsAgentCommandsRefuseAnUnavailableTarget(t *testing.T) {
 }
 
 func TestAgentCommandsRefuseWhenTheManagerDoesNotAnswer(t *testing.T) {
-	for _, operation := range []string{"enable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, response := range []testutil.Response{
 				{ExitCode: 127, Stderr: "manager missing\n"},

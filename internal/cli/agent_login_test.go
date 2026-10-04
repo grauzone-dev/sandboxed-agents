@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -173,7 +175,16 @@ func TestAgentLoginForwardsInteractiveWorkflowAndNormalizesExitStatus(t *testing
 				var stdout, stderr bytes.Buffer
 				status := -1
 				withAgentLoginTerminal(t, func() {
-					status = cli.RunWithHost(args, &stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run})
+					run := func(ctx context.Context, request process.Request) (int, error) {
+						if slices.Contains(request.Args, "login") {
+							if request.Streams.Stdin != os.Stdin || request.Streams.Stdout != os.Stdout || request.Streams.Stderr != &stderr {
+								t.Fatalf("workflow streams=%+v", request.Streams)
+							}
+							request.Streams.Stdout = &stdout
+						}
+						return platform.Run(ctx, request)
+					}
+					status = cli.RunWithHost(args, os.Stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: run})
 				})
 				wantStatus := 0
 				if exitCode != 0 {
@@ -223,7 +234,7 @@ func TestAgentLoginNeedsBothTerminalInputAndOutput(t *testing.T) {
 				} else {
 					os.Stdout = pipe
 				}
-				status = cli.RunWithHost([]string{"agents", "login", "agent01", "copilot"}, &stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run})
+				status = cli.RunWithHost([]string{"agents", "login", "agent01", "copilot"}, os.Stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run})
 			})
 			if status != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "interactive terminal") || len(fakes.Calls("podman")) != len(responses) {
 				t.Fatalf("status=%d stdout=%s stderr=%s calls=%v", status, &stdout, &stderr, fakes.Calls("podman"))
@@ -250,10 +261,10 @@ func TestAgentLoginUsesSelectedWindowsTargetAndControllerGroup(t *testing.T) {
 		responses[i].AbsentEnv = []string{"CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY"}
 	}
 	fakes.Script("podman", responses...)
-	var stdout, stderr bytes.Buffer
+	var stderr bytes.Buffer
 	status := -1
 	withAgentLoginTerminal(t, func() {
-		status = cli.RunWithWindowsHost([]string{"agents", "login", "agent01", "copilot"}, &stdout, &stderr, "test", "assets", platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true})
+		status = cli.RunWithWindowsHost([]string{"agents", "login", "agent01", "copilot"}, os.Stdout, &stderr, "test", "assets", platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true})
 	})
 	if status != 0 || stderr.Len() != 0 {
 		t.Fatalf("status=%d stderr=%s", status, &stderr)
@@ -296,7 +307,7 @@ func TestAgentLoginHandlesAdditionalAndUndeliveredCatalogEntries(t *testing.T) {
 			}
 			status := -1
 			withAgentLoginTerminal(t, func() {
-				status = cli.RunWithCatalog([]string{"agents", "login", "agent01", "fifth"}, &stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run}, catalog)
+				status = cli.RunWithCatalog([]string{"agents", "login", "agent01", "fifth"}, os.Stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run}, catalog)
 			})
 			calls := fakes.Calls("podman")
 			if test.message != "" {
@@ -337,6 +348,35 @@ func TestAgentLoginStopsWhenAnEnabledStateQueryCannotComplete(t *testing.T) {
 			status := cli.RunWithHost([]string{"agents", "login", "agent01", "copilot"}, &stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: run})
 			if status != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "manager does not answer") || !strings.Contains(stderr.String(), "check agent01") || !strings.Contains(stderr.String(), "restart agent01") || queries != 1 || len(fakes.Calls("podman")) != len(responses) {
 				t.Fatalf("status=%d stdout=%s stderr=%s queries=%d calls=%v", status, &stdout, &stderr, queries, fakes.Calls("podman"))
+			}
+		})
+	}
+}
+
+func TestAgentLoginRejectsSuppliedOutputThatIsNotATerminal(t *testing.T) {
+	for _, outputKind := range []string{"buffer", "file"} {
+		t.Run(outputKind, func(t *testing.T) {
+			fakes := testutil.NewFakePrograms(t)
+			owner := "default"
+			responses := sandboxObjectResponses(&owner, true, nil, nil)
+			responses = append(responses, testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "true"})
+			fakes.Script("podman", responses...)
+			var stdout, stderr bytes.Buffer
+			var output io.Writer = &stdout
+			if outputKind == "file" {
+				file, err := os.OpenFile(filepath.Join(t.TempDir(), "output"), os.O_CREATE|os.O_RDWR, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer file.Close()
+				output = file
+			}
+			status := -1
+			withAgentLoginTerminal(t, func() {
+				status = cli.RunWithHost([]string{"agents", "login", "agent01", "copilot"}, output, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run})
+			})
+			if status != 1 || !strings.Contains(stderr.String(), "interactive terminal") || len(fakes.Calls("podman")) != len(responses) {
+				t.Fatalf("status=%d stderr=%s calls=%v", status, &stderr, fakes.Calls("podman"))
 			}
 		})
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
+	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sshkeys"
 )
@@ -226,7 +227,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 		}
 	}
 	committed := false
-	created, err := createSSHDirectories(paths.groupDirectory)
+	created, err := setup.createSSHDirectories(paths.groupDirectory)
 	if err != nil {
 		return err
 	}
@@ -244,6 +245,9 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 		return err
 	}
 	defer os.RemoveAll(stage)
+	if err := setup.restrictSSHAccess(stage); err != nil {
+		return err
+	}
 	private := filepath.Join(stage, "id_ed25519")
 	var diagnostic bytes.Buffer
 	status, err := setup.run(ctx, process.Request{Name: "ssh-keygen", Args: []string{"-q", "-t", "ed25519", "-N", "", "-f", private}, Streams: process.Streams{Stderr: &diagnostic}})
@@ -254,6 +258,9 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 		return fmt.Errorf(sshKeyGenerationFailureFormat, strings.TrimSpace(diagnostic.String()))
 	}
 	if err := os.Chmod(private, 0600); err != nil {
+		return err
+	}
+	if err := setup.restrictSSHAccess(private); err != nil {
 		return err
 	}
 	public, err := os.ReadFile(private + ".pub")
@@ -273,6 +280,9 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 			return err
 		}
 		if err := os.Chmod(filepath.Join(stage, path), mode); err != nil {
+			return err
+		}
+		if err := setup.restrictSSHAccess(filepath.Join(stage, path)); err != nil {
 			return err
 		}
 	}
@@ -301,7 +311,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
 	}
-	if err := writeSSHFile(paths.config, managed, 0600); err != nil {
+	if err := setup.writeSSHFile(paths.config, managed, 0600, false); err != nil {
 		return err
 	}
 	defer func() {
@@ -310,13 +320,13 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 			if configInfo == nil {
 				rollback = os.Remove(paths.config)
 			} else {
-				rollback = writeSSHFile(paths.config, config, configInfo.Mode().Perm())
+				rollback = setup.writeSSHFile(paths.config, config, configInfo.Mode().Perm(), false)
 			}
 			err = errors.Join(err, rollback)
 		}
 	}()
 	if !hasInclude {
-		directories, err := createSSHDirectories(filepath.Dir(paths.userConfig))
+		directories, err := setup.createSSHDirectories(filepath.Dir(paths.userConfig))
 		if err != nil {
 			return err
 		}
@@ -335,7 +345,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := writeSSHFile(paths.userConfig, append([]byte(include), userConfig...), mode); err != nil {
+		if err := setup.writeSSHFile(paths.userConfig, append([]byte(include), userConfig...), mode, true); err != nil {
 			return err
 		}
 	}
@@ -352,7 +362,14 @@ func readOptionalFile(path string) ([]byte, error) {
 	return data, err
 }
 
-func writeSSHFile(path string, data []byte, mode os.FileMode) error {
+func (setup *SSHSetup) restrictSSHAccess(path string) error {
+	if setup.hostOS == "windows" {
+		return platform.RestrictSSHAccess(path)
+	}
+	return nil
+}
+
+func (setup *SSHSetup) writeSSHFile(path string, data []byte, mode os.FileMode, preserve bool) error {
 	info, err := os.Lstat(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -372,12 +389,19 @@ func writeSSHFile(path string, data []byte, mode os.FileMode) error {
 		file.Close()
 		return err
 	}
+	if err := setup.restrictSSHAccess(file.Name()); err != nil {
+		file.Close()
+		return err
+	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+	if setup.hostOS == "windows" && preserve && info != nil {
+		return platform.ReplaceSSHFile(file.Name(), path)
 	}
 	return os.Rename(file.Name(), path)
 }
@@ -415,7 +439,7 @@ func (lifecycle *Lifecycle) InstallSSH(ctx context.Context, hostOS string) error
 	return setup.Install(ctx)
 }
 
-func createSSHDirectories(path string) ([]string, error) {
+func (setup *SSHSetup) createSSHDirectories(path string) ([]string, error) {
 	var missing []string
 	for directory := path; ; directory = filepath.Dir(directory) {
 		info, err := os.Stat(directory)
@@ -436,6 +460,12 @@ func createSSHDirectories(path string) ([]string, error) {
 	for index := len(missing) - 1; index >= 0; index-- {
 		if err := os.Mkdir(missing[index], 0700); err != nil {
 			for i := index + 1; i < len(missing); i++ {
+				os.Remove(missing[i])
+			}
+			return nil, err
+		}
+		if err := setup.restrictSSHAccess(missing[index]); err != nil {
+			for i := index; i < len(missing); i++ {
 				os.Remove(missing[i])
 			}
 			return nil, err

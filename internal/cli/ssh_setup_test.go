@@ -372,6 +372,7 @@ func TestUpAndStartInstallTheSameSSHSetupAfterStartingSandbox(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(sshDir, "config")); err != nil {
 					t.Fatal(err)
 				}
+				assertSSHSetupPermissions(t, host.windows, state, sshDir)
 				assertSSHInstallManagerCalls(t, fakes, host.windows)
 				calls := fakes.Calls("podman")
 				var sawStart, sawAuthorize bool

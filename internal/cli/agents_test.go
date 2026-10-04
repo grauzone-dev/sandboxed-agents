@@ -215,7 +215,7 @@ func TestAgentCommandsReportTheEarliestSandboxFailure(t *testing.T) {
 	}
 }
 
-func TestAgentChangesRejectsInvalidUsageBeforePodman(t *testing.T) {
+func TestAgentChangesRejectInvalidUsageBeforePodman(t *testing.T) {
 	for _, operation := range []string{"enable", "disable"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, fixture := range []string{"sandbox-host", "windows"} {
@@ -240,16 +240,16 @@ func TestAgentChangesRejectsInvalidUsageBeforePodman(t *testing.T) {
 	}
 }
 
-func TestAgentChangesStopsAfterAnInstallationFailure(t *testing.T) {
+func TestAgentChangesStopAfterAManagerRequestFailure(t *testing.T) {
 	for _, operation := range []string{"enable", "disable"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
 			responses := sandboxObjectResponses(&owned, true, nil, nil)
-			responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{ExitCode: 1, Stderr: "npm install failed\n"})
+			responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{ExitCode: 1, Stderr: "manager request failed\n"})
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, "sandbox-host", "agents", operation, "agent01", "codex")
-			if status == 0 || stdout != "" || !strings.Contains(stderr, "npm install failed") || !strings.Contains(stderr, "exit status 1") || len(fakes.Calls("podman")) != len(responses) {
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "manager request failed") || !strings.Contains(stderr, "exit status 1") || len(fakes.Calls("podman")) != len(responses) {
 				t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
 			}
 			assertNoSSH(t, fakes)
@@ -261,19 +261,30 @@ func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
 	for _, operation := range []string{"enable", "disable", "status"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
+			t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
 			for _, name := range []string{"CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY"} {
 				t.Setenv(name, "unchecked")
 			}
-			owned := "default"
+			owned := "team-a"
 			responses := append([]testutil.Response{}, healthyWindowsPodman()[1:3]...)
-			responses = append(responses, sandboxObjectResponses(&owned, true, nil, nil)...)
-			responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Agent codex is enabled (version 1.2.3).\n"})
+			objects := sandboxObjectResponses(&owned, true, nil, nil)
+			for i := range objects {
+				objects[i].Stdout = strings.ReplaceAll(objects[i].Stdout, ".default.", ".team-a.")
+			}
+			responses = append(responses, objects...)
+			report := "Agent codex is enabled (version 1.2.3).\n"
+			if operation == "disable" {
+				report = "Agent codex is disabled.\n"
+			} else if operation == "status" {
+				report = "Agent codex is enabled (version 1.2.3).\nSign-in state: unknown.\n"
+			}
+			responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: report})
 			for index := range responses {
 				responses[index].AbsentEnv = []string{"CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY"}
 			}
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, "windows", "agents", operation, "agent01", "codex")
-			if status != 0 || stderr != "" || stdout != "Agent codex is enabled (version 1.2.3).\n" {
+			if status != 0 || stderr != "" || stdout != report {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			calls := fakes.Calls("podman")
@@ -282,8 +293,8 @@ func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
 			}
 			operations := windowsOperationCalls(t, calls[2:], "podman-machine-default")
 			want := []testutil.Call{
-				{Args: []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "version"}},
-				{Args: []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", operation, "codex"}},
+				{Args: []string{"exec", "--user=0:0", "sandboxed-agents.team-a.agent01", "/usr/local/bin/sandboxed-agents-manager", "version"}},
+				{Args: []string{"exec", "--user=0:0", "sandboxed-agents.team-a.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", operation, "codex"}},
 			}
 			if !reflect.DeepEqual(operations[len(operations)-2:], want) {
 				t.Fatal(operations)

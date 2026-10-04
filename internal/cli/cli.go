@@ -164,6 +164,7 @@ func unexpectedArgument(arg string) error {
 
 type sandboxHost struct {
 	workspace        sandbox.WorkspaceHost
+	automountRoot    *string
 	sshPortAvailable func(int) (bool, error)
 }
 
@@ -194,7 +195,15 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 			}
 			return nil
 		},
-		Preflight:         check,
+		Preflight: func(invocation *Invocation) error {
+			if err := check(invocation); err != nil {
+				return err
+			}
+			if host.workspace.OS == "windows" {
+				return up.TranslateWorkspace(*host.automountRoot)
+			}
+			return nil
+		},
 		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
@@ -298,7 +307,7 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 	if host.OS == "windows" {
 		run = podman.run
 	}
-	return runWithCheck(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.OS, ReadFile: os.ReadFile}}, run, func(invocation *Invocation) error {
+	return runWithCheck(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.OS, ReadFile: os.ReadFile}, automountRoot: &podman.automountRoot}, run, func(invocation *Invocation) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		report := preflight.CheckWindows(ctx, host, podman.invoke)
@@ -312,6 +321,7 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 			return err
 		}
 		podman.connection = report.PodmanConnection
+		podman.automountRoot = report.AutomountRoot
 		return nil
 	})
 }

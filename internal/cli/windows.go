@@ -12,8 +12,9 @@ import (
 )
 
 type windowsPodman struct {
-	connection string
-	runner     process.Runner
+	connection    string
+	automountRoot string
+	runner        process.Runner
 }
 
 func (podman *windowsPodman) invoke(ctx context.Context, request process.Request) (int, error) {

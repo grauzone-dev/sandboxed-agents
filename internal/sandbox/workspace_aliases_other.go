@@ -1,7 +1,7 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package sandbox
 
 import "os"
 
-func fileHasAliases(os.FileInfo) bool { return false }
+func fileHasAliases(string, os.FileInfo) (bool, error) { return false, nil }

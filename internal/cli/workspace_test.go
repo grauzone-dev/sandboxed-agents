@@ -351,18 +351,6 @@ func TestUpReportsPreflightOwnershipAndInterruptedUpdateBeforeAWorkspaceConflict
 	}
 }
 
-func TestUpRejectsWindowsWorkspacesUntilPathTranslationIsAvailable(t *testing.T) {
-	fakes := testutil.NewFakePrograms(t)
-	_, stderr, status := runCLI(t, "windows", "up", "agent01", "C:\\project")
-	if status == 0 || !strings.Contains(stderr, "WORKSPACE") || !strings.Contains(stderr, "Windows") {
-		t.Fatalf("status=%d stderr=%q", status, stderr)
-	}
-	if len(fakes.Calls("podman")) != 0 {
-		t.Fatal("unsupported workspace called Podman")
-	}
-	assertNoSSH(t, fakes)
-}
-
 func TestListShowsABoundWorkspaceFromItsRecordedKind(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"

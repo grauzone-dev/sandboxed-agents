@@ -4,7 +4,7 @@
 
 `check` detects the host operating system and runs the [Linux](#linux) or the [Windows](#windows) preflight. Windows hosts run Podman in a WSL2 machine. On any other operating system, `check` reports that no preflight is available for that system yet. It checks nothing else and exits with a nonzero status.
 
-`check` only reports the host prerequisites. `sandboxed-agents build` and `sandboxed-agents up` already run the same preflight for the host. `build` runs it before it writes the build context, and `up` runs it before it looks up or creates any sandbox object. Both commands stop if a required prerequisite is missing or, on Windows, could not be checked. A later Story will make `update` run the preflight as well. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host), and it never repairs a missing prerequisite. The temporary build context that `build` creates and removes is part of the build, not of the preflight.
+`check` only reports the host prerequisites. `sandboxed-agents build`, `sandboxed-agents up`, and `sandboxed-agents update` already run the same preflight for the host. `build` runs it before it writes the build context, and `up` and `update` run it before they look up or create any sandbox object. These commands stop if a required prerequisite is missing or, on Windows, could not be checked. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host), and it never repairs a missing prerequisite. The temporary build context that `build` creates and removes is part of the build, not of the preflight.
 
 ## Run the check
 
@@ -68,6 +68,7 @@ Each row is one line of `check` output. **Name** is the name the check prints, a
 | `process` | The `pids` controller is delegated to you. | delegate the cgroup v2 pids controller to your user, … |
 | `ssh` | `ssh` is on `PATH`. | install the OpenSSH client and make sure ssh is on PATH |
 | `ssh-keygen` | `ssh-keygen` is on `PATH`. | install the OpenSSH client and make sure ssh-keygen is on PATH |
+| `ssh-keyscan` | `ssh-keyscan` is on `PATH`. | install the OpenSSH client and make sure ssh-keyscan is on PATH |
 
 To match subordinate ID lines, the check resolves your user name once from your effective UID:
 
@@ -86,7 +87,7 @@ If `podman` is not on `PATH`, the check does not run `podman --version` and repo
 
 To add subordinate ranges, run `usermod --add-subuids FIRST-LAST USER` and `usermod --add-subgids FIRST-LAST USER` from shadow-utils as an administrator.
 
-`ssh` and `ssh-keygen` are needed by `sandboxed-agents` itself, not by Podman (ADR-0002).
+`ssh`, `ssh-keygen`, and `ssh-keyscan` are needed by `sandboxed-agents` itself, not by Podman (ADR-0002). All three come with the OpenSSH client. `update` runs `ssh-keyscan` against the new container's SSH port on `127.0.0.1` to check that its SSH server answers; it does not authenticate and reads or writes no file in your SSH directory ([Readiness wait](updates.md#readiness-wait)).
 
 #### cgroup controller delegation
 
@@ -154,7 +155,7 @@ The check does not:
 
 ## Windows
 
-The Windows preflight never installs, configures, or starts anything. It queries the Podman client and the [selected Podman machine](#selected-podman-machine). On a running machine, it also runs read-only commands through Podman machine SSH as the non-root machine user. It never runs `ssh-keygen` and does not perform SSH setup.
+The Windows preflight never installs, configures, or starts anything. It queries the Podman client and the [selected Podman machine](#selected-podman-machine). On a running machine, it also runs read-only commands through Podman machine SSH as the non-root machine user. It never runs `ssh-keygen` or `ssh-keyscan` and does not perform SSH setup.
 
 `check` exits with status 0 when every required prerequisite is confirmed. It exits with a nonzero status when any required prerequisite is missing or unknown. If the Podman connection doesn't respond in time, the check reports a timeout and exits with a nonzero status.
 
@@ -166,7 +167,7 @@ The Windows preflight never installs, configures, or starts anything. It queries
 | Podman client | 5.0.0 or later |
 | Podman machine | Running, on WSL2, rootless, Podman 5.0.0 or later |
 | cgroups | cgroups v2 with the `cpu`, `memory`, and `pids` controllers delegated |
-| OpenSSH | `ssh` and `ssh-keygen` on `PATH`. Preflight checks only that they are present. |
+| OpenSSH | `ssh`, `ssh-keygen`, and `ssh-keyscan` on `PATH`, all from the Windows OpenSSH Client. Preflight checks only that they are present. |
 
 If the selected Podman machine is stopped, preflight reports the running machine as missing. It reports the machine version and cgroups as unknown, because only a running machine provides them. Rootless mode is read from machine inspect, which also works on a stopped machine. If inspect shows a stopped machine as rootful, preflight reports rootless mode as missing. If no Podman machine exists, preflight reports the machine version, rootless mode, and cgroups as unknown.
 
@@ -183,7 +184,7 @@ The machine is selected from `podman machine list`. It is the one machine marked
 These Podman calls name the machine with `--connection NAME`, where `NAME` is the machine name:
 
 - the preflight's version and info queries;
-- after a passing preflight, every call of `build` and `up`: the lookups, the image build, the volume and container calls, and the start;
+- after a passing preflight, every call of `build`, `up`, and `update`: the lookups, the image build, the volume and container calls, the rename, the start and stop, and `update`'s version query to the in-container manager;
 - every call of `start`, `stop`, `restart`, `remove`, `shell`, `ssh-config`, and `fingerprint` after their selection, including the session query to the in-container manager, the `podman exec` call that opens a shell, and the `podman exec` calls that read the host keys.
 
 The preflight's read-only commands inside the machine use `podman machine ssh NAME`, which names the machine directly instead of through `--connection`.

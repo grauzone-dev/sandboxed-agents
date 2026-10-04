@@ -48,6 +48,7 @@ type Command struct {
 	Prepare  Handler
 	Action   Handler
 	Help     Handler
+	Acquire  func(*Invocation) (func(), error)
 }
 
 type Tree struct {
@@ -102,8 +103,19 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 			return tree.failure(stderr, path, err, true)
 		}
 	}
+	if selected.Checks.Preflight != nil {
+		if err := selected.Checks.Preflight(invocation); err != nil {
+			return tree.failure(stderr, path, err, false)
+		}
+	}
+	if selected.Acquire != nil {
+		release, err := selected.Acquire(invocation)
+		if err != nil {
+			return tree.failure(stderr, path, err, false)
+		}
+		defer release()
+	}
 	steps := []Handler{
-		selected.Checks.Preflight,
 		selected.Checks.Sandbox,
 		selected.Checks.Owner,
 		selected.Checks.InterruptedUpdate,
@@ -166,6 +178,7 @@ type sandboxHost struct {
 	workspace        sandbox.WorkspaceHost
 	automountRoot    *string
 	sshPortAvailable func(int) (bool, error)
+	selectTarget     func(context.Context) error
 }
 
 func upCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler, catalog agentcatalog.Catalog) Command {
@@ -311,7 +324,7 @@ func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetH
 	if host.OS == "windows" {
 		run = podman.run
 	}
-	return runWithCheck(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.OS, ReadFile: os.ReadFile}, automountRoot: &podman.automountRoot}, run, func(invocation *Invocation) error {
+	return runWithCheck(args, stdout, stderr, version, assetHash, sandboxHost{workspace: sandbox.WorkspaceHost{OS: host.OS, ReadFile: os.ReadFile}, automountRoot: &podman.automountRoot, selectTarget: podman.selectTarget}, run, func(invocation *Invocation) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		report := preflight.CheckWindows(ctx, host, podman.invoke)
@@ -356,6 +369,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 	}, Commands: []Command{
 		{Name: "agents", Commands: []Command{agentCommand("enable", &group, run, catalog), agentCommand("disable", &group, run, catalog), agentCommand("status", &group, run, catalog), runAgentCommand(&group, run, catalog), loginAgentCommand(&group, run, catalog)}},
 		upCommand(assetHash, host, &group, run, check, catalog),
+		updateCommand(assetHash, &group, run, check),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return sandbox.List(context.Background(), group, run, invocation.Stdout, catalog)
 		}},
@@ -389,6 +403,19 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		}},
 		{Name: "check", Checks: Checks{Usage: noArguments}, Action: check},
 	}}
+	for index := range tree.Commands {
+		command := &tree.Commands[index]
+		if slices.Contains([]string{"up", "start", "stop", "restart", "remove", "update"}, command.Name) {
+			command.Acquire = func(invocation *Invocation) (func(), error) {
+				if host.workspace.OS == "windows" && host.selectTarget != nil {
+					if err := host.selectTarget(context.Background()); err != nil {
+						return nil, err
+					}
+				}
+				return sandbox.LockLifecycle(host.workspace.OS, group, invocation.Args[0])
+			}
+		}
+	}
 	return tree.Execute(args, stdout, stderr)
 }
 

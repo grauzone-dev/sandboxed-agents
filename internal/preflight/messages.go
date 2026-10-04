@@ -19,5 +19,6 @@ var messages = map[string]messageText{
 	"cgroups":         {Missing: "Podman machine must use cgroups v2 with cpu, memory and pids delegated; enable delegation of these controllers and restart the machine", Met: "cgroups v2 delegates cpu, memory and pids", Unknown: "Could not determine whether cgroups v2 delegates cpu, memory and pids in the Podman machine; check the Podman connection"},
 	"ssh":             {Missing: "ssh was not found on PATH; install the Windows OpenSSH Client and add it to PATH", Met: "ssh is available on PATH", Unknown: ""},
 	"ssh_keygen":      {Missing: "ssh-keygen was not found on PATH; install the Windows OpenSSH Client and add it to PATH", Met: "ssh-keygen is available on PATH", Unknown: ""},
+	"ssh_keyscan":     {Missing: "ssh-keyscan was not found on PATH; install the Windows OpenSSH Client and add it to PATH", Met: "ssh-keyscan is available on PATH", Unknown: ""},
 	"automount":       {Auxiliary: true, Met: "Podman machine reports where Windows drives are mounted", Unknown: "WSL automount root could not be determined from the Podman machine; this does not fail the check"},
 }

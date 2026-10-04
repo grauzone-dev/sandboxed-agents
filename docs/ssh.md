@@ -78,7 +78,7 @@ Before it opens the shell, `shell` looks up the container, the three volumes, an
 - **Unknown sandbox.** Neither the container, a volume, nor the backup container exists in the current controller group: `sandbox NAME does not exist in this controller group`.
 - **Volumes only.** No container exists, but some or all of the sandbox's volumes do, each with the current owner: `sandbox NAME has no container; run sandboxed-agents up NAME, which adopts its volumes`.
 - **Owner conflict.** The container, one of the volumes, or the backup container has a missing owner label or one that names another controller group, also when the container has the current owner and only a volume does not. The message starts with `owner conflict`, names every such object, and points to Podman ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)).
-- **Interrupted update.** The backup container of an interrupted update exists with the current owner, whether the sandbox runs or is stopped. The message names `sandboxed-agents update NAME`.
+- **Interrupted update.** The backup container of an interrupted update exists with the current owner, whether the sandbox runs or is stopped. The message names `sandboxed-agents update NAME`, but this version of `update` refuses such a sandbox too; recovering an interrupted update comes with #54 ([Update a sandbox](updates.md#not-in-this-version)).
 - **Stopped sandbox.** The container exists but is not running: `sandbox NAME is stopped; run sandboxed-agents start NAME`.
 
 If a Podman lookup fails or returns output that `shell` cannot read, `shell` reports the failure and exits with status 1 without opening a shell.
@@ -233,7 +233,7 @@ The manager accepts exactly one ed25519 public key, writes it as the only line o
 
 - **Exactly one key.** Every installation replaces the whole file, so it holds the key of the latest installation and nothing else. A key that an earlier SSH setup left there is replaced.
 - **Out of reach of agents.** The user `agent` can read the file but not change it, so an agent cannot authorize a key of its own or remove the dedicated one. sshd's `StrictModes` accepts a root-owned file that nobody else can write.
-- **Kept across `stop` and `start`.** The file lives in the volume, so the authorization survives `stop`, `start`, and `restart`. Neither `stop` nor `start` without `--ssh-config` changes it. It also survives `remove` and `up` as long as the SSH server state volume is kept. Keeping the SSH setup valid across `update` comes with #52.
+- **Kept across `stop` and `start`.** The file lives in the volume, so the authorization survives `stop`, `start`, and `restart`. Neither `stop` nor `start` without `--ssh-config` changes it. It also survives `remove` and `up` as long as the SSH server state volume is kept, and `update`, which mounts the same volume in the new container and changes no host SSH file ([Update a sandbox](updates.md#what-update-keeps)).
 
 ### Pinned host key
 
@@ -337,7 +337,6 @@ VS Code Remote SSH and other desktop UIs read the same SSH configuration, so the
 
 - **Removing an SSH setup.** ADR-0002 states that `remove` deletes a sandbox's SSH setup. This is delivered in stages: #19 installs the SSH setup, and `ssh-config NAME --remove` and the cleanup of the host side by `remove NAME` come with #37. Until then, `remove NAME` leaves the host entry, the key pair, the pin, and the `Include` line in place. The messages for a host key mismatch and an incomplete SSH setup still name `ssh-config NAME --remove`, as #19 requires, although it is not available yet.
 - **ACLs on Windows** for the key files, the managed configuration, and a `.ssh` directory or SSH configuration the installation creates come with #34.
-- **Keeping the SSH setup valid across `update`** comes with #52.
 - **Reporting SSH access in `check NAME`** comes with #20.
 - **A real SSH connection against real Podman** comes with #35.
 

@@ -89,6 +89,8 @@ func CheckWindows(ctx context.Context, host platform.Host, run process.Runner) R
 	report.add("ssh", true, sshErr == nil)
 	_, keygenErr := exec.LookPath("ssh-keygen")
 	report.add("ssh_keygen", true, keygenErr == nil)
+	_, keyscanErr := exec.LookPath("ssh-keyscan")
+	report.add("ssh_keyscan", true, keyscanErr == nil)
 	if machine.Running && machine.Provider == "wsl" {
 		output, ok := readMachineShell(ctx, run, machine.Name, "if [ -e /etc/wsl.conf ] || [ -L /etc/wsl.conf ]; then cat /etc/wsl.conf; fi")
 		if ok {

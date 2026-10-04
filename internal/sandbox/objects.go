@@ -48,6 +48,7 @@ type sandboxObjects struct {
 	containerRunning bool
 	containerLabels  map[string]string
 	containerMounts  []containerMount
+	containerImage   string
 }
 
 func newSandboxObjects(name, group string, run process.Runner, streams process.Streams) *sandboxObjects {
@@ -77,6 +78,7 @@ func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
 		state.containerRunning = record.State.Running
 		state.containerLabels = record.Config.Labels
 		state.containerMounts = record.Mounts
+		state.containerImage = record.Image
 	}
 	for index := range state.volumes {
 		state.volumes[index].exists, err = state.objectExists(ctx, "volume", state.volumes[index].name)
@@ -214,11 +216,13 @@ func (state *sandboxObjects) runPodman(ctx context.Context, args ...string) erro
 
 type containerMount struct {
 	Type        string
+	Name        string
 	Source      string
 	Destination string
 }
 
 type containerRecord struct {
+	Image  string
 	Mounts []containerMount
 	Name   string
 	Config *struct{ Labels map[string]string }

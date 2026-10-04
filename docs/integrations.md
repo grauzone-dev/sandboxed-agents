@@ -51,7 +51,7 @@ The name and the email are written by two separate Git calls. When the second ca
 
 ### Scope and persistence
 
-The global Git configuration of `agent` lives in the sandbox's home volume. The identity therefore applies to every repository in the sandbox and to every agent: agents in one sandbox share its user and files, so all of them commit with the same name and email. It is kept across `stop` and `start`. Keeping the home volume, and with it the identity, across `update` arrives with #52.
+The global Git configuration of `agent` lives in the sandbox's home volume. The identity therefore applies to every repository in the sandbox and to every agent: agents in one sandbox share its user and files, so all of them commit with the same name and email. It is kept across `stop` and `start`, and across `update`, which mounts the same home volume in the new container ([Update a sandbox](updates.md#what-update-keeps)).
 
 ### What the host contributes
 

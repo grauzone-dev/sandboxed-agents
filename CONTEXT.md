@@ -70,7 +70,11 @@ The previous container of a sandbox, kept under its own name while `update` repl
 ### Host boundaries
 
 **Host state**:
-Mutable data the executable keeps in the operating system's state directory, in one `group-GROUP` directory per controller group. It holds managed SSH keys and configuration.
+Mutable data the executable keeps in the operating system's state directory, in one `group-GROUP` directory per controller group. It holds the managed SSH keys and configuration of SSH setups and an empty lifecycle lock for each sandbox name a lifecycle command has run for. It records nothing about an update.
+
+**Lifecycle lock**:
+The host-side lock with which the executable's lifecycle commands (`up`, `start`, `stop`, `restart`, `remove`, `update`) serialize on one sandbox: a second command refuses at once instead of waiting. It is an empty file in host state, so it coordinates only commands that use the same host state root, and it does not hold back writers that use Podman directly. It is distinct from the manager lock inside the sandbox.
+_Avoid_: Sandbox lock, update lock
 
 **Protected host paths**:
 Host locations that must never be exposed through a workspace bind: the executable and its package launchers, host state, temporary build inputs, and the user's SSH directory. Symlinks, junctions, and other aliases do not make a protected path bindable.

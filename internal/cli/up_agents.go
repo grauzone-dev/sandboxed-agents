@@ -50,7 +50,7 @@ func validateAgent(name string, catalog agentcatalog.Catalog) error {
 	}
 	names := catalog.Names()
 	if len(names) == 0 {
-		return fmt.Errorf("unknown agent %q; no valid agent names are available yet", name)
+		return fmt.Errorf(agentNoneFormat, name)
 	}
-	return fmt.Errorf("unknown agent %q; valid agents: %s", name, strings.Join(names, ", "))
+	return fmt.Errorf(agentUnknownFormat, name, strings.Join(names, ", "))
 }

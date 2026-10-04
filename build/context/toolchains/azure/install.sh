@@ -4,8 +4,9 @@ set -eu
 export DEBIAN_FRONTEND=noninteractive
 mkdir -p /etc/apt/keyrings
 curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /tmp/microsoft.asc
-gpg --batch --yes --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc
-rm /tmp/microsoft.asc
+microsoft_key_home=$(mktemp -d)
+gpg --batch --yes --homedir "$microsoft_key_home" --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc
+rm -rf "$microsoft_key_home" /tmp/microsoft.asc
 chmod 0644 /etc/apt/keyrings/microsoft.gpg
 printf '%s\n' 'deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main' > /etc/apt/sources.list.d/azure-cli.list
 apt-get update

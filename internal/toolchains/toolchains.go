@@ -10,6 +10,13 @@ type Set struct{ names string }
 
 func (set Set) String() string { return set.names }
 
+func (set Set) Names() []string {
+	if set.names == "" {
+		return nil
+	}
+	return strings.Split(set.names, ",")
+}
+
 func Parse(value string) (Set, error) {
 	names := strings.Split(value, ",")
 	if len(names) == 1 && names[0] == "none" {

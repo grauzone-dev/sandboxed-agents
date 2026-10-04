@@ -1,0 +1,3 @@
+COPY azure/install.sh /tmp/install-azure.sh
+COPY azure/record.sh /usr/local/share/sandboxed-agents/versions.d/azure.sh
+RUN sh /tmp/install-azure.sh && rm /tmp/install-azure.sh

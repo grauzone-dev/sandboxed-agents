@@ -299,9 +299,9 @@ func assertNativeBuildContext(t *testing.T, directory string) {
 	t.Helper()
 	for file, required := range map[string][]string{
 		"Containerfile":      {"ARG BASE_IMAGE", "FROM ${BASE_IMAGE}", "sh /tmp/install-native.sh", "sh /tmp/record-versions.sh", "COPY native/smoke.sh /usr/local/share/sandboxed-agents/smoke/native.sh"},
-		"native/install.sh":         {"apt-get install -y --no-install-recommends", "build-essential", "cmake", "pkg-config", "ninja-build"},
+		"native/install.sh":  {"apt-get install -y --no-install-recommends", "build-essential", "cmake", "pkg-config", "ninja-build"},
 		"record-versions.sh": {"/usr/local/share/sandboxed-agents/versions.tsv", "dpkg-query -W"},
-		"native/smoke.sh":           {"id -u", "id -g", "1000", "int main(void)", "cc ", "trap 'rm -rf"},
+		"native/smoke.sh":    {"id -u", "id -g", "1000", "int main(void)", "cc ", "trap 'rm -rf"},
 	} {
 		contents, err := os.ReadFile(filepath.Join(directory, file))
 		if err != nil {

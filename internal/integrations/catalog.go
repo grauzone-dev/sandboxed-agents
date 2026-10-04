@@ -14,7 +14,7 @@ type Integration struct {
 
 func Catalog() []Integration {
 	return []Integration{
-		{Name: "git", Config: []string{"identity"}},
+		{Name: "git", Config: []string{"identity", "credentials"}},
 		{Name: "github"},
 		{Name: "azure"},
 		{Name: "azdo"},

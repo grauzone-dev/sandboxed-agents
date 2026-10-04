@@ -30,6 +30,9 @@ func Parse(kind string, args []string) (Request, error) {
 	}
 	request.Workflow = workflow
 	for len(args) > 0 {
+		if request.Workflow != "identity" {
+			return request, fmt.Errorf(UnexpectedArgument, args[0])
+		}
 		option, value, inline := strings.Cut(args[0], "=")
 		var target **string
 		switch option {
@@ -62,7 +65,7 @@ func Parse(kind string, args []string) (Request, error) {
 }
 
 func (request Request) NeedsTerminal() bool {
-	return request.CommitName == nil || request.CommitEmail == nil
+	return request.Workflow == "identity" && (request.CommitName == nil || request.CommitEmail == nil)
 }
 
 func (request Request) Args() []string {

@@ -67,19 +67,19 @@ git config --global --replace-all -- credential.helper 'store --file=/home/agent
 
 This replaces every `credential.helper` entry in the global Git configuration of `agent`. It does not change the system Git configuration or a repository's own configuration, and a credential helper configured there can still change which helpers Git asks.
 
-The command stores no credentials itself and creates no credential file. The helper takes effect the next time Git needs credentials for an HTTPS remote. Git then asks for a username and password, for many hosts a personal access token, and once the remote accepts them, the helper stores them and Git uses them from then on without asking. Git asks on the terminal of the program that runs it, so an agent without a terminal cannot answer. Enter the credentials once yourself, for example with `git clone` or `git push` in [`sandboxed-agents shell NAME`](ssh.md#open-a-shell).
+The command stores no credentials itself and creates no credential file. The helper takes effect the next time Git needs credentials for an HTTPS remote. When no helper has credentials for that remote, Git asks for a username and password, for many hosts a personal access token, and once the remote accepts them, the helper stores them and Git uses them from then on without asking. Git asks through the program named by `GIT_ASKPASS`, `core.askPass`, or `SSH_ASKPASS`, the first of them that is set in the sandbox, and otherwise on the terminal ([gitcredentials](https://git-scm.com/docs/gitcredentials), "Requesting credentials"). Git started without a terminal and without such a program therefore cannot ask. The usual way is to enter the credentials once yourself, for example with `git clone` or `git push` in [`sandboxed-agents shell NAME`](ssh.md#open-a-shell).
 
 ### Why `credential-store`
 
 The helper is Git's built-in [`credential-store`](https://git-scm.com/docs/git-credential-store):
 
 - It ships with the Git already in the sandbox image, so the integration installs nothing.
-- It needs no daemon, keyring, desktop session, or browser, none of which a sandbox has.
+- It needs no daemon, keyring, desktop session, or browser.
 - `--file` fixes the store at `/home/agent/.git-credentials`, a path in the home volume, so the credentials outlast the container.
 
 ### Terminal
 
-Configuring the helper needs no terminal: the command takes no options, prompts for nothing, and behaves the same with and without a terminal. Only the later Git operation that asks for credentials needs one.
+Configuring the helper never needs a terminal: the command takes no options, prompts for nothing, and behaves the same with and without a terminal. A later Git operation needs one only to enter credentials that no helper provides when no askpass program is set ([Git credentials](#git-credentials)).
 
 ### Storage and who can read it
 

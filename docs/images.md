@@ -6,18 +6,19 @@ A sandbox is created from an image: the base contents every sandbox needs plus t
 
 A toolchain is a set of SDKs or system packages built into a sandbox's image. All toolchains are off by default. `build --with SET` and `up NAME --with SET` select a toolchain set: a comma-separated list of toolchain names, such as `--with native`.
 
-This version delivers two toolchains, which can be selected alone or together:
+This version delivers three toolchains, which can be selected alone or in any combination:
 
 | Toolchain | Contents |
 | --- | --- |
 | `azure` | Azure CLI from Microsoft's APT repository, with the Azure DevOps extension |
+| `dotnet` | the .NET SDKs 8.0, 9.0, and 10.0 from Microsoft's APT repository for Debian 12 |
 | `native` | the Debian packages `build-essential`, `cmake`, `pkg-config`, and `ninja-build` |
 
-`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected. The catalog also plans `dotnet` and `playwright`; until each of them is delivered, its name is rejected like an unknown name.
+`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected. The catalog also plans `playwright`; until it is delivered, its name is rejected like an unknown name.
 
 The selection is a set. Order and repetition do not matter, so `--with native,azure,native` selects the same set as `--with azure,native`. The executable records a set in its canonical form: the names sorted and deduplicated, separated by commas, and the empty string for the base image.
 
-An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `azure`, `native`, and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
+An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `azure`, `dotnet`, `native`, and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
 
 ## Build images
 
@@ -94,11 +95,11 @@ The entrypoint runs as root. It creates `/run/sshd` and runs `sandboxed-agents-m
 
 `/usr/local/share/sandboxed-agents/versions.tsv` records what the image contains. It is UTF-8 text with LF line endings and no header. Each line is a component name and its version, separated by one tab. The file lists every installed Debian package as reported by `dpkg-query`, followed by the lines for `node`, `npm`, and `manager`.
 
-A toolchain image records the inventory once more, in its final step after every toolchain of the set has installed, so its `versions.tsv` replaces the base image's file and also lists the toolchains' Debian packages and their dependencies. A toolchain that installs something `dpkg-query` does not see adds a recorder script to `/usr/local/share/sandboxed-agents/versions.d/`; the recording script runs every `*.sh` file there and appends its lines after `manager`. The Azure CLI version is the `azure-cli` line among the `dpkg-query` lines, such as `2.90.0-1~bookworm`. The `azure` recorder adds one line, `azure-devops`, with the extension version that `az version` reports.
+A toolchain image records the inventory once more, in its final step after every toolchain of the set has installed, so its `versions.tsv` replaces the base image's file and also lists the toolchains' Debian packages and their dependencies. A toolchain that installs something `dpkg-query` does not see adds a recorder script to `/usr/local/share/sandboxed-agents/versions.d/`; the recording script runs every `*.sh` file there and appends its lines after `manager`. The Azure CLI version is the `azure-cli` line among the `dpkg-query` lines, such as `2.90.0-1~bookworm`. The `azure` recorder adds one line, `azure-devops`, with the extension version that `az version` reports. The `dotnet` toolchain needs no recorder: its SDKs are Debian packages, so their versions are the `dotnet-sdk-8.0`, `dotnet-sdk-9.0`, and `dotnet-sdk-10.0` lines among the `dpkg-query` lines, as package versions that may include a packaging revision.
 
 ## Toolchain image contents
 
-A toolchain image is layered on the base image, so all toolchain images share the base layers. Neither the base image nor the `native` toolchain installs anything from Azure.
+A toolchain image is layered on the base image, so all toolchain images share the base layers. Each toolchain installs only its own contents: neither the base image nor the `native` or `dotnet` toolchain installs anything from Azure, and neither the base image nor a set without `dotnet` installs a .NET SDK.
 
 The `native` toolchain adds:
 
@@ -113,7 +114,15 @@ The `azure` toolchain adds:
 - **Version recorder:** `/usr/local/share/sandboxed-agents/versions.d/azure.sh` ([Version inventory](#version-inventory)).
 - **Smoke check:** the command `az version`, run as UID and GID 1000, with no script file of its own. Its output is expected to list the `azure-devops` extension; #29 checks that against a real image.
 
-The image contains no Azure credentials, and the `azure` toolchain adds no login or config workflow. Changing the toolchain set of an existing sandbox comes with #71.
+The image contains no Azure credentials, and the `azure` toolchain adds no login or config workflow.
+
+The `dotnet` toolchain adds:
+
+- **APT repository:** `https://packages.microsoft.com/debian/12/prod` for `bookworm`, component `main`, architecture `amd64`, in `/etc/apt/sources.list.d/dotnet.list`. APT accepts it only when it is signed with Microsoft's key. The recipe downloads that key from `https://packages.microsoft.com/keys/microsoft.asc`, converts it with a temporary GnuPG home directory that it removes afterwards, and stores it with mode `0644` as `/etc/apt/keyrings/microsoft-dotnet.gpg`, which the repository's `signed-by` option names. The source list and the key file are separate from those of `azure`, so the two toolchains can be combined.
+- **SDKs:** the packages `dotnet-sdk-8.0`, `dotnet-sdk-9.0`, and `dotnet-sdk-10.0`, installed with APT without recommended packages and without a pinned version ([.NET SDK versions](#net-sdk-versions)). They are installed system-wide in the image, not in the home or workspace volume, so every sandbox created from the image has them and `agent` can use them.
+- **Smoke check:** the command `dotnet --list-sdks`, run as UID and GID 1000, with no script file of its own. Its output is expected to list every installed SDK; #29 checks that against a real image.
+
+Changing the toolchain set of an existing sandbox comes with #71.
 
 Each smoke check is meant to run as `agent` inside a sandbox created from the image. No command runs it in this version; running each toolchain's smoke check against real Podman comes with #29. No toolchain image has been built or run against real Podman.
 
@@ -130,11 +139,19 @@ On 2026-10-04, these were the current releases:
 
 The repository setup follows [Install the Azure CLI on Linux](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-linux). `--system` is documented in the [`az extension add` reference](https://learn.microsoft.com/en-us/cli/azure/extension#az-extension-add), and the location of the system extension directory is defined in the [Azure CLI 2.90.0 source](https://github.com/Azure/azure-cli/blob/azure-cli-2.90.0/src/azure-cli-core/azure/cli/core/extension/__init__.py).
 
+### .NET SDK versions
+
+The `dotnet` toolchain installs the three SDK series that Microsoft supports today side by side, so a sandbox can build projects that target any currently supported .NET version: .NET 10 is a long-term support release supported until 2028-11-14, and .NET 8 (long-term support) and .NET 9 (standard-term support) are both supported until 2026-11-10 ([.NET support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core)). Previews, such as .NET 11, and series that are no longer supported are not installed.
+
+Each package name fixes a series, not a release. Like every other package, the SDKs are resolved again at each build without the layer cache, so a `build` installs the current release within each series (#3). `versions.tsv` records the versions an image actually contains ([Version inventory](#version-inventory)). A series that reaches its end of support stays in the recipe, and so in every image built from it, until the recipe is changed.
+
+The package source is Microsoft's production APT repository for Debian 12, which [Install .NET on Debian](https://learn.microsoft.com/en-us/dotnet/core/install/linux-debian) names for these SDKs on x64. On 2026-10-04 its [package index for bookworm, amd64](https://packages.microsoft.com/debian/12/prod/dists/bookworm/main/binary-amd64/Packages.gz) contained all three SDK packages.
+
 ## Toolchain availability on Debian 12
 
 Debian 12 was chosen because every planned toolchain has packages for it. The Azure CLI documentation lists Debian 11 and 12 as tested distributions for its APT packages, but not Debian 13.
 
-This record is based on the upstream documentation listed below. Of these toolchains, native build tools and Azure CLI are delivered, as `native` and `azure`; .NET and Playwright come with #31 and #32. #29 validates the images against real Podman.
+This record is based on the upstream documentation listed below. Of these toolchains, native build tools, Azure CLI, and .NET are delivered, as `native`, `azure`, and `dotnet`; Playwright comes with #32. #29 validates the images against real Podman.
 
 | Toolchain | Upstream statement for Debian 12 | Source |
 | --- | --- | --- |

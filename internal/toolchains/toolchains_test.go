@@ -41,13 +41,13 @@ func TestSelectDeliveredToolchainsAsASet(t *testing.T) {
 }
 
 func TestRejectUndeliveredAndInvalidSelections(t *testing.T) {
-	for _, value := range []string{"", "native,", "none,native", "none,none", "dotnet", "playwright", "nosuch"} {
+	for _, value := range []string{"", "native,", "none,native", "none,none", "playwright", "nosuch"} {
 		_, err := toolchains.Parse(value)
 		if err == nil {
 			t.Errorf("accepted %q", value)
 			continue
 		}
-		if !strings.Contains(err.Error(), "valid values: azure, native, none") {
+		if !strings.Contains(err.Error(), "valid values: azure, dotnet, native, none") {
 			t.Errorf("selection %q error = %v", value, err)
 		}
 	}
@@ -79,4 +79,16 @@ func TestAzureCarriesItsAgentSmokeCheck(t *testing.T) {
 		}
 	}
 	t.Fatal("Azure toolchain missing from catalog")
+}
+
+func TestDotnetCarriesItsAgentSmokeCheck(t *testing.T) {
+	for _, definition := range toolchains.Catalog() {
+		if definition.Name == "dotnet" {
+			if !definition.Delivered || definition.SmokeCheck != "dotnet --list-sdks" || definition.SmokeUser != "1000:1000" {
+				t.Fatalf(".NET smoke check = %+v", definition)
+			}
+			return
+		}
+	}
+	t.Fatal(".NET toolchain missing from catalog")
 }

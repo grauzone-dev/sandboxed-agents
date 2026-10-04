@@ -20,7 +20,7 @@ func azureSelections() []azureSelectionExample {
 	}
 }
 
-func azureCLIHost(t *testing.T, fixture string) (*testutil.FakePrograms, []testutil.Response) {
+func toolchainCLIHost(t *testing.T, fixture string) (*testutil.FakePrograms, []testutil.Response) {
 	t.Helper()
 	if strings.HasPrefix(fixture, "windows") {
 		return testutil.NewFakePrograms(t), healthyWindowsPodman()
@@ -40,7 +40,7 @@ func TestBuildAzureImageInstallsSystemExtensionAndRecordsVersions(t *testing.T) 
 
 func checkAzureBuild(t *testing.T, fixture string, example azureSelectionExample) {
 	t.Helper()
-	fakes, preflight := azureCLIHost(t, fixture)
+	fakes, preflight := toolchainCLIHost(t, fixture)
 	hash := imageBuildAssetHash(t)
 	captured := filepath.Join(t.TempDir(), "azure-context")
 	responses := append(preflight,
@@ -108,7 +108,7 @@ func TestUpAzureRecordsTheSelectedSetAndCreatesFromItsImage(t *testing.T) {
 	for _, fixture := range []string{"linux-preflight", "windows"} {
 		for _, example := range azureSelections() {
 			t.Run(fixture+"/"+example.selection, func(t *testing.T) {
-				fakes, preflight := azureCLIHost(t, fixture)
+				fakes, preflight := toolchainCLIHost(t, fixture)
 				captured := filepath.Join(t.TempDir(), "up-context")
 				responses := append(preflight, upObjectResponses(nil, false, nil, nil)[1:]...)
 				responses = append(responses,

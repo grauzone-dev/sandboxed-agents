@@ -53,9 +53,11 @@ On a clean checkout, run the build tool before the tests, because `internal/asse
 
 ```sh
 go run ./tools/build
-go test ./...
+go test -timeout 20m ./...
 go vet ./...
 ```
+
+`-timeout 20m` raises Go's default limit of 10 minutes per test binary. The update failure tests run the real 60-second readiness deadline (#53), and on Windows the full `internal/cli` suite with these tests exceeded 10 minutes. The limit only bounds the run; the tests and the product's timeouts stay the same.
 
 The mirror workflow has its own offline test:
 
@@ -67,7 +69,7 @@ The build tool's test copies the sources into a temporary directory and builds h
 
 ### CI
 
-The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every push and pull request, on Linux and on Windows, with module downloads turned off. Each job runs the build tool, then `go test ./...` and `go vet ./...`. The Linux job also runs the mirror test. Each job then records the output of its native `version`, and a final job checks that the Linux and Windows outputs are identical. That check confirms that both builds embed the same assets.
+The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every push and pull request, on Linux and on Windows, with module downloads turned off. Each job runs the build tool, then `go test -timeout 20m ./...` ([Test](#test)) and `go vet ./...`. The Linux job also runs the mirror test. Each job then records the output of its native `version`, and a final job checks that the Linux and Windows outputs are identical. That check confirms that both builds embed the same assets.
 
 ### Live suite
 

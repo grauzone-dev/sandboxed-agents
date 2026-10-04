@@ -55,6 +55,8 @@ func TestAgentCommandsRejectUnknownAgentsBeforePodman(t *testing.T) {
 			for _, fixture := range []string{"sandbox-host", "windows"} {
 				t.Run(fixture, func(t *testing.T) {
 					fakes := testutil.NewFakePrograms(t)
+					owned := "default"
+					fakes.Script("podman", sandboxObjectResponses(&owned, false, nil, nil)...)
 					stdout, stderr, status := runCLI(t, fixture, "agents", operation, "agent01", "unknown")
 					if status == 0 || stdout != "" || !strings.Contains(stderr, `unknown agent "unknown"`) || !strings.Contains(stderr, "claude, codex, copilot, opencode") || len(fakes.Calls("podman")) != 0 {
 						t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))

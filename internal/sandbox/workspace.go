@@ -166,6 +166,11 @@ func resolveHostPath(path string) (string, error) {
 		if filepath.IsAbs(target) {
 			resolved = filepath.VolumeName(target) + string(filepath.Separator)
 			target = strings.TrimPrefix(target, resolved)
+		} else if filepath.VolumeName(target) != "" {
+			return candidate, os.ErrInvalid
+		} else if len(target) > 0 && os.IsPathSeparator(target[0]) {
+			resolved = filepath.VolumeName(resolved) + string(filepath.Separator)
+			target = strings.TrimLeft(target, `\/`)
 		}
 		parts = append(strings.Split(target, string(filepath.Separator)), parts...)
 	}

@@ -1,0 +1,2 @@
+COPY dotnet/install.sh /tmp/install-dotnet.sh
+RUN sh /tmp/install-dotnet.sh && rm /tmp/install-dotnet.sh

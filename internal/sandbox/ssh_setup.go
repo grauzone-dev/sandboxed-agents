@@ -6,13 +6,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
-	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sshkeys"
 )
@@ -26,22 +27,7 @@ func NewSSHSetup(name, group, hostOS string, run process.Runner, streams process
 	return &SSHSetup{sandboxObjects: newSandboxObjects(name, group, run, streams), hostOS: hostOS}
 }
 
-func (setup *SSHSetup) managerArgs(args ...string) []string {
-	return append([]string{"exec", "--user=0:0", setup.container, manager.ExecutablePath}, args...)
-}
-
-func (setup *SSHSetup) CheckManager(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var output bytes.Buffer
-	status, err := setup.run(ctx, process.Request{Name: "podman", Args: setup.managerArgs("version"), Streams: process.Streams{Stdout: &output}})
-	if err != nil || status != 0 || ctx.Err() != nil || !managerVersionResponse.Match(output.Bytes()) {
-		return fmt.Errorf(managerUnavailableFormat, setup.name)
-	}
-	return nil
-}
-
-type sshPaths struct{ root, directory, config, userConfig string }
+type sshPaths struct{ groupDirectory, sandboxDirectory, config, userConfig string }
 
 func (setup *SSHSetup) paths() (sshPaths, error) {
 	root, err := controllergroup.StateDirectory(setup.hostOS, setup.group)
@@ -56,7 +42,7 @@ func (setup *SSHSetup) paths() (sshPaths, error) {
 		home = os.Getenv("USERPROFILE")
 	}
 	root = filepath.Join(root, "ssh")
-	return sshPaths{root: root, directory: filepath.Join(root, "sandbox-"+hex.EncodeToString([]byte(setup.name))), config: filepath.Join(root, "config"), userConfig: filepath.Join(home, ".ssh", "config")}, nil
+	return sshPaths{groupDirectory: root, sandboxDirectory: filepath.Join(root, "sandbox-"+hex.EncodeToString([]byte(setup.name))), config: filepath.Join(root, "config"), userConfig: filepath.Join(home, ".ssh", "config")}, nil
 }
 
 func sshConfigPath(path string) string {
@@ -75,7 +61,7 @@ func (setup *SSHSetup) entry(paths sshPaths) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Host %s\n  HostName 127.0.0.1\n  Port %d\n  User agent\n  IdentityFile %s\n  UserKnownHostsFile %s\n  GlobalKnownHostsFile none\n  HostKeyAlgorithms ssh-ed25519\n  UpdateHostKeys no\n  IdentitiesOnly yes\n  IdentityAgent none\n  ForwardAgent no\n  StrictHostKeyChecking yes\n", setup.hostName(), port, sshConfigPath(filepath.Join(paths.directory, "id_ed25519")), sshConfigPath(filepath.Join(paths.directory, "known_hosts"))), nil
+	return fmt.Sprintf("Host %s\n  HostName 127.0.0.1\n  Port %d\n  User agent\n  IdentityFile %s\n  UserKnownHostsFile %s\n  GlobalKnownHostsFile none\n  HostKeyAlgorithms ssh-ed25519\n  UpdateHostKeys no\n  IdentitiesOnly yes\n  IdentityAgent none\n  ForwardAgent no\n  StrictHostKeyChecking yes\n", setup.hostName(), port, sshConfigPath(filepath.Join(paths.sandboxDirectory, "id_ed25519")), sshConfigPath(filepath.Join(paths.sandboxDirectory, "known_hosts"))), nil
 }
 
 func (setup *SSHSetup) Print() error {
@@ -83,7 +69,7 @@ func (setup *SSHSetup) Print() error {
 	if err != nil {
 		return err
 	}
-	entry, err := os.ReadFile(filepath.Join(paths.directory, "entry"))
+	entry, err := os.ReadFile(filepath.Join(paths.sandboxDirectory, "entry"))
 	if errors.Is(err, os.ErrNotExist) {
 		text, err := setup.entry(paths)
 		if err != nil {
@@ -110,8 +96,10 @@ func (setup *SSHSetup) Print() error {
 }
 
 func (setup *SSHSetup) hostKey(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	var output, diagnostic bytes.Buffer
-	status, err := setup.run(ctx, process.Request{Name: "podman", Args: setup.managerArgs("ssh", "host-key"), Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
+	status, err := setup.run(ctx, process.Request{Name: "podman", Args: managerArgs(setup.container, "ssh", "host-key", "--wait"), Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +109,7 @@ func (setup *SSHSetup) hostKey(ctx context.Context) (string, error) {
 	return sshkeys.ParsePublicKey(output.Bytes())
 }
 
-func (setup *SSHSetup) configuredHost(ctx context.Context, userConfig string) error {
+func (setup *SSHSetup) checkHostEntryConflict(ctx context.Context, userConfig string) error {
 	query := func(args ...string) (map[string]string, error) {
 		var output, diagnostic bytes.Buffer
 		status, err := setup.run(ctx, process.Request{Name: "ssh", Args: args, Streams: process.Streams{Stdout: &output, Stderr: &diagnostic}})
@@ -183,10 +171,14 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	pin := fmt.Sprintf("[127.0.0.1]:%d %s\n", port, key)
-	installed, err := os.ReadFile(filepath.Join(paths.directory, "entry"))
+	hostToken := "127.0.0.1"
+	if port != 22 {
+		hostToken = fmt.Sprintf("[127.0.0.1]:%d", port)
+	}
+	pin := hostToken + " " + key + "\n"
+	installed, err := os.ReadFile(filepath.Join(paths.sandboxDirectory, "entry"))
 	if err == nil {
-		pinned, err := os.ReadFile(filepath.Join(paths.directory, "known_hosts"))
+		pinned, err := os.ReadFile(filepath.Join(paths.sandboxDirectory, "known_hosts"))
 		if err != nil {
 			return err
 		}
@@ -206,7 +198,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := setup.configuredHost(ctx, paths.userConfig); err != nil {
+	if err := setup.checkHostEntryConflict(ctx, paths.userConfig); err != nil {
 		return err
 	}
 	entry, err := setup.entry(paths)
@@ -229,7 +221,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 		}
 	}
 	committed := false
-	created, err := createSSHDirectories(paths.root)
+	created, err := createSSHDirectories(paths.groupDirectory)
 	if err != nil {
 		return err
 	}
@@ -242,7 +234,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 			}
 		}
 	}()
-	stage, err := os.MkdirTemp(paths.root, ".install-")
+	stage, err := os.MkdirTemp(paths.groupDirectory, ".install-")
 	if err != nil {
 		return err
 	}
@@ -280,25 +272,26 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 		}
 	}
 	diagnostic.Reset()
-	status, err = setup.run(ctx, process.Request{Name: "podman", Args: append([]string{"exec", "--interactive", "--user=0:0", setup.container, manager.ExecutablePath}, "ssh", "authorize"), Streams: process.Streams{Stdin: strings.NewReader(authorized + "\n"), Stderr: &diagnostic}})
+	status, err = setup.run(ctx, process.Request{Name: "podman", Args: slices.Insert(managerArgs(setup.container, "ssh", "authorize"), 1, "--interactive"), Streams: process.Streams{Stdin: strings.NewReader(authorized + "\n"), Stderr: &diagnostic}})
 	if err != nil {
 		return err
 	}
 	if status != 0 {
 		return fmt.Errorf(sshAuthorizationFailureFormat, strings.TrimSpace(diagnostic.String()))
 	}
-	if err := os.Rename(stage, paths.directory); err != nil {
+	if err := os.Rename(stage, paths.sandboxDirectory); err != nil {
 		return err
 	}
 	defer func() {
 		if !committed {
-			err = errors.Join(err, os.RemoveAll(paths.directory))
+			err = errors.Join(err, os.RemoveAll(paths.sandboxDirectory))
 		}
 	}()
-	managed := append(bytes.Clone(config), []byte(entry+"Host *\n")...)
-	if len(config) > 0 && config[len(config)-1] != '\n' {
-		managed = append(append(bytes.Clone(config), '\n'), []byte(entry+"Host *\n")...)
+	managed := bytes.Clone(config)
+	if len(managed) > 0 && managed[len(managed)-1] != '\n' {
+		managed = append(managed, '\n')
 	}
+	managed = append(managed, []byte(entry+"Host *\n")...)
 	configInfo, statErr := os.Stat(paths.config)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
@@ -355,6 +348,16 @@ func readOptionalFile(path string) ([]byte, error) {
 }
 
 func writeSSHFile(path string, data []byte, mode os.FileMode) error {
+	info, err := os.Lstat(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".ssh-write-")
 	if err != nil {
 		return err
@@ -382,8 +385,13 @@ func (up *Up) CheckSSHManager(ctx context.Context, hostOS string) error {
 }
 
 func (up *Up) InstallSSH(ctx context.Context, hostOS string) error {
-	setup := &SSHSetup{sandboxObjects: up.sandboxObjects, hostOS: hostOS}
-	setup.containerLabels = map[string]string{SSHPortLabel: fmt.Sprint(up.port)}
+	state := *up.sandboxObjects
+	state.containerLabels = maps.Clone(state.containerLabels)
+	if state.containerLabels == nil {
+		state.containerLabels = make(map[string]string)
+	}
+	state.containerLabels[SSHPortLabel] = fmt.Sprint(up.port)
+	setup := &SSHSetup{sandboxObjects: &state, hostOS: hostOS}
 	if err := setup.CheckManager(ctx); err != nil {
 		return err
 	}

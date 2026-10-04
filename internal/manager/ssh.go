@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sshkeys"
@@ -17,21 +18,13 @@ func sshServer(stateDirectory string) Command {
 		stateDirectory = "/etc/ssh"
 	}
 	return func(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
-		if len(args) != 1 {
-			return errors.New("usage: sandboxed-agents-manager ssh start|host-key|authorize")
+		wait := len(args) == 2 && args[0] == "host-key" && args[1] == "--wait"
+		if len(args) != 1 && !wait {
+			return errors.New("usage: sandboxed-agents-manager ssh start | host-key [--wait] | authorize")
 		}
 		switch args[0] {
 		case "host-key":
-			file, err := os.Open(filepath.Join(stateDirectory, "ssh_host_ed25519_key.pub"))
-			if err != nil {
-				return fmt.Errorf("read SSH host key: %w", err)
-			}
-			defer file.Close()
-			data, err := io.ReadAll(io.LimitReader(file, sshkeys.MaxPublicKeyBytes+1))
-			if err != nil {
-				return fmt.Errorf("read SSH host key: %w", err)
-			}
-			key, err := sshkeys.ParsePublicKey(data)
+			key, err := sshHostKey(ctx, filepath.Join(stateDirectory, "ssh_host_ed25519_key.pub"), wait)
 			if err != nil {
 				return err
 			}
@@ -54,16 +47,14 @@ func sshServer(stateDirectory string) Command {
 				return err
 			}
 			defer os.Remove(file.Name())
+			defer file.Close()
 			if _, err = io.WriteString(file, key+"\n"); err != nil {
-				file.Close()
 				return err
 			}
 			if err = file.Chmod(0644); err != nil {
-				file.Close()
 				return err
 			}
 			if err = file.Sync(); err != nil {
-				file.Close()
 				return err
 			}
 			if err = file.Close(); err != nil {
@@ -72,7 +63,7 @@ func sshServer(stateDirectory string) Command {
 			return os.Rename(file.Name(), filepath.Join(stateDirectory, "authorized_keys"))
 		case "start":
 		default:
-			return errors.New("usage: sandboxed-agents-manager ssh start|host-key|authorize")
+			return errors.New("usage: sandboxed-agents-manager ssh start | host-key [--wait] | authorize")
 		}
 		if err := os.MkdirAll(stateDirectory, 0755); err != nil {
 			return fmt.Errorf("initialize SSH server state: %w", err)
@@ -102,4 +93,40 @@ func sshServer(stateDirectory string) Command {
 		}
 		return nil
 	}
+}
+
+func sshHostKey(ctx context.Context, path string, wait bool) (string, error) {
+	if !wait {
+		return readSSHHostKey(path)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if key, err := readSSHHostKey(path); err == nil {
+			return key, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func readSSHHostKey(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read SSH host key: %w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, sshkeys.MaxPublicKeyBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read SSH host key: %w", err)
+	}
+	return sshkeys.ParsePublicKey(data)
 }

@@ -27,7 +27,7 @@ func sshSetupHost(t *testing.T, windows bool) (*testutil.FakePrograms, string, s
 func TestSSHConfigPrintsUninstalledEntryWithoutChangingFiles(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		for _, running := range []bool{false, true} {
-			t.Run(host.name+"/running-"+stringBool(running), func(t *testing.T) {
+			t.Run(host.name+"/running-"+strconv.FormatBool(running), func(t *testing.T) {
 				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 				owned := "default"
 				scriptLifecycleObjects(t, fakes, host.windows, upObjectResponses(&owned, running, nil, nil), map[string]string{"ssh-port": "2222"})
@@ -51,13 +51,6 @@ func TestSSHConfigPrintsUninstalledEntryWithoutChangingFiles(t *testing.T) {
 			})
 		}
 	}
-}
-
-func stringBool(value bool) string {
-	if value {
-		return "true"
-	}
-	return "false"
 }
 
 const sshClientPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -125,11 +118,30 @@ func TestSSHSetupInstallsDedicatedKeyPinAndSingleIncludeAndReinstallsWithoutChan
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(managed), string(entry)) {
-				t.Fatalf("entry absent: %q", managed)
+			expectedEntry := "Host agent01\n  HostName 127.0.0.1\n  Port 2222\n  User agent\n  IdentityFile \"" + filepath.ToSlash(filepath.Join(keyDir, "id_ed25519")) + "\"\n  UserKnownHostsFile \"" + filepath.ToSlash(filepath.Join(keyDir, "known_hosts")) + "\"\n  GlobalKnownHostsFile none\n  HostKeyAlgorithms ssh-ed25519\n  UpdateHostKeys no\n  IdentitiesOnly yes\n  IdentityAgent none\n  ForwardAgent no\n  StrictHostKeyChecking yes\n"
+			if string(entry) != expectedEntry || string(managed) != expectedEntry+"Host *\n" {
+				t.Fatalf("entry=%q managed=%q", entry, managed)
+			}
+			public, err := os.ReadFile(filepath.Join(keyDir, "id_ed25519.pub"))
+			if err != nil || string(public) != sshClientPublicKey+"\n" {
+				t.Fatalf("public key=%q err=%v", public, err)
+			}
+			assertSSHInstallManagerCalls(t, fakes, host.windows)
+			wantQueries := []testutil.Call{{Args: []string{"-G", "-F", filepath.Join(sshDir, "config"), "agent01"}}, {Args: []string{"-G", "-F", "none", "agent01"}}}
+			if got := fakes.Calls("ssh"); !reflect.DeepEqual(got, wantQueries) {
+				t.Fatalf("SSH queries=%v want=%v", got, wantQueries)
+			}
+			keyCalls := fakes.Calls("ssh-keygen")
+			if len(keyCalls) != 1 || len(keyCalls[0].Args) != 7 {
+				t.Fatalf("key generation=%v", keyCalls)
+			}
+			keyPath := keyCalls[0].Args[6]
+			wantKeyArgs := []string{"-q", "-t", "ed25519", "-N", "", "-f", keyPath}
+			if !reflect.DeepEqual(keyCalls[0].Args, wantKeyArgs) || filepath.Base(keyPath) != "id_ed25519" || !strings.HasPrefix(filepath.Dir(keyPath), filepath.Join(state, "group-default", "ssh", ".install-")) {
+				t.Fatalf("key generation args=%v", keyCalls[0].Args)
 			}
 			if runtime.GOOS != "windows" {
-				for path, want := range map[string]os.FileMode{configPath: 0600, filepath.Join(keyDir, "id_ed25519"): 0600, filepath.Join(keyDir, "id_ed25519.pub"): 0644, filepath.Join(keyDir, "known_hosts"): 0600, filepath.Join(sshDir, "config"): 0640} {
+				for path, want := range map[string]os.FileMode{state: 0700, filepath.Join(state, "group-default"): 0700, filepath.Join(state, "group-default", "ssh"): 0700, keyDir: 0700, filepath.Join(keyDir, "entry"): 0600, configPath: 0600, filepath.Join(keyDir, "id_ed25519"): 0600, filepath.Join(keyDir, "id_ed25519.pub"): 0644, filepath.Join(keyDir, "known_hosts"): 0600, filepath.Join(sshDir, "config"): 0640} {
 					info, err := os.Stat(path)
 					if err != nil || info.Mode().Perm() != want {
 						t.Fatalf("mode %s: %v %v", path, info, err)
@@ -340,6 +352,7 @@ func TestUpAndStartInstallTheSameSSHSetupAfterStartingSandbox(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(sshDir, "config")); err != nil {
 					t.Fatal(err)
 				}
+				assertSSHInstallManagerCalls(t, fakes, host.windows)
 				calls := fakes.Calls("podman")
 				var sawStart, sawAuthorize bool
 				for _, call := range calls {
@@ -431,10 +444,11 @@ func TestSSHCommandsApplySandboxOwnerAndInterruptedUpdateChecksBeforeRunningAndI
 				{name: "foreign volume", owner: &owned, volumes: map[string]string{"home": foreign}, backup: &owned, want: "Podman"},
 				{name: "missing volume owner", owner: &owned, volumes: map[string]string{"workspace": ""}, want: "Podman"},
 				{name: "backup", owner: &owned, backup: &owned, want: "update agent01"},
+				{name: "running backup", owner: &owned, backup: &owned, want: "update agent01"},
 			} {
 				t.Run(host.name+"/"+strings.Join(args, " ")+"/"+test.name, func(t *testing.T) {
 					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
-					responses := sandboxObjectResponses(test.owner, false, test.volumes, test.backup)
+					responses := sandboxObjectResponses(test.owner, test.name == "running backup", test.volumes, test.backup)
 					if host.windows {
 						responses = append(healthyWindowsPodman()[1:3], responses...)
 					}
@@ -595,6 +609,140 @@ func TestSSHConfigPrintsQualifiedUninstalledHostWithoutCreatingGroupState(t *tes
 				t.Fatal("print created files")
 			}
 			assertNoSSH(t, fakes)
+		})
+	}
+}
+
+func TestSSHInstallationPreservesSymlinkedUserConfiguration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires Windows privileges")
+	}
+	fakes, fixture, sshDir, state := sshSetupHost(t, false)
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "ssh-config")
+	personal := "Host personal\n  HostName personal.example\n"
+	if err := os.WriteFile(target, []byte(personal), 0640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(sshDir, "config")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	scriptSSHInstall(t, fakes, false, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n"})
+	scriptSSHDefaults(fakes, "agent01")
+	stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
+	if status != 0 {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if actual, err := os.Readlink(link); err != nil || actual != target {
+		t.Fatalf("config symlink=%q err=%v", actual, err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	include := "Include \"" + filepath.ToSlash(filepath.Join(state, "group-default", "ssh", "config")) + "\"\n"
+	if string(contents) != include+personal {
+		t.Fatalf("target=%q", contents)
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0640 {
+		t.Fatalf("target permissions=%v err=%v", info, err)
+	}
+}
+
+func TestSSHInstallationRollsBackHostPublicationFailuresAfterAuthorization(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, fault := range []string{"sandbox directory rename", "user configuration rename"} {
+			t.Run(host.name+"/"+fault, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				scriptSSHInstall(t, fakes, host.windows, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n"})
+				scriptSSHDefaults(fakes, "agent01")
+				stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
+				if status != 0 {
+					t.Fatalf("first status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				if err := os.RemoveAll(sshDir); err != nil {
+					t.Fatal(err)
+				}
+				beforeState := sshDirectoryContents(t, state)
+				directory := filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743032")
+				blocker := filepath.Join(directory, "external-blocker")
+				faultRoot := directory
+				if fault == "user configuration rename" {
+					blocker = filepath.Join(sshDir, "config")
+					faultRoot = sshDir
+				}
+				scriptSSHInstall(t, fakes, host.windows, "agent02", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n", MakeDirectories: []string{blocker}})
+				scriptSSHDefaults(fakes, "agent02")
+				stdout, stderr, status = runCLI(t, fixture, "ssh-config", "agent02", "--install")
+				if status == 0 {
+					t.Fatalf("publication fault succeeded stdout=%q stderr=%q", stdout, stderr)
+				}
+				for _, name := range []string{"entry", "id_ed25519", "known_hosts"} {
+					if _, err := os.Stat(filepath.Join(directory, name)); !os.IsNotExist(err) {
+						t.Fatalf("uncommitted %s remains: %v", name, err)
+					}
+				}
+				if fault == "user configuration rename" {
+					injected := map[string][]byte{".": nil, "config": nil}
+					if got := sshDirectoryContents(t, sshDir); !reflect.DeepEqual(got, injected) {
+						t.Fatalf("publication failure changed user SSH files beyond injected blocker: %v", got)
+					}
+				}
+				if err := os.RemoveAll(faultRoot); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) {
+					t.Fatal("publication failure did not restore managed host state")
+				}
+				if fault != "user configuration rename" && sshDirectoryContents(t, sshDir) != nil {
+					t.Fatal("publication failure wrote user configuration")
+				}
+			})
+		}
+	}
+}
+
+func assertSSHInstallManagerCalls(t *testing.T, fakes *testutil.FakePrograms, windows bool) {
+	t.Helper()
+	calls := fakes.Calls("podman")
+	if len(calls) < 3 {
+		t.Fatalf("manager calls missing: %v", calls)
+	}
+	expected := []testutil.Call{
+		{Args: []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "version"}},
+		{Args: []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "ssh", "host-key", "--wait"}},
+		{Args: []string{"exec", "--interactive", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "ssh", "authorize"}},
+	}
+	if windows {
+		for i := range expected {
+			expected[i].Args = append([]string{"--connection", "podman-machine-default"}, expected[i].Args...)
+		}
+	}
+	if got := calls[len(calls)-3:]; !reflect.DeepEqual(got, expected) {
+		t.Fatalf("manager calls=%v want=%v", got, expected)
+	}
+}
+
+func TestSSHSetupPinsDefaultSSHPortUsingOpenSSHHostToken(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		t.Run(host.name, func(t *testing.T) {
+			fakes, fixture, _, state := sshSetupHost(t, host.windows)
+			owned := "default"
+			responses := append(upObjectResponses(&owned, true, nil, nil), testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n"})
+			scriptLifecycleObjects(t, fakes, host.windows, responses, map[string]string{"ssh-port": "22"})
+			scriptSSHDefaults(fakes, "agent01")
+			stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
+			if status != 0 {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			pin, err := os.ReadFile(filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743031", "known_hosts"))
+			if err != nil || string(pin) != "127.0.0.1 "+sshHostPublicKey+"\n" {
+				t.Fatalf("default port pin=%q err=%v", pin, err)
+			}
 		})
 	}
 }

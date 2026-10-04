@@ -55,7 +55,7 @@ func sshConfigCommand(hostOS string, group *string, run process.Runner) Command 
 	}}
 }
 
-func parseSSHFlag(args []string) ([]string, bool, error) {
+func parseSSHConfigFlag(args []string) ([]string, bool, error) {
 	remaining := make([]string, 0, len(args))
 	install := false
 	for _, arg := range args {

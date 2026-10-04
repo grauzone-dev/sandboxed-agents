@@ -1,9 +1,0 @@
-ARG BASE_IMAGE
-FROM ${BASE_IMAGE}
-
-COPY azure/install.sh /tmp/install-azure.sh
-COPY azure/record.sh /usr/local/share/sandboxed-agents/versions.d/azure.sh
-COPY record-versions.sh /tmp/record-versions.sh
-RUN sh /tmp/install-azure.sh \
-    && sh /tmp/record-versions.sh \
-    && rm /tmp/install-azure.sh /tmp/record-versions.sh

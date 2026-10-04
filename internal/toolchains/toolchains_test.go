@@ -1,11 +1,30 @@
 package toolchains_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
+
+func TestSelectionExposesCanonicalNamesWithoutChangingTheSet(t *testing.T) {
+	set, err := toolchains.Parse("native,azure,azure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := set.Names()
+	if !slices.Equal(names, []string{"azure", "native"}) {
+		t.Fatalf("names = %v", names)
+	}
+	names[0] = "changed"
+	if set.String() != "azure,native" {
+		t.Fatalf("caller changed selection: %q", set.String())
+	}
+	if len((toolchains.Set{}).Names()) != 0 {
+		t.Fatal("base image selection has toolchain names")
+	}
+}
 
 func TestSelectDeliveredToolchainsAsASet(t *testing.T) {
 	set, err := toolchains.Parse("native,native")
@@ -44,10 +63,10 @@ func TestCatalogCarriesDeliveredNativeBuildToolsAndSmokeCheck(t *testing.T) {
 			if !definition.Delivered || definition.SmokeCheck == "" {
 				t.Fatalf("native = %+v", definition)
 			}
-		} else if definition.Name != "azure" && definition.Delivered {
-			t.Errorf("undelivered toolchain %s is enabled", definition.Name)
+			return
 		}
 	}
+	t.Fatal("native toolchain missing from catalog")
 }
 
 func TestAzureCarriesItsAgentSmokeCheck(t *testing.T) {

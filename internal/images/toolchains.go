@@ -266,25 +266,22 @@ func writeToolchainRecipes(directory string, buildContext fs.FS, set toolchains.
 	const header = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n\n"
 	var combined strings.Builder
 	combined.WriteString(header)
-	for _, name := range strings.Split(set.String(), ",") {
+	for _, name := range set.Names() {
 		recipe, err := fs.Sub(buildContext, "toolchains/"+name)
 		if err != nil {
 			return fmt.Errorf("read %s build context: %w", name, err)
 		}
-		contents, err := fs.ReadFile(recipe, "Containerfile")
+		contents, err := fs.ReadFile(recipe, "Containerfile.fragment")
 		if err != nil {
 			return fmt.Errorf("read %s recipe: %w", name, err)
-		}
-		body, ok := strings.CutPrefix(string(contents), header)
-		if !ok {
-			return fmt.Errorf("toolchain %s recipe must start from BASE_IMAGE", name)
 		}
 		if err := os.CopyFS(filepath.Join(directory, name), recipe); err != nil {
 			return fmt.Errorf("write %s build context: %w", name, err)
 		}
-		combined.WriteString(body)
+		combined.Write(contents)
 		combined.WriteString("\n")
 	}
+	combined.WriteString("COPY record-versions.sh /tmp/record-versions.sh\nRUN sh /tmp/record-versions.sh && rm /tmp/record-versions.sh\n")
 	if err := os.WriteFile(filepath.Join(directory, "Containerfile"), []byte(combined.String()), 0644); err != nil {
 		return fmt.Errorf("write combined toolchain recipe: %w", err)
 	}

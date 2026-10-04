@@ -10,29 +10,39 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
+type azureSelectionExample struct{ selection, set, tagNames string }
+
+func azureSelections() []azureSelectionExample {
+	return []azureSelectionExample{
+		{"azure", "azure", "azure"},
+		{"azure,native", "azure,native", "azure-native"},
+		{"native,azure,azure,native", "azure,native", "azure-native"},
+	}
+}
+
+func azureCLIHost(t *testing.T, fixture string) (*testutil.FakePrograms, []testutil.Response) {
+	t.Helper()
+	if strings.HasPrefix(fixture, "windows") {
+		return testutil.NewFakePrograms(t), healthyWindowsPodman()
+	}
+	return linuxHost(t), []testutil.Response{{Stdout: "podman version 5.0.0\n"}}
+}
+
 func TestBuildAzureImageInstallsSystemExtensionAndRecordsVersions(t *testing.T) {
 	for _, fixture := range []string{"linux-build", "windows-build"} {
-		for _, example := range []struct{ selection, set, tag string }{
-			{"azure", "azure", "azure"},
-			{"azure,native", "azure,native", "azure-native"},
-			{"native,azure,azure,native", "azure,native", "azure-native"},
-		} {
+		for _, example := range azureSelections() {
 			t.Run(fixture+"/"+example.selection, func(t *testing.T) {
-				checkAzureBuild(t, fixture, example.selection, example.set, example.tag)
+				checkAzureBuild(t, fixture, example)
 			})
 		}
 	}
 }
 
-func checkAzureBuild(t *testing.T, fixture, selection, set, tag string) {
+func checkAzureBuild(t *testing.T, fixture string, example azureSelectionExample) {
 	t.Helper()
-	fakes := linuxHost(t)
+	fakes, preflight := azureCLIHost(t, fixture)
 	hash := imageBuildAssetHash(t)
 	captured := filepath.Join(t.TempDir(), "azure-context")
-	preflight := []testutil.Response{{Stdout: "podman version 5.0.0\n"}}
-	if fixture == "windows-build" {
-		preflight = healthyWindowsPodman()
-	}
 	responses := append(preflight,
 		testutil.Response{},
 		testutil.Response{Stdout: "[]"},
@@ -40,7 +50,7 @@ func checkAzureBuild(t *testing.T, fixture, selection, set, tag string) {
 		testutil.Response{CaptureBuildContext: captured},
 	)
 	fakes.Script("podman", responses...)
-	stdout, stderr, status := runCLI(t, fixture, "build", "--with", selection)
+	stdout, stderr, status := runCLI(t, fixture, "build", "--with", example.selection)
 	if status != 0 || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
@@ -52,7 +62,7 @@ func checkAzureBuild(t *testing.T, fixture, selection, set, tag string) {
 		t.Fatalf("calls=%v", calls)
 	}
 	assertImageBuild(t, calls[0].Args, hash, "localhost/sandboxed-agents:base-"+hash, "", "")
-	assertImageBuild(t, calls[3].Args, hash, "localhost/sandboxed-agents:toolchains-"+tag+"-"+hash, set, "sha256:new-base")
+	assertImageBuild(t, calls[3].Args, hash, "localhost/sandboxed-agents:toolchains-"+example.tagNames+"-"+hash, example.set, "sha256:new-base")
 	assertAzureBuildContext(t, captured)
 	recipe, err := os.ReadFile(filepath.Join(captured, "Containerfile"))
 	if err != nil {
@@ -61,7 +71,10 @@ func checkAzureBuild(t *testing.T, fixture, selection, set, tag string) {
 	if strings.Count(string(recipe), "FROM ") != 1 || strings.Count(string(recipe), "RUN sh /tmp/install-azure.sh") != 1 {
 		t.Fatalf("recipe must use one base and install Azure once: %s", recipe)
 	}
-	if set == "azure,native" {
+	if strings.Count(string(recipe), "RUN sh /tmp/record-versions.sh") != 1 {
+		t.Fatalf("recipe must record versions once after installation: %s", recipe)
+	}
+	if example.set == "azure,native" {
 		assertNativeBuildContext(t, captured)
 	} else if strings.Contains(string(recipe), "install-native") {
 		t.Fatalf("Azure-only recipe installs native: %s", recipe)
@@ -93,16 +106,9 @@ func assertAzureBuildContext(t *testing.T, directory string) {
 
 func TestUpAzureRecordsTheSelectedSetAndCreatesFromItsImage(t *testing.T) {
 	for _, fixture := range []string{"linux-preflight", "windows"} {
-		for _, example := range []struct{ selection, set, tag string }{
-			{"azure", "azure", "azure"},
-			{"native,azure,azure", "azure,native", "azure-native"},
-		} {
+		for _, example := range azureSelections() {
 			t.Run(fixture+"/"+example.selection, func(t *testing.T) {
-				fakes := linuxHost(t)
-				preflight := []testutil.Response{{Stdout: "podman version 5.0.0\n"}}
-				if fixture == "windows" {
-					preflight = healthyWindowsPodman()
-				}
+				fakes, preflight := azureCLIHost(t, fixture)
 				captured := filepath.Join(t.TempDir(), "up-context")
 				responses := append(preflight, upObjectResponses(nil, false, nil, nil)[1:]...)
 				responses = append(responses,
@@ -131,7 +137,7 @@ func TestUpAzureRecordsTheSelectedSetAndCreatesFromItsImage(t *testing.T) {
 						create = call.Args
 					}
 				}
-				assertImageBuild(t, build, "fixture-assets", "localhost/sandboxed-agents:toolchains-"+example.tag+"-fixture-assets", example.set, "sha256:current-base")
+				assertImageBuild(t, build, "fixture-assets", "localhost/sandboxed-agents:toolchains-"+example.tagNames+"-fixture-assets", example.set, "sha256:current-base")
 				if len(create) == 0 || create[len(create)-1] != "sha256:azure-set" || !strings.Contains(strings.Join(create, " "), "--label io.github.sandboxed-agents.toolchains="+example.set) {
 					t.Fatalf("create=%v", create)
 				}

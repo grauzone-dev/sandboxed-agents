@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,10 +29,20 @@ func TestSSHSetupReplacesOneAuthorizationAndKeepsItAcrossServerStarts(t *testing
 	if err := os.WriteFile(path, []byte("previous authorization\nprevious second authorization\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+	statAuthorization := func() os.FileInfo {
+		t.Helper()
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, statErr := file.Stat()
+		closeErr := file.Close()
+		if statErr != nil || closeErr != nil {
+			t.Fatalf("stat error=%v close error=%v", statErr, closeErr)
+		}
+		return info
 	}
+	before := statAuthorization()
 	app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
 		if request.Name == "ssh-keygen" {
 			if err := os.WriteFile(request.Args[len(request.Args)-1], []byte("host key"), 0600); err != nil {
@@ -52,11 +63,13 @@ func TestSSHSetupReplacesOneAuthorizationAndKeepsItAcrossServerStarts(t *testing
 		if err != nil || string(contents) != key+"\n" {
 			t.Fatalf("authorization=%q error=%v", contents, err)
 		}
+		after := statAuthorization()
+		if runtime.GOOS != "windows" && after.Mode().Perm() != 0644 || os.SameFile(before, after) {
+			t.Fatalf("authorization metadata before=%v after=%v", before, after)
+		}
+		before = after
 	}
-	after, err := os.Stat(path)
-	if err != nil || after.Mode().Perm() != 0644 || os.SameFile(before, after) {
-		t.Fatalf("authorization metadata before=%v after=%v error=%v", before, after, err)
-	}
+	after := before
 	for range 2 {
 		var stderr bytes.Buffer
 		if status := app.Run(context.Background(), []string{"ssh", "start"}, process.Streams{Stderr: &stderr}); status != 0 {

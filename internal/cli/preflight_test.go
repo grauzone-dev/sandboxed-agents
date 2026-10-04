@@ -22,7 +22,7 @@ func linuxHost(t *testing.T) *testutil.FakePrograms {
 	}
 	fakes := testutil.NewFakePrograms(t)
 	bin := filepath.Dir(fakes.Podman)
-	for _, name := range []string{"newuidmap", "newgidmap", "pasta", "ssh-keygen"} {
+	for _, name := range []string{"newuidmap", "newgidmap", "pasta"} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte("unused fixture executable"), 0700); err != nil {
 			t.Fatal(err)
 		}

@@ -2,7 +2,7 @@
 
 `sandboxed-agents shell NAME` opens a shell in the sandbox `NAME`. It works without any SSH setup: the shell is opened through `podman exec` (ADR-0002), not over SSH.
 
-Every sandbox runs an SSH server, published only on a loopback port of your machine ([SSH server](sandboxes.md#ssh-server)). The executable authorizes no key in it yet: authorizing a key dedicated to the sandbox, pinning the host key, and writing a host entry are the opt-in SSH setup, which comes with #19. This page describes only `shell`.
+Every sandbox runs an SSH server, published only on a loopback port of your machine ([SSH server](sandboxes.md#ssh-server)). The opt-in [SSH setup](#ssh-setup) lets `ssh`, editors, and desktop UIs connect to it through a host entry: it authorizes a key dedicated to the sandbox, pins the sandbox's host key, and writes the host entry. Without it, no command reads or writes a file in your SSH directory.
 
 ## Open a shell
 
@@ -97,10 +97,251 @@ If a Podman lookup fails or returns output that `shell` cannot read, `shell` rep
 
 The preflight (step 2), the preconditions (step 7), the terminal check (step 8), and the session guard (step 9) do not apply to `shell`. On Windows, the machine selection runs after step 1 and before step 3, as for `start`. An owner conflict on a stopped sandbox is therefore reported instead of the message naming `start NAME`, and an interrupted update is reported ahead of a stopped sandbox.
 
+## SSH setup
+
+The SSH setup lets `ssh`, VS Code Remote SSH, and other desktop UIs reach a sandbox under a host entry name. It is opt-in (ADR-0002): only the commands below write it, and `up` and `start` without `--ssh-config` neither read nor write any file in your SSH directory.
+
+| Command | What it does |
+| --- | --- |
+| `ssh-config NAME` | prints the sandbox's host entry and changes no file ([Print the host entry](#print-the-host-entry)) |
+| `ssh-config NAME --install` | installs the SSH setup of the running sandbox `NAME` |
+| `up NAME --ssh-config` | creates or starts the sandbox, then installs its SSH setup |
+| `start NAME --ssh-config` | starts the sandbox, then installs its SSH setup |
+
+An installed SSH setup consists of five parts:
+
+- a key pair dedicated to the sandbox, in [host state](sandboxes.md#host-state) of the current controller group;
+- its public key as the only authorized key in the sandbox ([Authorized key](#authorized-key));
+- the sandbox's ed25519 host key, pinned in host state ([Pinned host key](#pinned-host-key));
+- the host entry, in the managed configuration of the controller group in host state ([Host entry](#host-entry));
+- the `Include` line of the controller group in your SSH configuration, which points to that managed configuration ([Your SSH configuration](#your-ssh-configuration)).
+
+### Host entry name
+
+| Controller group | Host entry name | Example |
+| --- | --- | --- |
+| `default` | `NAME` | `agent01` |
+| any other group `GROUP` | `NAME.GROUP` | `agent01.live` |
+
+Every host entry ends up in your one SSH configuration, so its name has to be unique across controller groups (ADR-0005). Sandbox names may contain dots, so two sandboxes can still lead to the same name: the sandbox `agent01.live` in `default` and the sandbox `agent01` in `live` both lead to `agent01.live`. OpenSSH also matches host names without regard to case, so `Agent01` and `agent01` reach the same entry. The [conflict check](#host-entry-conflicts) refuses the second sandbox of such a pair.
+
+### Host entry
+
+The host entry connects to the sandbox's recorded loopback port as the user `agent`, with the dedicated key and the pinned host key only. For `agent01` in the controller group `default` with port 2222 on Linux it reads:
+
+```text
+Host agent01
+  HostName 127.0.0.1
+  Port 2222
+  User agent
+  IdentityFile "/home/alice/.local/state/sandboxed-agents/group-default/ssh/sandbox-6167656e743031/id_ed25519"
+  UserKnownHostsFile "/home/alice/.local/state/sandboxed-agents/group-default/ssh/sandbox-6167656e743031/known_hosts"
+  GlobalKnownHostsFile none
+  HostKeyAlgorithms ssh-ed25519
+  UpdateHostKeys no
+  IdentitiesOnly yes
+  IdentityAgent none
+  ForwardAgent no
+  StrictHostKeyChecking yes
+```
+
+Paths are absolute, written with forward slashes also on Windows, and enclosed in double quotes. `ssh-config NAME` prints the exact text. Each option has one purpose ([ssh_config(5)](https://man.openbsd.org/ssh_config)):
+
+| Option | Effect |
+| --- | --- |
+| `HostName 127.0.0.1`, `Port PORT` | the SSH port recorded on the container ([Port](sandboxes.md#port)) |
+| `User agent` | the only user the sandbox's SSH server accepts |
+| `IdentityFile` | the private key dedicated to this sandbox |
+| `IdentitiesOnly yes` | `ssh` offers only that key, not your default keys |
+| `IdentityAgent none` | `ssh` asks no SSH agent for keys, so no key from your agent is offered |
+| `ForwardAgent no` | your SSH agent is never forwarded into the sandbox |
+| `StrictHostKeyChecking yes` | an unknown or changed host key ends the connection without a prompt |
+| `UserKnownHostsFile` | only the pin of this sandbox counts as a known host key |
+| `GlobalKnownHostsFile none` | no system-wide list of known hosts can vouch for the loopback port |
+| `UpdateHostKeys no` | `ssh` never adds or replaces a key in the pin |
+| `HostKeyAlgorithms ssh-ed25519` | the sandbox has to prove the pinned ed25519 host key; its ECDSA and RSA host keys are not accepted |
+
+`IdentitiesOnly yes`, `IdentityAgent none`, `ForwardAgent no`, and `StrictHostKeyChecking yes` are required in every entry the executable writes. With this entry, `ssh agent01` connects without a host key prompt and offers only the dedicated key.
+
+### Files in host state
+
+The SSH setup keeps its files in the host state directory `group-GROUP` of the current controller group ([Host state](sandboxes.md#host-state)):
+
+```text
+group-GROUP/
+  ssh/
+    config              managed configuration: one host entry per installed sandbox of the group
+    sandbox-HEX/
+      entry             a copy of the sandbox's host entry
+      id_ed25519        private key dedicated to the sandbox
+      id_ed25519.pub    its public key
+      known_hosts       the pinned host key of the sandbox
+```
+
+In the managed configuration, every host entry is followed by a `Host *` line, which ends the entry's block. A sandbox counts as having an SSH setup when its `entry` file exists; the managed configuration must then contain that entry, or the installation reports the SSH setup as incomplete.
+
+`HEX` is the sandbox name's UTF-8 bytes written as lowercase hexadecimal: `agent01` becomes `sandbox-6167656e743031`. The sandbox name itself is not a safe directory name: the file systems of Windows and macOS ignore case by default, so `Agent01` and `agent01` would share a directory, and Windows reserves names such as `con` and strips a trailing dot, which the sandbox name rules allow. A hexadecimal name avoids all three.
+
+`ssh-keygen` creates the key pair as an ed25519 key without a passphrase, so editors and `ssh` connect without asking for one. File permissions protect the private key; any program running as your user can read it and sign in to the sandbox as `agent`.
+
+The installation reads and writes only the directory of the current controller group. It reads no file in the host state of another group.
+
+### Your SSH configuration
+
+The installation adds one `Include` line to your SSH configuration: `~/.ssh/config` on Linux, `%USERPROFILE%\.ssh\config` on Windows. The line points to the managed configuration of the current controller group, by its absolute path with forward slashes in double quotes:
+
+```text
+Include "/home/alice/.local/state/sandboxed-agents/group-default/ssh/config"
+```
+
+- **Placed first.** The installation adds the line in front of the first line of the file. An `Include` that follows a `Host` or `Match` line applies only within that block ([ssh_config(5), `Include`](https://man.openbsd.org/ssh_config#Include)); in front of all blocks it applies to every host name.
+- **Once per controller group.** The line is added with the group's first SSH setup. When any line of the file is identical to it, a further installation in the group adds a host entry to the managed configuration and leaves your SSH configuration unchanged. Each controller group has its own line, so an installation in `live` after one in `default` adds the line of `live` and leaves the line of `default` and all host state of `default` unchanged.
+- **Everything else preserved.** The installation changes nothing else in the file: your host entries, the `Include` lines of other groups, and comments stay as they were. The installation writes the new content to a temporary file and renames it over the old one; on Unix the new file gets the old file's mode, and an existing `.ssh` directory is not changed.
+- **Created when missing.** When the file or the `.ssh` directory does not exist, the installation creates it, and the new file contains only the `Include` line.
+
+No controller group writes the files or the `Include` line of another group.
+
+### Permission modes on Unix
+
+On Unix, the installation creates its files and directories with modes that OpenSSH accepts. OpenSSH ignores a private key that other users can access and refuses a user configuration that other users can write ([ssh(1), FILES](https://man.openbsd.org/ssh#FILES)).
+
+| Path | Mode |
+| --- | --- |
+| Every directory the installation creates for host state, including missing parents, `ssh`, and `sandbox-HEX` | `0700` |
+| Private key `id_ed25519` | `0600` |
+| Public key `id_ed25519.pub` | `0644` |
+| Pinned host key `known_hosts` | `0600` |
+| Managed configuration `config` | `0600` |
+| `~/.ssh` and its missing parents, when the installation creates them | `0700` |
+| `~/.ssh/config`, when the installation creates it | `0600` |
+
+An existing `~/.ssh` directory keeps its mode, and the rewritten `~/.ssh/config` gets the mode of the file it replaces.
+
+On Windows, this version sets no ACLs. The files and directories the installation creates get the permissions they inherit from their parent directory, and whether OpenSSH for Windows accepts them has not been checked. ACLs that OpenSSH for Windows accepts come with #34.
+
+### Authorized key
+
+The sandbox's SSH server reads authorized keys only from `/etc/ssh/authorized_keys` (`AuthorizedKeysFile /etc/ssh/authorized_keys` in its configuration), not from `~/.ssh/authorized_keys` of `agent`. `/etc/ssh` is the mount point of the SSH server state volume ([Podman names and labels](sandboxes.md#podman-names-and-labels)), so the authorized key is stored in that volume.
+
+The executable passes the dedicated public key, without its comment, on standard input to the manager, as container root (ADR-0006):
+
+```sh
+podman exec --interactive --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager ssh authorize
+```
+
+The manager accepts exactly one ed25519 public key, writes it as the only line of a new file, and renames that file to `/etc/ssh/authorized_keys`. The file belongs to root and has mode `0644`.
+
+- **Exactly one key.** Every installation replaces the whole file, so it holds the key of the latest installation and nothing else. A key that an earlier SSH setup left there is replaced.
+- **Out of reach of agents.** The user `agent` can read the file but not change it, so an agent cannot authorize a key of its own or remove the dedicated one. sshd's `StrictModes` accepts a root-owned file that nobody else can write.
+- **Kept across `stop` and `start`.** The file lives in the volume, so the authorization survives `stop`, `start`, and `restart`. Neither `stop` nor `start` without `--ssh-config` changes it. It also survives `remove` and `up` as long as the SSH server state volume is kept. Keeping the SSH setup valid across `update` comes with #52.
+
+### Pinned host key
+
+Before it writes anything, the installation reads the sandbox's ed25519 host key from the manager:
+
+```sh
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager ssh host-key
+```
+
+The manager prints the key from `/etc/ssh/ssh_host_ed25519_key.pub` in the SSH server state volume ([Host keys and sign-in](sandboxes.md#host-keys-and-sign-in)). This is a trusted control path: the key comes through Podman from the sandbox's own volume, not from whatever answers on the loopback port, so the first connection needs no trust-on-first-use prompt. The installation writes the key into `known_hosts` as the only line, for the loopback address and port of the host entry, for example `[127.0.0.1]:2222 ssh-ed25519 AAAA…`.
+
+The pin is strict, and nothing re-pins it:
+
+- `ssh` with the host entry refuses a connection when the sandbox presents a different host key (`StrictHostKeyChecking yes`), and it never updates the pin (`UpdateHostKeys no`).
+- With the SSH setup installed, `ssh-config NAME --install` builds the pin line from the host key the manager reports and the recorded port and compares it with the pin. When they differ, it fails, leaves the pin and every other file unchanged, and names `ssh-config NAME --remove` followed by `ssh-config NAME --install` as the way out. `up NAME --ssh-config` and `start NAME --ssh-config` fail in the same way and leave the sandbox running.
+
+The host key changes only when the sandbox gets a new SSH server state volume, for example after `remove NAME --volumes` and `up NAME`. A new recorded port, for example after `remove NAME` and `up NAME --port N`, also makes the pin line differ. `ssh-config NAME --remove` comes with #37 and is not available in this version, and no other command removes an SSH setup or replaces a pin yet. Until #37, a host key mismatch cannot be resolved with a command of the executable.
+
+### Host entry conflicts
+
+Before it writes the host entry of a sandbox that has no SSH setup yet, the installation asks OpenSSH whether the host entry name already resolves to a configured host. It runs two queries and compares their output:
+
+```sh
+ssh -G -F USER_CONFIG HOST
+ssh -G -F none HOST
+```
+
+`USER_CONFIG` is your SSH configuration, `~/.ssh/config` or `%USERPROFILE%\.ssh\config`; when that file does not exist, the first query also uses `-F none`. `-G` prints the effective configuration for `HOST` after evaluating `Host` and `Match` blocks, and exits without connecting ([ssh(1), `-G`](https://man.openbsd.org/ssh#G)). A configuration file given with `-F` replaces the system-wide configuration `/etc/ssh/ssh_config`, and `-F none` reads no file at all ([ssh(1), `-F`](https://man.openbsd.org/ssh#F)). The first query therefore resolves your configuration with every `Include` it contains, and the second prints OpenSSH's built-in defaults. Neither reads the system-wide configuration, so options a distribution sets there for every host do not count as a conflict.
+
+- **No difference: not configured.** The installation continues. This includes a `Host` block for the name without options, or with only options whose values equal the defaults.
+- **Any difference: configured.** `--install` refuses, names the host entry, and changes no file. Every effective difference counts, also one from a wildcard such as `ServerAliveInterval 60` under `Host *`. To install anyway, remove or rename that host, or exclude the name from the wildcard, for example `Host * !agent01`.
+
+The check catches entries you wrote by hand and entries of other sandboxes, also of other controller groups, because OpenSSH reads every group's managed configuration through its `Include` line. The executable itself only checks whether your SSH configuration exists and reads the host state of the current controller group; it resolves no `Include` and reads no file of another group. A host configured only in the system-wide configuration is not detected. Because OpenSSH evaluates your configuration, a `Match exec` command in it runs during the check.
+
+When a query exits non-zero, for example because your SSH configuration contains an error, `--install` reports the failure and changes no file. A sandbox that already has an SSH setup skips the check.
+
+### Install the SSH setup
+
+`ssh-config NAME --install` needs a running sandbox and a manager that answers. It runs its checks in the [order of checks](#order-of-checks-for-ssh-config), then installs in this order:
+
+1. At step 7 of the order of checks, it checks that the manager answers, with the same `sandboxed-agents-manager version` call as `agents enable` ([How the request reaches the manager](agents.md#how-the-request-reaches-the-manager)).
+2. It reads the host key through the manager ([Pinned host key](#pinned-host-key)).
+3. With the SSH setup installed, it compares the pin line with the pin and stops there: on a match it prints that nothing changed and exits with status 0; on a mismatch it fails.
+4. Without an SSH setup, it runs the [conflict check](#host-entry-conflicts) and reads the managed configuration and your SSH configuration.
+5. It creates the missing directories for host state and a staging directory `ssh/.install-*`. There `ssh-keygen` creates the key pair, and the installation writes the public key, the pin, and the `entry` file.
+6. It authorizes the public key in the sandbox ([Authorized key](#authorized-key)).
+7. It renames the staging directory to `sandbox-HEX`, appends the host entry and a `Host *` line to the managed configuration, and, when your SSH configuration lacks the `Include` line of the controller group, writes it in front of the file, creating `.ssh` and the file when they are missing.
+
+Steps 1 to 4 write nothing. When the manager does not answer, the command fails with the same message as `agents enable`, which names `sandboxed-agents check NAME` and `sandboxed-agents restart NAME`, and creates no key, pin, host entry, or `Include` line.
+
+When a later step fails, the installation removes the staging directory, the `sandbox-HEX` directory, and the directories it created, and restores the managed configuration to its previous content. An authorization that step 6 already wrote stays in the sandbox; the next installation replaces it.
+
+A repeated installation with an unchanged host key creates no new key, writes no file, prints that the SSH setup is already installed and nothing changed, and exits with status 0.
+
+### Install with `up` or `start`
+
+`up NAME --ssh-config` and `start NAME --ssh-config` first do everything `up NAME` and `start NAME` do, and then install the SSH setup exactly as `ssh-config NAME --install` does, with the same files and calls. `--ssh-config` is not part of the container configuration: `up NAME --ssh-config` on an existing sandbox starts it and installs the SSH setup without an option conflict.
+
+When the installation fails, whatever the reason, the sandbox stays and keeps running. The command exits with status 1, names the reason, and names `sandboxed-agents ssh-config NAME --install` to retry; it issues no Podman call that stops or removes the container. Checks that `up` and `start` run before they start the sandbox, such as the owner check, refuse as they do without `--ssh-config`. On a sandbox that is already running, `up NAME --ssh-config` checks at step 7 that the manager answers; when it does not, it fails before it changes anything, with the manager message and the retry hint.
+
+### Print the host entry
+
+`ssh-config NAME` prints the host entry on standard output, exits with status 0, and changes no file, neither in host state nor in your SSH directory. It works on a running and on a stopped sandbox and does not ask the manager.
+
+- With the SSH setup installed, it prints exactly the entry in the managed configuration.
+- Without it, it prints the entry as `--install` would write it, with the recorded port, and says on standard error that the SSH setup is not installed and that the entry works only after `sandboxed-agents ssh-config NAME --install`.
+
+### Command line
+
+`ssh-config` takes exactly one sandbox name, checked against the [sandbox name rules](sandboxes.md#sandbox-names), and optionally `--install`. A usage error prints a message and a usage line on standard error, calls no other program, and exits with status 1. `--remove` comes with #37; in this version it is a usage error.
+
+### Order of checks for `ssh-config`
+
+`ssh-config` runs its checks in the order described in [Development](development.md#order-of-checks) and reports only the first failure. Every refusal exits with status 1 and changes no file.
+
+| Step | What `ssh-config` does at this step |
+| --- | --- |
+| 1. Usage and names | reports an invalid controller group, then a usage error or an invalid sandbox name |
+| 3. Sandbox existence | reports an unknown sandbox name, also for a sandbox of another controller group. When only volumes remain, names `sandboxed-agents up NAME`, which adopts them; an owner conflict on one of them is reported instead. |
+| 4. Owner | reports an owner conflict on the container, a volume, or the backup container, names the Podman objects, and points to Podman |
+| 5. Interrupted update | reports a backup container with the current owner and names `sandboxed-agents update NAME` |
+| 6. Running state | `--install` only: reports a stopped sandbox and names `sandboxed-agents start NAME`; it starts nothing |
+| 7. Preconditions | `--install` only: reports a manager that does not answer. A host key that cannot be read, a host key that differs from the pin, and a host entry conflict are reported afterwards by the installation, before it writes anything. |
+
+The preflight (step 2), the terminal check (step 8), and the session guard (step 9) do not apply to `ssh-config`. On Windows, the machine selection runs after step 1 and before step 3, as for `shell`. An owner conflict on a stopped sandbox is therefore reported instead of the message naming `start NAME`.
+
+### Connect
+
+```sh
+ssh agent01
+```
+
+VS Code Remote SSH and other desktop UIs read the same SSH configuration, so they list the host entry and connect through it. No live run has confirmed a connection yet ([Verification](#verification)).
+
+### Not in this version
+
+- **Removing an SSH setup.** `ssh-config NAME --remove`, and the cleanup of the host side by `remove NAME`, come with #37. In this version `remove NAME` leaves the host entry, the key pair, the pin, and the `Include` line in place.
+- **ACLs on Windows** for the key files, the managed configuration, and a `.ssh` directory or SSH configuration the installation creates come with #34.
+- **Keeping the SSH setup valid across `update`** comes with #52.
+- **Reporting SSH access in `check NAME`** comes with #20.
+- **A real SSH connection against real Podman** comes with #35.
+
 ## Verification
 
-The behavior on this page is covered by offline tests against fake `podman`, `ssh`, and `ssh-keygen` programs, with the Linux host path and with a fake Windows host identity ([Development](development.md#test-seams)). They check the complete `podman exec` call, including `--tty`, `--user=1000:1000`, `--workdir=/workspace`, and on Windows `--connection`, the refusals in the order of checks, and that `shell` calls neither `ssh` nor `ssh-keygen` and changes no file in the SSH directory or in host state.
+The behavior of `shell` is covered by offline tests against fake `podman`, `ssh`, and `ssh-keygen` programs, with the Linux host path and with a fake Windows host identity ([Development](development.md#test-seams)). They check the complete `podman exec` call, including `--tty`, `--user=1000:1000`, `--workdir=/workspace`, and on Windows `--connection`, the refusals in the order of checks, and that `shell` calls neither `ssh` nor `ssh-keygen` and changes no file in the SSH directory or in host state.
 
 The terminal tests give `shell` a real terminal handle of the test host as standard input: a pseudo-terminal from `/dev/ptmx` on Linux, and a console input handle on Windows. They show that `shell` detects the terminal and then passes `--tty`. The fake `podman` starts no container and no terminal inside one. The tests without a terminal show that the input reaches the fake `podman exec`; its output and exit status, 0, 7, or 125, are scripted, and `shell` passes them through.
 
-No offline test starts a real container, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, and not the target binding on Windows. That evidence needs the live suite (#24).
+The SSH setup is covered by offline tests at the CLI boundary against the same fake programs, on Linux and with the fake Windows host identity. They check the files that `ssh-config`, `up --ssh-config`, and `start --ssh-config` change in host state and in the SSH directory, byte for byte, the Podman calls of the manager probe, the host key query, and the authorization, the `ssh -G` queries of the conflict check, the `ssh-keygen` call, and the refusals in the order of checks. The Unix permission modes are checked on Linux only. The manager's side, reading the host key and replacing `/etc/ssh/authorized_keys`, is covered by manager tests with injected process functions and files.
+
+No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, and not that OpenSSH for Windows accepts the files of the SSH setup. That evidence needs the live suite (#24) and the live SSH tests (#35).

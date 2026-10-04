@@ -170,6 +170,7 @@ type sandboxHost struct {
 func upCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler, catalog agentcatalog.Catalog) Command {
 	ctx := context.Background()
 	var up *sandbox.Up
+	var installSSH bool
 	return Command{Name: "up", Checks: Checks{
 		Usage: func(invocation *Invocation) error {
 			if len(invocation.Args) == 0 {
@@ -178,7 +179,12 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			options, err := parseUpArguments(invocation.Args[1:], catalog)
+			args, requested, err := parseSSHFlag(invocation.Args[1:])
+			if err != nil {
+				return err
+			}
+			installSSH = requested
+			options, err := parseUpArguments(args, catalog)
 			if err != nil {
 				return err
 			}
@@ -192,19 +198,38 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 		Sandbox:           func(*Invocation) error { return up.CheckSandbox(ctx) },
 		Owner:             func(*Invocation) error { return up.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return up.CheckInterruptedUpdate() },
-		Preconditions: func(*Invocation) error {
+		Preconditions: func(invocation *Invocation) error {
+			if installSSH {
+				if err := up.CheckSSHManager(ctx, host.workspace.OS); err != nil {
+					return fmt.Errorf(sshRetryFormat, err, invocation.Args[0])
+				}
+			}
 			if err := up.CheckOptions(); err != nil {
 				return err
 			}
 			return up.CheckSSHPort(ctx)
 		},
-	}, Action: func(*Invocation) error { return up.Apply(ctx) }, Help: func(invocation *Invocation) error {
+	}, Action: func(invocation *Invocation) error {
+		if err := up.Apply(ctx); err != nil {
+			return err
+		}
+		if installSSH {
+			if err := up.InstallSSH(ctx, host.workspace.OS); err != nil {
+				return fmt.Errorf(sshRetryFormat, err, invocation.Args[0])
+			}
+		}
+		return nil
+	}, Help: func(invocation *Invocation) error {
 		args := slices.DeleteFunc(slices.Clone(invocation.Args), func(arg string) bool { return arg == "--help" })
 		if len(args) > 0 {
 			if err := sandbox.ValidateName(args[0]); err != nil {
 				return err
 			}
-			if _, err := parseUpArguments(args[1:], catalog); err != nil {
+			options, _, err := parseSSHFlag(args[1:])
+			if err != nil {
+				return err
+			}
+			if _, err := parseUpArguments(options, catalog); err != nil {
 				return err
 			}
 		}
@@ -213,11 +238,11 @@ func upCommand(assetHash string, host sandboxHost, group *string, run process.Ru
 	}}
 }
 
-func lifecycleCommand(action sandbox.LifecycleAction, group *string, run process.Runner) Command {
+func lifecycleCommand(action sandbox.LifecycleAction, hostOS string, group *string, run process.Runner) Command {
 	name := string(action)
 	ctx := context.Background()
 	var lifecycle *sandbox.Lifecycle
-	var force bool
+	var force, installSSH bool
 	return Command{Name: name, Checks: Checks{
 		Usage: func(invocation *Invocation) error {
 			if len(invocation.Args) == 0 {
@@ -226,7 +251,15 @@ func lifecycleCommand(action sandbox.LifecycleAction, group *string, run process
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			for _, arg := range invocation.Args[1:] {
+			args := invocation.Args[1:]
+			if action == sandbox.Start {
+				var err error
+				args, installSSH, err = parseSSHFlag(args)
+				if err != nil {
+					return err
+				}
+			}
+			for _, arg := range args {
 				if arg != "--force" || action == sandbox.Start {
 					return unexpectedArgument(arg)
 				}
@@ -243,7 +276,17 @@ func lifecycleCommand(action sandbox.LifecycleAction, group *string, run process
 		InterruptedUpdate: func(*Invocation) error { return lifecycle.CheckInterruptedUpdate() },
 		Preconditions:     func(*Invocation) error { return lifecycle.CheckManager(ctx) },
 		SessionGuard:      func(*Invocation) error { return lifecycle.CheckSessions() },
-	}, Action: func(*Invocation) error { return lifecycle.Apply(ctx) }}
+	}, Action: func(invocation *Invocation) error {
+		if err := lifecycle.Apply(ctx); err != nil {
+			return err
+		}
+		if installSSH {
+			if err := lifecycle.InstallSSH(ctx, hostOS); err != nil {
+				return fmt.Errorf(sshRetryFormat, err, invocation.Args[0])
+			}
+		}
+		return nil
+	}}
 }
 
 func RunWithWindowsHost(args []string, stdout, stderr io.Writer, version, assetHash string, host platform.Host) int {
@@ -304,11 +347,12 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 			integrationCommand("config", &group, run),
 			integrationCommand("login", &group, run),
 		}},
-		lifecycleCommand(sandbox.Start, &group, run),
-		lifecycleCommand(sandbox.Stop, &group, run),
-		lifecycleCommand(sandbox.Restart, &group, run),
+		lifecycleCommand(sandbox.Start, host.workspace.OS, &group, run),
+		lifecycleCommand(sandbox.Stop, host.workspace.OS, &group, run),
+		lifecycleCommand(sandbox.Restart, host.workspace.OS, &group, run),
 		shellCommand(&group, run),
 		fingerprintCommand(&group, run),
+		sshConfigCommand(host.workspace.OS, &group, run),
 		{Name: "build", Checks: Checks{Usage: func(invocation *Invocation) error {
 			selection, _, remaining, err := parseToolchains(invocation.Args)
 			if err != nil {

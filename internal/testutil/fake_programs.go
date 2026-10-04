@@ -23,6 +23,7 @@ type Response struct {
 	AbsentEnv           []string
 	CaptureBuildContext string
 	WantStdin           string
+	GenerateSSHKey      string
 }
 
 type Call struct{ Args []string }
@@ -176,6 +177,21 @@ func runFake(state, name string, args []string) int {
 		return 99
 	}
 	response := responses[0]
+	if response.GenerateSSHKey != "" {
+		if name != "ssh-keygen" {
+			return 99
+		}
+		index := slices.Index(args, "-f")
+		if index < 0 || index+1 >= len(args) {
+			return 99
+		}
+		if err := os.WriteFile(args[index+1], []byte("fixture private key\n"), 0600); err != nil {
+			return 99
+		}
+		if err := os.WriteFile(args[index+1]+".pub", []byte(response.GenerateSSHKey), 0644); err != nil {
+			return 99
+		}
+	}
 	if response.WantStdin != "" {
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil || string(input) != response.WantStdin {

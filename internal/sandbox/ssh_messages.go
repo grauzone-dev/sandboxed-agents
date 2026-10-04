@@ -12,4 +12,5 @@ const (
 	sshNameConflictFormat         = "host entry %[1]s already resolves to a configured host: ssh -G -F with your SSH configuration differs from ssh -G -F none for %[1]s; nothing was changed. Remove or rename that host in your SSH configuration, or exclude it from a wildcard pattern such as Host * !%[1]s, then retry the installation"
 	sshKeyGenerationFailureFormat = "ssh-keygen could not create the SSH key: %s; nothing was changed. Make sure OpenSSH is installed, then retry the installation"
 	sshAuthorizationFailureFormat = "the manager could not authorize the SSH key: %s; your SSH configuration and host state were not changed. Restart the sandbox, then retry the installation"
+	sshExistingStateFormat        = "host state path %s already exists without its host entry; nothing was changed. Move that path aside, then retry the installation"
 )

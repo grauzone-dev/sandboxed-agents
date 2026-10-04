@@ -746,3 +746,38 @@ func TestSSHSetupPinsDefaultSSHPortUsingOpenSSHHostToken(t *testing.T) {
 		})
 	}
 }
+
+func TestSSHInstallationRejectsPartialStateBeforeAuthorization(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, partial := range []string{"empty", "orphan key"} {
+			t.Run(host.name+"/"+partial, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				directory := filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743031")
+				if err := os.MkdirAll(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if partial == "orphan key" {
+					if err := os.WriteFile(filepath.Join(directory, "id_ed25519"), []byte("previous private key"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				scriptSSHInstall(t, fakes, host.windows, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n"})
+				scriptSSHDefaults(fakes, "agent01")
+				beforeState, beforeSSH := sshDirectoryContents(t, state), sshDirectoryContents(t, sshDir)
+				stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
+				for _, call := range fakes.Calls("podman") {
+					if slices.Contains(call.Args, "authorize") {
+						t.Fatalf("partial state changed authorization: %v", call.Args)
+					}
+				}
+				if status == 0 || stdout != "" || !strings.Contains(stderr, directory) || !strings.Contains(strings.ToLower(stderr), "move") || !strings.Contains(stderr, "retry") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				assertNoSSH(t, fakes)
+				if !reflect.DeepEqual(beforeState, sshDirectoryContents(t, state)) || !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) {
+					t.Fatal("partial state refusal changed files")
+				}
+			})
+		}
+	}
+}

@@ -20,10 +20,14 @@ func runIntegrationWorkflow(ctx context.Context, args []string, streams process.
 	if err != nil {
 		return err
 	}
-	if request.Workflow == "credentials" {
+	switch request.Integration + "/" + request.Workflow {
+	case "git/identity":
+		return setGitIdentity(ctx, request, streams, run)
+	case "git/credentials":
 		return configureGit(ctx, "credential.helper", "store --file=/home/agent/.git-credentials", streams, run)
+	default:
+		return fmt.Errorf(integrations.UnknownKind, request.Kind+" "+request.Integration+" "+request.Workflow)
 	}
-	return setGitIdentity(ctx, request, streams, run)
 }
 
 func setGitIdentity(ctx context.Context, request integrations.Request, streams process.Streams, run process.Runner) error {

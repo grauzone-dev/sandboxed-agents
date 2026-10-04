@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -12,6 +13,17 @@ import (
 	"unsafe"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
+)
+
+const (
+	windowsSSHDescriptorRevision      = 1
+	windowsSSHFileObject              = 1
+	windowsSSHOwnerAndDACLInformation = 5
+	windowsSSHProtectedDACL           = 0x80000004
+	windowsSSHUnprotectedDACL         = 0x20000004
+	windowsSSHDACLProtectedControl    = 0x1000
+	windowsSSHFullControl             = 0x001f01ff
+	windowsSSHInheritFilesAndFolders  = 3
 )
 
 func TestWindowsSSHInstallRestrictsKeysAndCreatedUserConfiguration(t *testing.T) {
@@ -27,6 +39,30 @@ func TestWindowsSSHInstallRestrictsKeysAndCreatedUserConfiguration(t *testing.T)
 	assertWindowsSSHACL(t, sshDir, true)
 	assertWindowsSSHACL(t, state, true)
 	assertWindowsSSHACL(t, filepath.Join(state, "group-default"), true)
+}
+
+func TestWindowsSSHInstallCreatesSecureConfigInAnExistingModifyOnlyDirectory(t *testing.T) {
+	fakes, fixture, sshDir, state := sshSetupHost(t, true)
+	if err := os.Mkdir(sshDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	account, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setWindowsSSHFixtureDACL(t, sshDir, "D:P(A;OICI;0x001301bf;;;"+account.Uid+")", true)
+	before := windowsSSHDescriptor(t, sshDir)
+	scriptSSHInstall(t, fakes, true, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{Stdout: sshHostPublicKey + "\n"}, testutil.Response{WantStdin: sshClientPublicKey + "\n"})
+	scriptSSHDefaults(fakes, "agent01")
+	stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--install")
+	if status != 0 || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if after := windowsSSHDescriptor(t, sshDir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("existing directory security changed: before=%+v after=%+v", before, after)
+	}
+	assertWindowsSSHACL(t, filepath.Join(sshDir, "config"), false)
+	assertWindowsSSHSetupACLs(t, state, "agent01")
 }
 
 func TestWindowsSSHInstallPreservesExistingUserConfigurationPermissions(t *testing.T) {
@@ -87,7 +123,7 @@ func setWindowsSSHFixtureDACL(t *testing.T, path, sddl string, protected bool) {
 	}
 	advapi := syscall.NewLazyDLL("advapi32.dll")
 	var descriptor unsafe.Pointer
-	ok, _, callErr := advapi.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW").Call(uintptr(unsafe.Pointer(text)), 1, uintptr(unsafe.Pointer(&descriptor)), 0)
+	ok, _, callErr := advapi.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW").Call(uintptr(unsafe.Pointer(text)), windowsSSHDescriptorRevision, uintptr(unsafe.Pointer(&descriptor)), 0)
 	if ok == 0 {
 		t.Fatal(callErr)
 	}
@@ -102,11 +138,11 @@ func setWindowsSSHFixtureDACL(t *testing.T, path, sddl string, protected bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flags := uintptr(0x20000004)
+	flags := uintptr(windowsSSHUnprotectedDACL)
 	if protected {
-		flags = 0x80000004
+		flags = windowsSSHProtectedDACL
 	}
-	status, _, _ := advapi.NewProc("SetNamedSecurityInfoW").Call(uintptr(unsafe.Pointer(name)), 1, flags, 0, 0, uintptr(acl), 0)
+	status, _, _ := advapi.NewProc("SetNamedSecurityInfoW").Call(uintptr(unsafe.Pointer(name)), windowsSSHFileObject, flags, 0, 0, uintptr(acl), 0)
 	if status != 0 {
 		t.Fatal(syscall.Errno(status))
 	}
@@ -114,7 +150,7 @@ func setWindowsSSHFixtureDACL(t *testing.T, path, sddl string, protected bool) {
 
 func assertWindowsSSHSetupACLs(t *testing.T, state, name string) {
 	t.Helper()
-	keyDirectory := filepath.Join(state, "group-default", "ssh", "sandbox-"+map[string]string{"agent01": "6167656e743031", "agent02": "6167656e743032"}[name])
+	keyDirectory := filepath.Join(state, "group-default", "ssh", "sandbox-"+hex.EncodeToString([]byte(name)))
 	for _, file := range []string{"id_ed25519", "id_ed25519.pub", "known_hosts", "entry"} {
 		assertWindowsSSHACL(t, filepath.Join(keyDirectory, file), false)
 	}
@@ -141,9 +177,9 @@ func assertWindowsSSHACL(t *testing.T, path string, directory bool) {
 	}
 	flags := byte(0)
 	if directory {
-		flags = 3
+		flags = windowsSSHInheritFilesAndFolders
 	}
-	want := windowsSSHSecurity{Owner: account.Uid, Protected: true, Entries: []windowsSSHACE{{Flags: flags, Mask: 0x001f01ff, SID: account.Uid}}}
+	want := windowsSSHSecurity{Owner: account.Uid, Protected: true, Entries: []windowsSSHACE{{Flags: flags, Mask: windowsSSHFullControl, SID: account.Uid}}}
 	if got := windowsSSHDescriptor(t, path); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ACL %s = %+v, want %+v", path, got, want)
 	}
@@ -170,12 +206,12 @@ func windowsSSHDescriptor(t *testing.T, path string) windowsSSHSecurity {
 	advapi := syscall.NewLazyDLL("advapi32.dll")
 	get := advapi.NewProc("GetFileSecurityW")
 	var size uint32
-	get.Call(uintptr(unsafe.Pointer(name)), 5, 0, 0, uintptr(unsafe.Pointer(&size)))
+	get.Call(uintptr(unsafe.Pointer(name)), windowsSSHOwnerAndDACLInformation, 0, 0, uintptr(unsafe.Pointer(&size)))
 	if size == 0 {
 		t.Fatalf("no security descriptor size for %s", path)
 	}
 	buffer := make([]byte, size)
-	ok, _, callErr := get.Call(uintptr(unsafe.Pointer(name)), 5, uintptr(unsafe.Pointer(&buffer[0])), uintptr(size), uintptr(unsafe.Pointer(&size)))
+	ok, _, callErr := get.Call(uintptr(unsafe.Pointer(name)), windowsSSHOwnerAndDACLInformation, uintptr(unsafe.Pointer(&buffer[0])), uintptr(size), uintptr(unsafe.Pointer(&size)))
 	if ok == 0 {
 		t.Fatal(callErr)
 	}
@@ -195,7 +231,7 @@ func windowsSSHDescriptor(t *testing.T, path string) windowsSSHSecurity {
 	if ok == 0 {
 		t.Fatal(callErr)
 	}
-	security := windowsSSHSecurity{Owner: ownerSID, Protected: control&0x1000 != 0}
+	security := windowsSSHSecurity{Owner: ownerSID, Protected: control&windowsSSHDACLProtectedControl != 0}
 	var acl unsafe.Pointer
 	var present int32
 	ok, _, callErr = advapi.NewProc("GetSecurityDescriptorDacl").Call(uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&present)), uintptr(unsafe.Pointer(&acl)), uintptr(unsafe.Pointer(&defaulted)))
@@ -204,9 +240,10 @@ func windowsSSHDescriptor(t *testing.T, path string) windowsSSHSecurity {
 	}
 	header := unsafe.Slice((*byte)(acl), 8)
 	count := binary.LittleEndian.Uint16(header[4:6])
+	getACE := advapi.NewProc("GetAce")
 	for index := uint16(0); index < count; index++ {
 		var ace unsafe.Pointer
-		ok, _, callErr = advapi.NewProc("GetAce").Call(uintptr(acl), uintptr(index), uintptr(unsafe.Pointer(&ace)))
+		ok, _, callErr = getACE.Call(uintptr(acl), uintptr(index), uintptr(unsafe.Pointer(&ace)))
 		if ok == 0 {
 			t.Fatal(callErr)
 		}

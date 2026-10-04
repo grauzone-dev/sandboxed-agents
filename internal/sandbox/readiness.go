@@ -22,23 +22,17 @@ func WaitReady(ctx context.Context, container string, port int, run process.Runn
 	var managerErr, sshErr error
 	for {
 		if ctx.Err() != nil {
-			return fmt.Errorf(readinessTimeoutFormat, container, errors.Join(ctx.Err(), managerErr, sshErr))
+			return fmt.Errorf(readinessWaitFailureFormat, container, errors.Join(ctx.Err(), managerErr, sshErr))
 		}
 		if !managerReady {
 			managerErr = readinessManagerProbe(ctx, container, run)
 			managerReady = managerErr == nil
 		}
-		if ctx.Err() != nil {
-			return fmt.Errorf(readinessTimeoutFormat, container, errors.Join(ctx.Err(), managerErr, sshErr))
-		}
-		if !sshReady {
+		if !sshReady && ctx.Err() == nil {
 			sshErr = readinessSSHProbe(ctx, port, run)
 			sshReady = sshErr == nil
 		}
-		if ctx.Err() != nil {
-			return fmt.Errorf(readinessTimeoutFormat, container, errors.Join(ctx.Err(), managerErr, sshErr))
-		}
-		if managerReady && sshReady {
+		if managerReady && sshReady && ctx.Err() == nil {
 			return nil
 		}
 		timer := time.NewTimer(250 * time.Millisecond)
@@ -53,6 +47,10 @@ func WaitReady(ctx context.Context, container string, port int, run process.Runn
 func readinessManagerProbe(ctx context.Context, container string, run process.Runner) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	return probeManagerVersion(ctx, container, run)
+}
+
+func probeManagerVersion(ctx context.Context, container string, run process.Runner) error {
 	var output bytes.Buffer
 	status, err := run(ctx, process.Request{Name: "podman", Args: managerArgs(container, "version"), Streams: process.Streams{Stdout: &output, Stderr: io.Discard}})
 	if err != nil {

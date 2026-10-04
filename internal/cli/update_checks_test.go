@@ -3,6 +3,7 @@ package cli_test
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -130,6 +131,28 @@ func TestUpdateRefusesMissingAndForeignOwnersOnEverySandboxObject(t *testing.T) 
 	}
 }
 
+func TestUpdateRefusesAnOwnedBackupWithoutCircularRecoveryAdvice(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, withContainer := range []bool{false, true} {
+			t.Run(host.name+"/container-"+strconv.FormatBool(withContainer), func(t *testing.T) {
+				fakes, fixture := resourceLimitHost(t, host.windows)
+				owned := "default"
+				var containerOwner *string
+				if withContainer {
+					containerOwner = &owned
+				}
+				responses := upObjectResponses(containerOwner, true, nil, &owned)
+				scriptUpdate(t, fakes, host.windows, responses)
+				stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
+				if status == 0 || !strings.Contains(stderr, "sandboxed-agents-backup.default.agent01") || !strings.Contains(stderr, "interrupted update") || !strings.Contains(stderr, "not available in this version") || !strings.Contains(stderr, "Podman") || strings.Contains(stderr, "run sandboxed-agents update") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				assertUpdateChecksReadOnly(t, fakes, host.windows, fakes.Calls("podman"))
+			})
+		}
+	}
+}
+
 func TestUpdateReleasesItsLifecycleLockAfterFailureAndReadsCurrentSandboxState(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		t.Run(host.name, func(t *testing.T) {
@@ -204,6 +227,17 @@ func assertUpdateChecksReadOnly(t *testing.T, fakes *testutil.FakePrograms, wind
 
 func updateObjectOwner(t *testing.T, responses []testutil.Response, name, owner string) []testutil.Response {
 	t.Helper()
+	return updateObjectLabels(t, responses, name, func(labels map[string]any) {
+		if owner == "" {
+			delete(labels, "io.github.sandboxed-agents.owner")
+		} else {
+			labels["io.github.sandboxed-agents.owner"] = owner
+		}
+	})
+}
+
+func updateObjectLabels(t *testing.T, responses []testutil.Response, name string, modify func(map[string]any)) []testutil.Response {
+	t.Helper()
 	responses = slices.Clone(responses)
 	found := false
 	for index := range responses {
@@ -229,11 +263,7 @@ func updateObjectOwner(t *testing.T, responses []testutil.Response, name, owner 
 					t.Fatalf("object %s has no labels", name)
 				}
 			}
-			if owner == "" {
-				delete(labels, "io.github.sandboxed-agents.owner")
-			} else {
-				labels["io.github.sandboxed-agents.owner"] = owner
-			}
+			modify(labels)
 			data, err := json.Marshal(records)
 			if err != nil {
 				t.Fatal(err)

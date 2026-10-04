@@ -1,13 +1,11 @@
-//go:build !windows
-
 package manager
 
 import (
 	"context"
-	"errors"
 	"os"
-	"syscall"
 	"time"
+
+	"github.com/grauzone-dev/sandboxed-agents/internal/filelock"
 )
 
 func lockManager(ctx context.Context, path string) (func(), error) {
@@ -16,11 +14,11 @@ func lockManager(ctx context.Context, path string) (func(), error) {
 		return nil, err
 	}
 	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		unlock, err := filelock.TryLock(file)
 		if err == nil {
-			return func() { syscall.Flock(int(file.Fd()), syscall.LOCK_UN); file.Close() }, nil
+			return func() { unlock(); file.Close() }, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+		if !filelock.IsBusy(err) && !filelock.IsInterrupted(err) {
 			file.Close()
 			return nil, err
 		}

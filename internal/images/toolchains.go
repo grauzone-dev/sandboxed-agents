@@ -43,30 +43,24 @@ func Ensure(ctx context.Context, assetHash string, set toolchains.Set, run proce
 	if err != nil {
 		return "", err
 	}
-	exists, err = imageExists(ctx, tag, run, streams)
+	currentID, current, err := currentToolchainImage(ctx, tag, base.ID, run, streams)
 	if err != nil {
 		return "", err
 	}
-	if exists {
-		current, err := inspectImage(ctx, tag, run, streams)
-		if err != nil {
-			return "", err
-		}
-		if current.Labels[BaseImageLabel] == base.ID {
-			return current.ID, nil
-		}
+	if current {
+		return currentID, nil
 	}
 	if err := buildToolchains(ctx, assetHash, base.ID, set, []string{tag}, run, streams); err != nil {
 		return "", err
 	}
-	current, err := inspectImage(ctx, tag, run, streams)
+	built, err := inspectImage(ctx, tag, run, streams)
 	if err != nil {
 		return "", err
 	}
-	if current.Labels[BaseImageLabel] != base.ID {
+	if built.Labels[BaseImageLabel] != base.ID {
 		return "", fmt.Errorf("toolchain image %s changed during its build; retry up", tag)
 	}
-	return current.ID, nil
+	return built.ID, nil
 }
 
 func Build(ctx context.Context, assetHash string, set toolchains.Set, run process.Runner, streams process.Streams) (result error) {

@@ -42,13 +42,13 @@ type Checks struct {
 }
 
 type Command struct {
-	Name     string
-	Commands []Command
-	Checks   Checks
-	Prepare  Handler
-	Action   Handler
-	Help     Handler
-	Acquire  func(*Invocation) (func(), error)
+	Name        string
+	Commands    []Command
+	Checks      Checks
+	Prepare     Handler
+	Action      Handler
+	Help        Handler
+	LockSandbox func(*Invocation) (func(), error)
 }
 
 type Tree struct {
@@ -108,8 +108,8 @@ func (tree Tree) Execute(args []string, stdout, stderr io.Writer) int {
 			return tree.failure(stderr, path, err, false)
 		}
 	}
-	if selected.Acquire != nil {
-		release, err := selected.Acquire(invocation)
+	if selected.LockSandbox != nil {
+		release, err := selected.LockSandbox(invocation)
 		if err != nil {
 			return tree.failure(stderr, path, err, false)
 		}
@@ -368,19 +368,19 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		return err
 	}, Commands: []Command{
 		{Name: "agents", Commands: []Command{agentCommand("enable", &group, run, catalog), agentCommand("disable", &group, run, catalog), agentCommand("status", &group, run, catalog), runAgentCommand(&group, run, catalog), loginAgentCommand(&group, run, catalog)}},
-		upCommand(assetHash, host, &group, run, check, catalog),
-		updateCommand(assetHash, &group, run, check),
+		withLifecycleLock(upCommand(assetHash, host, &group, run, check, catalog), host, &group),
+		withLifecycleLock(updateCommand(assetHash, &group, run, check), host, &group),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return sandbox.List(context.Background(), group, run, invocation.Stdout, catalog)
 		}},
-		removeCommand(&group, run),
+		withLifecycleLock(removeCommand(&group, run), host, &group),
 		{Name: "integrations", Commands: []Command{
 			integrationCommand("config", &group, run),
 			integrationCommand("login", &group, run),
 		}},
-		lifecycleCommand(sandbox.Start, host.workspace.OS, &group, run),
-		lifecycleCommand(sandbox.Stop, host.workspace.OS, &group, run),
-		lifecycleCommand(sandbox.Restart, host.workspace.OS, &group, run),
+		withLifecycleLock(lifecycleCommand(sandbox.Start, host.workspace.OS, &group, run), host, &group),
+		withLifecycleLock(lifecycleCommand(sandbox.Stop, host.workspace.OS, &group, run), host, &group),
+		withLifecycleLock(lifecycleCommand(sandbox.Restart, host.workspace.OS, &group, run), host, &group),
 		shellCommand(&group, run),
 		fingerprintCommand(&group, run),
 		sshConfigCommand(host.workspace.OS, &group, run),
@@ -403,20 +403,19 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		}},
 		{Name: "check", Checks: Checks{Usage: noArguments}, Action: check},
 	}}
-	for index := range tree.Commands {
-		command := &tree.Commands[index]
-		if slices.Contains([]string{"up", "start", "stop", "restart", "remove", "update"}, command.Name) {
-			command.Acquire = func(invocation *Invocation) (func(), error) {
-				if host.workspace.OS == "windows" && host.selectTarget != nil {
-					if err := host.selectTarget(context.Background()); err != nil {
-						return nil, err
-					}
-				}
-				return sandbox.LockLifecycle(host.workspace.OS, group, invocation.Args[0])
+	return tree.Execute(args, stdout, stderr)
+}
+
+func withLifecycleLock(command Command, host sandboxHost, group *string) Command {
+	command.LockSandbox = func(invocation *Invocation) (func(), error) {
+		if host.workspace.OS == "windows" && host.selectTarget != nil {
+			if err := host.selectTarget(context.Background()); err != nil {
+				return nil, err
 			}
 		}
+		return sandbox.LockLifecycle(host.workspace.OS, *group, invocation.Args[0])
 	}
-	return tree.Execute(args, stdout, stderr)
+	return command
 }
 
 type upArguments struct {

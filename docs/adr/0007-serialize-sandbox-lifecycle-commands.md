@@ -49,6 +49,8 @@ The total wait is 60 seconds and includes the time the probe processes run. Both
 
 On a cold start, the Podman machine, the container's initialization, the manager, and sshd can take several seconds to answer. 60 seconds leaves room for that and still bounds how long a failed update leaves the user waiting. The value is set from these considerations only. Offline tests check the deadline, the interval, and the probes through injected process functions, and the CLI tests use fake Podman and a fake `ssh-keyscan`. No live run has measured it yet, so no live verification is claimed for it.
 
+`ssh-keyscan` is a host prerequisite of the installed executable, not of `update` alone. The preflight is one check of the complete prerequisite set: `check` reports it, and `build`, `up`, and `update` each require all of it, although only `update` runs `ssh-keyscan`. This is deliberate. A preflight that varied by command would let `check`, `build`, and `up` pass on a host where the next `update` fails, and only after its build. `ssh-keyscan` ships with `ssh` and `ssh-keygen`, which ADR-0002 already requires, in common Linux OpenSSH client packages, such as Debian's `openssh-client` and Fedora's `openssh-clients`, and in the Windows OpenSSH Client. On such hosts the requirement adds no package.
+
 ## Considered options
 
 - **Waiting for the lock.** Rejected: the second command would block with no visible reason, and once it got the lock it would act on a sandbox that the first command had just changed, without the user seeing that change first.
@@ -59,10 +61,12 @@ On a cold start, the Podman machine, the container's initialization, the manager
 - **Deleting a lock file after use.** Rejected because of the race described under [Lock files](#lock-files).
 - **Keeping update progress in the lock file.** Rejected: ADR-0005 already rejected state about an update outside Podman, because it can be missing or stale after an interruption.
 - **TCP connect as the SSH readiness check.** Rejected because port forwarding can accept connections before sshd does.
+- **Checking `ssh-keyscan` only in the preflight of `update`.** Rejected: `check` would no longer report every prerequisite of the installed executable, and the prerequisites a host meets would depend on the command.
 
 ## Consequences
 
 - Each lifecycle command opens and locks one file in host state before its first sandbox lookup, so host state and its `locks` directory are created when they are missing, also for commands that never install an SSH setup.
 - Two lifecycle commands on the same sandbox, for example from two terminals or from a script and a user, now fail fast instead of interleaving. Scripts that run them in parallel must retry.
+- A host whose OpenSSH client lacks `ssh-keyscan` fails the preflight of `check`, `build`, `up`, and `update`.
 - Lock files accumulate in `group-GROUP/locks/`, one per sandbox name ever used, including unknown names. Each is empty.
 - The user documentation ([Update a sandbox](../updates.md#lifecycle-lock)) states that writers that use Podman directly and commands with another host state root are outside the contract, and that the lock is coordination, not protection.

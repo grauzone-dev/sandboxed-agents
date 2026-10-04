@@ -294,7 +294,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		group, err = controllergroup.CurrentGroup()
 		return err
 	}, Commands: []Command{
-		{Name: "agents", Commands: []Command{agentCommand("enable", &group, run, catalog), agentCommand("status", &group, run, catalog), runAgentCommand(&group, run, catalog), loginAgentCommand(&group, run, catalog)}},
+		{Name: "agents", Commands: []Command{agentCommand("enable", &group, run, catalog), agentCommand("disable", &group, run, catalog), agentCommand("status", &group, run, catalog), runAgentCommand(&group, run, catalog), loginAgentCommand(&group, run, catalog)}},
 		upCommand(assetHash, host, &group, run, check, catalog),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return sandbox.List(context.Background(), group, run, invocation.Stdout, catalog)

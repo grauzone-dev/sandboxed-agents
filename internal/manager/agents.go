@@ -33,13 +33,15 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		return m.runAgent(ctx, args[1:], streams, run)
 	case len(args) == 1 && args[0] == "list":
 		apply = func() error { return m.listAgents(streams.Stdout) }
-	case len(args) == 2 && (args[0] == "enable" || args[0] == "status"):
+	case len(args) == 2 && (args[0] == "enable" || args[0] == "disable" || args[0] == "status"):
 		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
 		}
 		if args[0] == "status" {
 			apply = func() error { return m.agentStatus(ctx, entry, streams, run) }
+		} else if args[0] == "disable" {
+			apply = func() error { return m.disable(ctx, entry, streams) }
 		} else {
 			apply = func() error { return m.enable(ctx, entry, streams, run) }
 		}
@@ -97,6 +99,7 @@ func agentEnvironment(home string) []string {
 
 type selectedAgent struct {
 	Version string `json:"version"`
+	Pin     string `json:"pin,omitempty"`
 }
 
 func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams, run process.Runner) error {
@@ -131,7 +134,10 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 		return err
 	}
 	if !enabled {
-		selection[entry.Name] = selectedAgent{Version: version}
+		selection[entry.Name], err = json.Marshal(selectedAgent{Version: version})
+		if err != nil {
+			return err
+		}
 		if err := saveSelection(selectionPath, selection); err != nil {
 			return err
 		}
@@ -140,8 +146,58 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 	return err
 }
 
-func readSelection(path string) (map[string]selectedAgent, error) {
-	selection := map[string]selectedAgent{}
+func (m *Manager) disable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams) error {
+	selectionPath := m.selectionPath()
+	state := filepath.Dir(selectionPath)
+	lockPath := filepath.Join(state, "manager.lock")
+	if _, err := os.Stat(lockPath); errors.Is(err, os.ErrNotExist) {
+		selection, err := readSelection(selectionPath)
+		if err != nil {
+			return err
+		}
+		if _, enabled := selection[entry.Name]; !enabled {
+			_, err := fmt.Fprintf(streams.Stdout, "Agent %s is not enabled; nothing to do.\n", entry.Name)
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	unlock, err := lockManager(ctx, lockPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	selection, err := readSelection(selectionPath)
+	if err != nil {
+		return err
+	}
+	data, enabled := selection[entry.Name]
+	if !enabled {
+		_, err := fmt.Fprintf(streams.Stdout, "Agent %s is not enabled; nothing to do.\n", entry.Name)
+		return err
+	}
+	var selected selectedAgent
+	if err := json.Unmarshal(data, &selected); err != nil {
+		return errors.New(agentSelectionInvalid)
+	}
+	commandPath := filepath.Join(m.options.Home, ".local", "bin", entry.Command)
+	if err := os.Remove(commandPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove managed command for %s: %w", entry.Name, err)
+	}
+	delete(selection, entry.Name)
+	if err := saveSelection(selectionPath, selection); err != nil {
+		return fmt.Errorf("save agent selection: %w", err)
+	}
+	if selected.Pin != "" {
+		_, err = fmt.Fprintf(streams.Stdout, "Agent %s is disabled (removed pin %s).\n", entry.Name, selected.Pin)
+	} else {
+		_, err = fmt.Fprintf(streams.Stdout, "Agent %s is disabled.\n", entry.Name)
+	}
+	return err
+}
+
+func readSelection(path string) (map[string]json.RawMessage, error) {
+	selection := map[string]json.RawMessage{}
 	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return selection, nil
@@ -151,6 +207,11 @@ func readSelection(path string) (map[string]selectedAgent, error) {
 	}
 	if err := json.Unmarshal(content, &selection); err != nil || selection == nil {
 		return nil, errors.New(agentSelectionInvalid)
+	}
+	for _, data := range selection {
+		if err := json.Unmarshal(data, new(selectedAgent)); err != nil {
+			return nil, errors.New(agentSelectionInvalid)
+		}
 	}
 	return selection, nil
 }
@@ -168,7 +229,7 @@ func installedVersion(home, pkg string) (string, error) {
 	}
 	return metadata.Version, nil
 }
-func saveSelection(path string, selection map[string]selectedAgent) error {
+func saveSelection(path string, selection map[string]json.RawMessage) error {
 	data, err := json.Marshal(selection)
 	if err != nil {
 		return err

@@ -12,6 +12,14 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 	ctx := context.Background()
 	var update *sandbox.Update
 	var all bool
+	forNamedTarget := func(check Handler) Handler {
+		return func(invocation *Invocation) error {
+			if all {
+				return nil
+			}
+			return check(invocation)
+		}
+	}
 	command := Command{Name: "update", Checks: Checks{
 		Usage: func(invocation *Invocation) error {
 			if len(invocation.Args) == 0 {
@@ -30,31 +38,11 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 			update = sandbox.NewUpdate(invocation.Args[0], *group, assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
-		Preflight: check,
-		Sandbox: func(*Invocation) error {
-			if all {
-				return nil
-			}
-			return update.CheckContainer(ctx)
-		},
-		Owner: func(*Invocation) error {
-			if all {
-				return nil
-			}
-			return update.CheckOwner(ctx)
-		},
-		InterruptedUpdate: func(*Invocation) error {
-			if all {
-				return nil
-			}
-			return update.CheckInterruptedUpdate()
-		},
-	}, Prepare: func(*Invocation) error {
-		if all {
-			return nil
-		}
-		return update.Prepare(ctx)
-	}, Action: func(invocation *Invocation) error {
+		Preflight:         check,
+		Sandbox:           forNamedTarget(func(*Invocation) error { return update.CheckContainer(ctx) }),
+		Owner:             forNamedTarget(func(*Invocation) error { return update.CheckOwner(ctx) }),
+		InterruptedUpdate: forNamedTarget(func(*Invocation) error { return update.CheckInterruptedUpdate() }),
+	}, Prepare: forNamedTarget(func(*Invocation) error { return update.Prepare(ctx) }), Action: func(invocation *Invocation) error {
 		if all {
 			return sandbox.UpdateAll(ctx, host.workspace.OS, *group, assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 		}

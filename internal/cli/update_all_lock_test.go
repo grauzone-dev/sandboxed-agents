@@ -38,7 +38,7 @@ func TestUpdateAllPassesOverABusySandboxWithoutInspectingItAndUpdatesOtherSandbo
 					t.Fatalf("inspected or changed the busy sandbox: %v", call.Args)
 				}
 			}
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }
@@ -52,10 +52,9 @@ func TestUpdateAllKeepsEverySandboxLockedFromInspectionThroughAllBuildsAndUpdate
 		t.Run(name, func(t *testing.T) {
 			fakes, _, _, _ := sshSetupHost(t, false)
 			responses := updateAllInventory("agent01", "agent02")
-			for index, selection := range []string{"dotnet", "native"} {
-				sandboxName := []string{"agent01", "agent02"}[index]
-				responses = append(responses, updateAllObjects(t, sandboxName, true, "old-"+selection, selection)...)
-				responses = append(responses, updateAllOutdatedImage(selection, false)...)
+			for _, candidate := range []struct{ name, selection string }{{"agent01", "dotnet"}, {"agent02", "native"}} {
+				responses = append(responses, updateAllObjects(t, candidate.name, true, "old-"+candidate.selection, candidate.selection)...)
+				responses = append(responses, updateAllOutdatedImage(candidate.selection, false)...)
 			}
 			responses = append(responses, updateAllBuildImage("dotnet", false)...)
 			if failBuild {
@@ -123,7 +122,7 @@ func TestUpdateAllKeepsEverySandboxLockedFromInspectionThroughAllBuildsAndUpdate
 				}
 				release()
 			}
-			assertUpdateAllPreservesData(t, fakes)
+			assertUpdateChangesPreserveData(t, fakes)
 		})
 	}
 }

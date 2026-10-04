@@ -29,12 +29,16 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		return m.runAgent(ctx, args[1:], streams, run)
 	case len(args) == 1 && args[0] == "list":
 		apply = func() error { return m.listAgents(streams.Stdout) }
-	case len(args) == 2 && args[0] == "enable":
+	case len(args) == 2 && (args[0] == "enable" || args[0] == "status"):
 		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
 		}
-		apply = func() error { return m.enable(ctx, entry, streams, run) }
+		if args[0] == "status" {
+			apply = func() error { return m.agentStatus(ctx, entry, streams, run) }
+		} else {
+			apply = func() error { return m.enable(ctx, entry, streams, run) }
+		}
 	default:
 		return errors.New(agentUsageMessage)
 	}

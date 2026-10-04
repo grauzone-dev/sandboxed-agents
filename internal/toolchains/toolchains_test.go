@@ -22,13 +22,13 @@ func TestSelectDeliveredToolchainsAsASet(t *testing.T) {
 }
 
 func TestRejectUndeliveredAndInvalidSelections(t *testing.T) {
-	for _, value := range []string{"", "native,", "none,native", "none,none", "dotnet", "playwright", "azure", "nosuch"} {
+	for _, value := range []string{"", "native,", "none,native", "none,none", "dotnet", "playwright", "nosuch"} {
 		_, err := toolchains.Parse(value)
 		if err == nil {
 			t.Errorf("accepted %q", value)
 			continue
 		}
-		if !strings.Contains(err.Error(), "valid values: native, none") {
+		if !strings.Contains(err.Error(), "valid values: azure, native, none") {
 			t.Errorf("selection %q error = %v", value, err)
 		}
 	}
@@ -44,8 +44,20 @@ func TestCatalogCarriesDeliveredNativeBuildToolsAndSmokeCheck(t *testing.T) {
 			if !definition.Delivered || definition.SmokeCheck == "" {
 				t.Fatalf("native = %+v", definition)
 			}
-		} else if definition.Delivered {
+		} else if definition.Name != "azure" && definition.Delivered {
 			t.Errorf("undelivered toolchain %s is enabled", definition.Name)
 		}
 	}
+}
+
+func TestAzureCarriesItsAgentSmokeCheck(t *testing.T) {
+	for _, definition := range toolchains.Catalog() {
+		if definition.Name == "azure" {
+			if !definition.Delivered || definition.SmokeCheck != "az version" || definition.SmokeUser != "1000:1000" {
+				t.Fatalf("Azure smoke check = %+v", definition)
+			}
+			return
+		}
+	}
+	t.Fatal("Azure toolchain missing from catalog")
 }

@@ -31,7 +31,7 @@ Value formats (every number must be greater than zero; no sign, no exponent):
                  decimals, for example 2 or 1.5; at most 9223372036.854
   --pids-limit N whole number, at most 9223372036854775807
   --with SET     comma-separated toolchain names, or none alone for the
-                 base image; valid values: native, none
+                 base image; valid values: azure, native, none
   --port N       whole number from 1 to 65535
   --agents LIST  comma-separated agent names from the agent catalog, for
                  example claude,codex; no empty name, a repeated name counts

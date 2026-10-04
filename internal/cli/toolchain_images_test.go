@@ -45,6 +45,20 @@ func TestBuildSelectedNativeImageUsesFreshBaseAndRemovesItsContext(t *testing.T)
 		}
 	}
 	assertNativeBuildContext(t, captured)
+	if _, err := os.Stat(filepath.Join(captured, "azure")); !os.IsNotExist(err) {
+		t.Fatalf("native-only context includes Azure: %v", err)
+	}
+	for _, file := range []string{"Containerfile", "native/install.sh", "record-versions.sh"} {
+		data, err := os.ReadFile(filepath.Join(captured, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"azure-cli", "az extension add", "install-azure"} {
+			if strings.Contains(string(data), forbidden) {
+				t.Errorf("native-only %s contains %q", file, forbidden)
+			}
+		}
+	}
 }
 
 func imageBuildAssetHash(t *testing.T) string {
@@ -284,10 +298,10 @@ func assertBuildReminder(t *testing.T, stdout string) {
 func assertNativeBuildContext(t *testing.T, directory string) {
 	t.Helper()
 	for file, required := range map[string][]string{
-		"Containerfile":      {"ARG BASE_IMAGE", "FROM ${BASE_IMAGE}", "sh /tmp/install-native.sh", "sh /tmp/record-versions.sh", "COPY smoke.sh /usr/local/share/sandboxed-agents/smoke/native.sh"},
-		"install.sh":         {"apt-get install -y --no-install-recommends", "build-essential", "cmake", "pkg-config", "ninja-build"},
+		"Containerfile":      {"ARG BASE_IMAGE", "FROM ${BASE_IMAGE}", "sh /tmp/install-native.sh", "sh /tmp/record-versions.sh", "COPY native/smoke.sh /usr/local/share/sandboxed-agents/smoke/native.sh"},
+		"native/install.sh":         {"apt-get install -y --no-install-recommends", "build-essential", "cmake", "pkg-config", "ninja-build"},
 		"record-versions.sh": {"/usr/local/share/sandboxed-agents/versions.tsv", "dpkg-query -W"},
-		"smoke.sh":           {"id -u", "id -g", "1000", "int main(void)", "cc ", "trap 'rm -rf"},
+		"native/smoke.sh":           {"id -u", "id -g", "1000", "int main(void)", "cc ", "trap 'rm -rf"},
 	} {
 		contents, err := os.ReadFile(filepath.Join(directory, file))
 		if err != nil {

@@ -38,7 +38,7 @@ func Catalog() []Definition {
 	return []Definition{
 		{Name: "dotnet"},
 		{Name: "playwright"},
-		{Name: "azure"},
+		{Name: "azure", Delivered: true, SmokeCheck: "az version", SmokeUser: "1000:1000"},
 		{Name: "native", Delivered: true, SmokeCheck: "sh /usr/local/share/sandboxed-agents/smoke/native.sh", SmokeUser: "1000:1000"},
 	}
 }

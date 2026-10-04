@@ -183,6 +183,35 @@ func TestSessionStopWorksWithoutATerminalAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNotEnabledSessionStopDoesNotClaimTheSessionIsAbsent(t *testing.T) {
+	home := t.TempDir()
+	queries := 0
+	app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+		if r.Name != "/usr/bin/tmux" || r.Args[4] != "list-sessions" {
+			t.Fatalf("disabled stop acted on the session: %+v", r)
+		}
+		queries++
+		fmt.Fprintln(r.Streams.Stdout, "sandboxed-agents-codex")
+		return 0, nil
+	}, manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
+	status := func() {
+		t.Helper()
+		var out, diagnostic bytes.Buffer
+		if code := app.Run(context.Background(), []string{"agents", "status", "codex"}, process.Streams{Stdout: &out, Stderr: &diagnostic}); code != 0 || !strings.Contains(out.String(), "Agent session: running.") || diagnostic.Len() != 0 {
+			t.Fatalf("status=%d out=%s stderr=%s", code, &out, &diagnostic)
+		}
+	}
+	status()
+	var out, diagnostic bytes.Buffer
+	if code := app.Run(context.Background(), []string{"agents", "session", "agent01", "codex", "--stop"}, process.Streams{Stdout: &out, Stderr: &diagnostic}); code != 0 || diagnostic.Len() != 0 || !strings.Contains(out.String(), "not enabled; nothing to do") || strings.Contains(out.String(), "No agent session") {
+		t.Fatalf("stop=%d out=%s stderr=%s", code, &out, &diagnostic)
+	}
+	if queries != 1 {
+		t.Fatalf("disabled stop queried tmux: queries=%d", queries)
+	}
+	status()
+}
+
 func TestSessionRefusalsDoNotStartTmux(t *testing.T) {
 	for _, test := range []struct {
 		name     string

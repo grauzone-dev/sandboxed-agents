@@ -301,10 +301,11 @@ The other tests need the native Windows file system and skip themselves on any o
 - **Executable.** The test executable, its directory, a symlink to either, a junction to its directory, and a workspace that holds a symlink or junction to its directory are refused with a message naming the executable. A copy of the executable on the same volume, run with a hard link to it inside the workspace, refuses that workspace and names the copy.
 - **Existing sandbox.** On a stopped and on a running sandbox whose recorded bind is the translated directory, the same directory, its upper-case spelling, and a junction to it start the sandbox, or leave a running one alone, with only lookups before. Another directory exits non-zero with only lookups, naming both directories as quoted Windows paths and `remove` and `up`, and no `/mnt/` path.
 - **Missing workspace or file.** Each, given as an absolute or relative path or below a junction to its parent, exits non-zero naming the resolved Windows path, calls neither `podman` nor `ssh`, creates nothing, and leaves the file unchanged.
+- **Reparse entry that is no link.** `TestWindowsUpAcceptsWorkspaceContainingANonAliasReparseFile`, in `windows_reparse_workspace_windows_test.go`, which is compiled only on Windows, gives an empty file in an ordinary workspace a custom reparse tag that is neither a symlink nor a junction, as cloud-file and similar entries carry. It checks that Go reports no symlink and no link target for the file, and that `up` treats it as a plain file: the sandbox is created and the `create` call binds the workspace's translated path. The test restores the file afterwards.
 
 Every refusal before the preflight asserts that `podman` was not called, and every test that `ssh` was not called. The refusal of a workspace without a drive letter, such as a UNC path, has no test.
 
-These are offline tests. This page records which tests exist, not a CI run of them; no run of the native Windows tests has been observed for this change. No test reaches a real Podman machine, and no live test confirms what a running sandbox can reach.
+These are offline tests: the native ones run in the Windows job of the [offline suite](#ci), the others in both jobs. They run against the fake `podman` and `ssh`, so they cannot show what a running sandbox can reach. No test reaches a real Podman machine, and no live test confirms the isolation.
 
 ### Host preflight tests
 

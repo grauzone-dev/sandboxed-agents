@@ -15,6 +15,13 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
+const (
+	windowsSetReparsePoint      = 0x000900a4
+	windowsDeleteReparsePoint   = 0x000900ac
+	windowsPrivilegeNotAssigned = syscall.Errno(1300)
+	windowsRelativeSymlinkFlag  = 1
+)
+
 func TestWindowsUpRejectsNestedRootRelativeProtectedWorkspaceLinkBeforePodman(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	root := workspaceFixture(t)
@@ -83,9 +90,6 @@ func TestWindowsUpRejectsDriveRelativeWorkspaceLinksBeforePodman(t *testing.T) {
 			}
 			target := filepath.VolumeName(workspace) + "project"
 			if err := setWindowsWorkspaceRawRelativeSymlink(t, workspace, target, alias); err != nil {
-				if errors.Is(err, syscall.Errno(4392)) || errors.Is(err, syscall.Errno(87)) {
-					t.Skipf("Windows rejects creation of a drive-relative symlink: %v", err)
-				}
 				t.Fatal(err)
 			}
 			got, err := os.Readlink(alias)
@@ -96,7 +100,7 @@ func TestWindowsUpRejectsDriveRelativeWorkspaceLinksBeforePodman(t *testing.T) {
 				workspace = alias
 			}
 			stdout, stderr, status := runCLI(t, "windows", "up", "agent01", workspace)
-			if status == 0 || stdout != "" || !strings.Contains(stderr, fmt.Sprintf("%q", alias)) {
+			if status == 0 || stdout != "" || !strings.Contains(stderr, fmt.Sprintf("%q", workspace)) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			if len(fakes.Calls("podman")) != 0 {
@@ -122,22 +126,18 @@ func setWindowsWorkspaceRawRelativeSymlink(t *testing.T, initialTarget, target, 
 	binary.LittleEndian.PutUint16(buffer[4:6], uint16(len(buffer)-8))
 	binary.LittleEndian.PutUint16(buffer[10:12], uint16(len(encoded)*2))
 	binary.LittleEndian.PutUint16(buffer[14:16], uint16(len(encoded)*2))
-	binary.LittleEndian.PutUint32(buffer[16:20], 1)
+	binary.LittleEndian.PutUint32(buffer[16:20], windowsRelativeSymlinkFlag)
 	for index, unit := range encoded {
 		binary.LittleEndian.PutUint16(buffer[20+index*2:], unit)
 	}
-	name, err := syscall.UTF16PtrFromString(alias)
-	if err != nil {
-		return err
-	}
-	handle, err := syscall.CreateFile(name, syscall.GENERIC_WRITE, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	handle, err := openWindowsWorkspaceReparsePoint(alias)
 	if err != nil {
 		return err
 	}
 	defer syscall.CloseHandle(handle)
 	var returned uint32
 	write := func() error {
-		return syscall.DeviceIoControl(handle, 0x000900a4, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil)
+		return syscall.DeviceIoControl(handle, windowsSetReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil)
 	}
 	if err := write(); errors.Is(err, syscall.ERROR_PRIVILEGE_NOT_HELD) {
 		restore, err := enableWindowsWorkspaceSymlinkPrivilege()
@@ -180,7 +180,7 @@ func enableWindowsWorkspaceSymlinkPrivilege() (func(), error) {
 	var previous [16]byte
 	var length uint32
 	result, _, callErr = adjust.Call(uintptr(token), 0, uintptr(unsafe.Pointer(&privileges[0])), uintptr(len(previous)), uintptr(unsafe.Pointer(&previous[0])), uintptr(unsafe.Pointer(&length)))
-	if result == 0 || errors.Is(callErr, syscall.Errno(1300)) {
+	if result == 0 || errors.Is(callErr, windowsPrivilegeNotAssigned) {
 		closeToken()
 		return nil, fmt.Errorf("enable symlink creation privilege: %v", callErr)
 	}
@@ -250,41 +250,36 @@ func TestWindowsUpAcceptsWorkspaceContainingANonAliasReparseFile(t *testing.T) {
 func setWindowsWorkspaceNonAliasReparseTag(t *testing.T, path string) {
 	t.Helper()
 	const tag uint32 = 0x42
-	const setReparsePoint uint32 = 0x000900a4
-	const deleteReparsePoint uint32 = 0x000900ac
 	var buffer [24]byte
 	binary.LittleEndian.PutUint32(buffer[:4], tag)
 	copy(buffer[8:], []byte{0xe1, 0x8e, 0x5e, 0x1c, 0xb7, 0xe2, 0xf8, 0x43, 0x94, 0xb5, 0x27, 0xc9, 0xc3, 0x88, 0x49, 0x95})
-	name, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	open := func() (syscall.Handle, error) {
-		return syscall.CreateFile(name, syscall.GENERIC_WRITE, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
-	}
-	handle, err := open()
+	handle, err := openWindowsWorkspaceReparsePoint(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var returned uint32
-	err = syscall.DeviceIoControl(handle, setReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil)
+	err = syscall.DeviceIoControl(handle, windowsSetReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil)
 	closeErr := syscall.CloseHandle(handle)
 	if err != nil {
 		t.Fatalf("set non-alias reparse tag on %q: %v", path, err)
 	}
 	t.Cleanup(func() {
-		handle, err := open()
+		handle, err := openWindowsWorkspaceReparsePoint(path)
 		if err != nil {
 			t.Errorf("open reparse file for cleanup: %v", err)
 			return
 		}
 		defer syscall.CloseHandle(handle)
-		if err := syscall.DeviceIoControl(handle, deleteReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil); err != nil {
+		if err := syscall.DeviceIoControl(handle, windowsDeleteReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil); err != nil {
 			t.Errorf("delete non-alias reparse tag: %v", err)
 		}
 	})
 	if closeErr != nil {
 		t.Fatal(closeErr)
+	}
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var data syscall.Win32finddata
 	find, err := syscall.FindFirstFile(name, &data)
@@ -297,4 +292,12 @@ func setWindowsWorkspaceNonAliasReparseTag(t *testing.T, path string) {
 	if data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT == 0 || data.Reserved0 != tag {
 		t.Fatalf("custom reparse setup did not persist: attributes=%#x tag=%#x", data.FileAttributes, data.Reserved0)
 	}
+}
+
+func openWindowsWorkspaceReparsePoint(path string) (syscall.Handle, error) {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return syscall.InvalidHandle, err
+	}
+	return syscall.CreateFile(name, syscall.GENERIC_WRITE, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 }

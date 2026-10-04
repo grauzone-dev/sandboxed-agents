@@ -24,12 +24,12 @@ func NewFingerprint(name, group string, run process.Runner) *Fingerprint {
 
 func (fingerprint *Fingerprint) Print(ctx context.Context, output io.Writer) error {
 	var result bytes.Buffer
-	for _, key := range []struct{ fileType, algorithm string }{
+	for _, key := range []struct{ keyType, algorithm string }{
 		{"ed25519", "ssh-ed25519"},
 		{"ecdsa", "ecdsa-sha2-nistp256"},
 		{"rsa", "ssh-rsa"},
 	} {
-		path := "/etc/ssh/ssh_host_" + key.fileType + "_key.pub"
+		path := "/etc/ssh/ssh_host_" + key.keyType + "_key.pub"
 		var publicKey, diagnostic bytes.Buffer
 		status, err := fingerprint.run(ctx, process.Request{
 			Name: "podman", Args: []string{"exec", "--user=0:0", fingerprint.container, "cat", path},
@@ -41,7 +41,7 @@ func (fingerprint *Fingerprint) Print(ctx context.Context, output io.Writer) err
 		if status != 0 {
 			return fmt.Errorf(fingerprintPodmanFailedFormat, path, status, strings.TrimSpace(diagnostic.String()))
 		}
-		blob, ok := hostPublicKey(publicKey.String(), key.algorithm)
+		blob, ok := parseHostPublicKey(publicKey.String(), key.algorithm)
 		if !ok {
 			return fmt.Errorf(fingerprintInvalidKeyFormat, path)
 		}
@@ -52,7 +52,7 @@ func (fingerprint *Fingerprint) Print(ctx context.Context, output io.Writer) err
 	return err
 }
 
-func hostPublicKey(text, algorithm string) ([]byte, bool) {
+func parseHostPublicKey(text, algorithm string) ([]byte, bool) {
 	text = strings.TrimSpace(text)
 	if strings.ContainsAny(text, "\r\n") {
 		return nil, false

@@ -207,7 +207,7 @@ func TestFingerprintPrintsNothingWhenAnyHostKeyCannotBeRead(t *testing.T) {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
 				calls := shellOperationCalls(t, fixture, fakes.Calls("podman"))
-				if len(calls) != 10+index {
+				if len(calls) != len(shellResponses("sandbox-host"))+index+1 {
 					t.Fatalf("kept reading after failure: %v", calls)
 				}
 				assertNoSSH(t, fakes)

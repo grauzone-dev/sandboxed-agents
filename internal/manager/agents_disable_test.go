@@ -275,7 +275,7 @@ func TestDisableFailuresKeepHomeDataAndRejectUnexpectedIdentity(t *testing.T) {
 	}
 }
 
-func TestDisableFilesystemErrorsDoNotRemoveHomeData(t *testing.T) {
+func TestDisableInvalidSelectionAndFilesystemErrorsPreserveHomeData(t *testing.T) {
 	for _, setup := range []string{"invalid JSON", "null selection", "array selection", "invalid entry", "selection directory", "lock directory", "command directory"} {
 		t.Run(setup, func(t *testing.T) {
 			home := t.TempDir()

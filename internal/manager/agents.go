@@ -139,7 +139,7 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 			return err
 		}
 		if err := saveSelection(selectionPath, selection); err != nil {
-			return err
+			return fmt.Errorf("save agent selection: %w", err)
 		}
 	}
 	_, err = fmt.Fprintf(streams.Stdout, "Agent %s is enabled (version %s).\n", entry.Name, version)

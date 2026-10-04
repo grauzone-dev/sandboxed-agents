@@ -19,8 +19,11 @@ func Current(ctx context.Context, assetHash string, set toolchains.Set, run proc
 	if set.String() == "" {
 		return base.ID, true, nil
 	}
-	tag := Tag(assetHash, set)
-	exists, err = imageExists(ctx, tag, run, streams)
+	return currentToolchainImage(ctx, Tag(assetHash, set), base.ID, run, streams)
+}
+
+func currentToolchainImage(ctx context.Context, tag, baseID string, run process.Runner, streams process.Streams) (string, bool, error) {
+	exists, err := imageExists(ctx, tag, run, streams)
 	if err != nil || !exists {
 		return "", false, err
 	}
@@ -28,5 +31,5 @@ func Current(ctx context.Context, assetHash string, set toolchains.Set, run proc
 	if err != nil {
 		return "", false, err
 	}
-	return image.ID, image.Labels[BaseImageLabel] == base.ID, nil
+	return image.ID, image.Labels[BaseImageLabel] == baseID, nil
 }

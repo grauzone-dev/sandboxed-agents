@@ -28,14 +28,22 @@ type ResourceLimits struct {
 	limits []resourceLimit
 }
 
-func ParseUpOptions(args []string) (ResourceLimits, int, error) {
-	limits := ResourceLimits{limits: []resourceLimit{
+func defaultResourceLimits() ResourceLimits {
+	return ResourceLimits{limits: []resourceLimit{
 		{option: "--memory", label: MemoryLabel, value: "8589934592", parse: canonicalMemory},
 		{option: "--cpus", label: CPUsLabel, value: "4", parse: canonicalCPUs},
 		{option: "--pids-limit", label: PIDsLimitLabel, value: "2048", parse: canonicalPIDs},
 		{option: "--shm-size", label: ShmSizeLabel, value: "1073741824", parse: canonicalShmSize},
 	}}
-	portOption := resourceLimit{option: "--port", parse: canonicalSSHPort}
+}
+
+func portResourceLimit() resourceLimit {
+	return resourceLimit{option: "--port", label: SSHPortLabel, parse: canonicalSSHPort}
+}
+
+func ParseUpOptions(args []string) (ResourceLimits, int, error) {
+	limits := defaultResourceLimits()
+	portOption := portResourceLimit()
 	for index := 0; index < len(args); index++ {
 		option, value, inline := strings.Cut(args[index], "=")
 		var limit *resourceLimit
@@ -65,19 +73,48 @@ func ParseUpOptions(args []string) (ResourceLimits, int, error) {
 			}
 			value = args[index]
 		}
-		canonical, err := limit.parse(value)
-		if err != nil {
-			if limit == &portOption {
-				return ResourceLimits{}, 0, fmt.Errorf("invalid value %q for --port; use a whole number from 1 through 65535", value)
-			}
-			return ResourceLimits{}, 0, fmt.Errorf(limitsInvalidValueError, option, value)
+		if err := limit.set(value); err != nil {
+			return ResourceLimits{}, 0, err
 		}
-		limit.value, limit.given, limit.provided = canonical, value, true
 	}
 	port := 0
 	if portOption.provided {
 		port, _ = strconv.Atoi(portOption.value)
 	}
+	return limits, port, nil
+}
+
+func (limit *resourceLimit) set(value string) error {
+	canonical, err := limit.parse(value)
+	if err != nil {
+		if limit.option == "--port" {
+			return fmt.Errorf("invalid value %q for --port; use a whole number from 1 through 65535", value)
+		}
+		return fmt.Errorf(limitsInvalidValueError, limit.option, value)
+	}
+	limit.value, limit.given, limit.provided = canonical, value, true
+	return nil
+}
+
+func recordedResourceConfiguration(container string, labels map[string]string) (ResourceLimits, int, error) {
+	limits := defaultResourceLimits()
+	portOption := portResourceLimit()
+	fields := make([]*resourceLimit, 0, len(limits.limits)+1)
+	for i := range limits.limits {
+		fields = append(fields, &limits.limits[i])
+	}
+	fields = append(fields, &portOption)
+	for _, field := range fields {
+		name := strings.TrimPrefix(field.label, "io.github.sandboxed-agents.")
+		value, present := labels[field.label]
+		if !present || value == "" {
+			return ResourceLimits{}, 0, fmt.Errorf(updateInvalidConfigurationFormat, container, name)
+		}
+		if err := field.set(value); err != nil {
+			return ResourceLimits{}, 0, fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, container, name), err)
+		}
+	}
+	port, _ := strconv.Atoi(portOption.value)
 	return limits, port, nil
 }
 

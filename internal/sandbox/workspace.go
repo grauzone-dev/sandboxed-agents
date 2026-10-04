@@ -219,11 +219,11 @@ func (up *Up) checkWorkspace() error {
 	return fmt.Errorf(workspaceConflictError, recorded, up.workspaceHost, up.name, up.name)
 }
 
-func (up *Up) workspaceMount() string {
+func (configuration *containerConfiguration) workspaceMount() string {
 	var output bytes.Buffer
 	writer := csv.NewWriter(&output)
 	// The CSV readers of Go and Podman drop one carriage return before a line feed, so doubling it keeps the validated path intact.
-	source := strings.ReplaceAll(up.workspaceSource, "\r\n", "\r\r\n")
+	source := strings.ReplaceAll(configuration.workspaceSource, "\r\n", "\r\r\n")
 	_ = writer.Write([]string{"type=bind", "source=" + source, "target=/workspace"})
 	writer.Flush()
 	return strings.TrimSuffix(output.String(), "\n")

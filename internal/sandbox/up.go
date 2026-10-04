@@ -11,13 +11,10 @@ import (
 
 type Up struct {
 	*sandboxObjects
+	containerConfiguration
 	assetHash        string
-	limits           ResourceLimits
-	port             int
-	toolchains       toolchains.Set
 	agents           []string
 	withProvided     bool
-	workspaceSource  string
 	workspaceHost    string
 	workspaceOS      string
 	sshPortAvailable func(int) (bool, error)
@@ -37,7 +34,13 @@ func NewUp(name, group, assetHash string, options UpOptions, run process.Runner,
 	if available == nil {
 		available = sshPortAvailable
 	}
-	return &Up{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, limits: options.Limits, port: options.Port, toolchains: options.Toolchains, withProvided: options.WithProvided, agents: options.Agents, sshPortAvailable: available}
+	return &Up{
+		sandboxObjects: newSandboxObjects(name, group, run, streams),
+		containerConfiguration: containerConfiguration{
+			sandboxName: name, controllerGroup: group, limits: options.Limits, port: options.Port, toolchains: options.Toolchains,
+		},
+		assetHash: assetHash, withProvided: options.WithProvided, agents: options.Agents, sshPortAvailable: available,
+	}
 }
 
 func (up *Up) Apply(ctx context.Context) error {
@@ -108,31 +111,4 @@ func (up *Up) createSandbox(ctx context.Context) error {
 	}
 
 	return up.runPodman(ctx, up.createArguments(image)...)
-}
-
-func (up *Up) createArguments(image string) []string {
-	kind := "volume"
-	if up.workspaceSource != "" {
-		kind = "bind"
-	}
-	args := []string{
-		"create", "--name", up.container,
-		"--label", OwnerLabel + "=" + up.group,
-		"--label", NameLabel + "=" + up.name,
-		"--label", WorkspaceKindLabel + "=" + kind,
-		"--label", images.ToolchainsLabel + "=" + up.toolchains.String(),
-		"--label", fmt.Sprintf("%s=%d", SSHPortLabel, up.port),
-		"--publish", fmt.Sprintf("127.0.0.1:%d:22", up.port),
-		"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw",
-	}
-	args = append(args, up.limits.createArguments()...)
-	for _, volume := range up.volumes {
-		if up.workspaceSource != "" && volume.target == "/workspace" {
-			args = append(args, "--mount", up.workspaceMount())
-			continue
-		}
-		args = append(args, "--mount", "type=volume,source="+volume.name+",target="+volume.target)
-	}
-	args = append(args, image)
-	return args
 }

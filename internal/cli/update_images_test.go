@@ -82,12 +82,16 @@ func assertUpdateBuildsBeforeReplacement(t *testing.T, fakes *testutil.FakeProgr
 		t.Fatalf("renamed=%t builds=%v want selections=%v", renamed, builds, selections)
 	}
 	for index, selection := range selections {
-		tag, baseID := "localhost/sandboxed-agents:base-"+hash, ""
-		if selection != "" {
-			tag, baseID = "localhost/sandboxed-agents:toolchains-native-"+hash, "current-base"
-		}
+		tag, baseID := updateBuildReferences(hash, selection)
 		assertImageBuild(t, builds[index], hash, tag, selection, baseID)
 	}
+}
+
+func updateBuildReferences(hash, selection string) (string, string) {
+	if selection == "" {
+		return "localhost/sandboxed-agents:base-" + hash, ""
+	}
+	return "localhost/sandboxed-agents:toolchains-native-" + hash, "current-base"
 }
 
 func TestUpdateRebuildsAStaleToolchainImageEvenWhenItsIDMatchesTheSandbox(t *testing.T) {
@@ -206,10 +210,7 @@ func TestUpdateImageBuildFailuresLeaveTheSandboxUnchanged(t *testing.T) {
 			if len(builds) != 1 {
 				t.Fatalf("failed builds=%v", builds)
 			}
-			tag, baseID := "localhost/sandboxed-agents:base-"+hash, ""
-			if selection != "" {
-				tag, baseID = "localhost/sandboxed-agents:toolchains-native-"+hash, "current-base"
-			}
+			tag, baseID := updateBuildReferences(hash, selection)
 			assertImageBuild(t, builds[0], hash, tag, selection, baseID)
 			if len(fakes.Calls("ssh-keyscan")) != 0 {
 				t.Fatal("build failure probed SSH readiness")

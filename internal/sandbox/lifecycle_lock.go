@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
+	"github.com/grauzone-dev/sandboxed-agents/internal/filelock"
 )
 
 func LockLifecycle(hostOS, group, name string) (func(), error) {
@@ -45,10 +46,16 @@ func LockLifecycle(hostOS, group, name string) (func(), error) {
 		file.Close()
 		return nil, fmt.Errorf(lifecycleLockObjectFormat, path)
 	}
-	unlock, err := acquireLifecycleLock(file)
+	var unlock func()
+	for {
+		unlock, err = filelock.TryLock(file)
+		if !filelock.IsInterrupted(err) {
+			break
+		}
+	}
 	if err != nil {
 		file.Close()
-		if lifecycleLockBusy(err) {
+		if filelock.IsBusy(err) {
 			return nil, fmt.Errorf(lifecycleBusyFormat, name)
 		}
 		return nil, fmt.Errorf(lifecycleLockFailureFormat, name, err)

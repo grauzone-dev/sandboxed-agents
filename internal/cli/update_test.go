@@ -126,7 +126,7 @@ func TestUpdateAlreadyCurrentSandboxTouchesNoContainerOrSSHFiles(t *testing.T) {
 			if selection != "" {
 				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"current-image","Labels":{"io.github.sandboxed-agents.base-image":"current-base"}}]`})
 			}
-			fakes.Script("podman", responses...)
+			scriptUpdate(t, fakes, false, responses)
 			stdout, stderr, status := runCLI(t, "linux-preflight", "update", "agent01")
 			if status != 0 || stderr != "" || !strings.Contains(stdout, "already up to date") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
@@ -144,24 +144,47 @@ func TestUpdateAlreadyCurrentSandboxTouchesNoContainerOrSSHFiles(t *testing.T) {
 	}
 }
 
+func TestUpdateTreatsAMissingToolchainLabelAsNone(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		t.Run(host.name, func(t *testing.T) {
+			fakes, fixture := resourceLimitHost(t, host.windows)
+			responses := updateObjectResponses(t, true, "old-image", "", "")
+			responses = updateContainerLabel(t, responses, "toolchains", "", true)
+			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"current-base"}]`})
+			responses = append(responses, successfulRunningUpdateResponses()...)
+			scriptUpdate(t, fakes, host.windows, responses)
+			stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
+			if status != 0 || stderr != "" || !strings.Contains(stdout, "updated") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			create := assertUpdateCreatedFromImage(t, fakes, "current-base")
+			if !slices.Contains(create, "io.github.sandboxed-agents.toolchains=") {
+				t.Fatalf("missing toolchains did not become none: %v", create)
+			}
+		})
+	}
+}
+
+func updateContainerLabel(t *testing.T, responses []testutil.Response, field, value string, remove bool) []testutil.Response {
+	t.Helper()
+	return updateObjectLabels(t, responses, "sandboxed-agents.default.agent01", func(labels map[string]any) {
+		key := "io.github.sandboxed-agents." + field
+		if remove {
+			delete(labels, key)
+		} else {
+			labels[key] = value
+		}
+	})
+}
+
 func TestUpdateReportsMalformedRecordedConfigurationBeforeBuildingOrReplacing(t *testing.T) {
 	for _, field := range []string{"toolchains", "memory", "cpus", "pids-limit", "shm-size", "ssh-port", "workspace-kind"} {
 		t.Run(field, func(t *testing.T) {
 			fakes := linuxHost(t)
 			responses := updateObjectResponses(t, true, "old-image", "", "")
-			var records []map[string]any
-			if err := json.Unmarshal([]byte(responses[2].Stdout), &records); err != nil {
-				t.Fatal(err)
-			}
-			labels := records[0]["Config"].(map[string]any)["Labels"].(map[string]any)
-			labels["io.github.sandboxed-agents."+field] = "invalid-recorded-value"
-			data, err := json.Marshal(records)
-			if err != nil {
-				t.Fatal(err)
-			}
-			responses[2].Stdout = string(data)
+			responses = updateContainerLabel(t, responses, field, "invalid-recorded-value", false)
 			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
-			fakes.Script("podman", responses...)
+			scriptUpdate(t, fakes, false, responses)
 			_, stderr, status := runCLI(t, "linux-preflight", "update", "agent01")
 			if status == 0 || !strings.Contains(stderr, "sandboxed-agents.default.agent01") {
 				t.Fatalf("status=%d stderr=%q", status, stderr)
@@ -206,8 +229,7 @@ func TestUpdateMovesARunningSandboxToTheCurrentImageWithoutChangingItsConfigurat
 	)
 	responses = append(responses, make([]testutil.Response, 4)...)
 	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1.2.3\n"}, testutil.Response{})
-	fakes.Script("podman", responses...)
-	fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t)})
+	scriptUpdate(t, fakes, false, responses)
 	stdout, stderr, status := runCLI(t, "linux-preflight", "update", "agent01")
 	if status != 0 || stderr != "" || !strings.Contains(stdout, "updated") {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)

@@ -17,7 +17,7 @@ type Update struct {
 	assetHash   string
 	image       string
 	current     bool
-	replacement *Up
+	replacement containerConfiguration
 }
 
 func NewUpdate(name, group, assetHash string, run process.Runner, streams process.Streams) *Update {
@@ -32,10 +32,7 @@ func (update *Update) Prepare(ctx context.Context) error {
 		return fmt.Errorf(updateMissingImageIDFormat, update.container)
 	}
 	var set toolchains.Set
-	recorded, present := update.containerLabels[images.ToolchainsLabel]
-	if !present {
-		return fmt.Errorf(updateInvalidConfigurationFormat, update.container, "toolchain set")
-	}
+	recorded := update.containerLabels[images.ToolchainsLabel]
 	if recorded != "" {
 		var err error
 		set, err = toolchains.Parse(recorded)
@@ -65,66 +62,51 @@ func (update *Update) Prepare(ctx context.Context) error {
 			return err
 		}
 		if !current {
-			return fmt.Errorf(updateInvalidConfigurationFormat, update.container, "current image")
+			return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name)
 		}
 	}
 	update.image = image
 	return nil
 }
 
-func (update *Update) recordedConfiguration(set toolchains.Set) (*Up, error) {
-	var args []string
-	for _, field := range []string{"memory", "cpus", "pids-limit", "shm-size", "ssh-port"} {
-		value, ok := update.containerLabels["io.github.sandboxed-agents."+field]
-		if !ok || value == "" {
-			return nil, fmt.Errorf(updateInvalidConfigurationFormat, update.container, field)
-		}
-		option := field
-		if field == "ssh-port" {
-			option = "port"
-		}
-		if _, _, err := ParseUpOptions([]string{"--" + option, value}); err != nil {
-			return nil, fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, update.container, field), err)
-		}
-		args = append(args, "--"+option, value)
-	}
-	limits, port, err := ParseUpOptions(args)
+func (update *Update) recordedConfiguration(set toolchains.Set) (containerConfiguration, error) {
+	limits, port, err := recordedResourceConfiguration(update.container, update.containerLabels)
 	if err != nil {
-		return nil, err
+		return containerConfiguration{}, err
 	}
-	replacement := NewUp(update.name, update.group, update.assetHash, UpOptions{Limits: limits, Port: port, Toolchains: set}, update.run, update.streams)
+	replacement := containerConfiguration{sandboxName: update.name, controllerGroup: update.group, limits: limits, port: port, toolchains: set}
 	kind := update.containerLabels[WorkspaceKindLabel]
 	if kind != "volume" && kind != "bind" {
-		return nil, fmt.Errorf(updateInvalidConfigurationFormat, update.container, "workspace-kind")
+		return containerConfiguration{}, fmt.Errorf(updateInvalidConfigurationFormat, update.container, "workspace-kind")
 	}
 	if len(update.containerMounts) != len(volumeDefinitions) {
-		return nil, fmt.Errorf(updateInvalidMountsFormat, update.container)
+		return containerConfiguration{}, fmt.Errorf(updateInvalidMountsFormat, update.container)
 	}
 	for _, volume := range update.volumes {
 		var mounted *containerMount
 		for i := range update.containerMounts {
 			if update.containerMounts[i].Destination == volume.target {
 				if mounted != nil {
-					return nil, fmt.Errorf(updateInvalidMountsFormat, update.container)
+					return containerConfiguration{}, fmt.Errorf(updateInvalidMountsFormat, update.container)
 				}
 				mounted = &update.containerMounts[i]
 			}
 		}
 		if mounted == nil {
-			return nil, fmt.Errorf(updateInvalidMountsFormat, update.container)
+			return containerConfiguration{}, fmt.Errorf(updateInvalidMountsFormat, update.container)
 		}
 		if volume.target == "/workspace" && update.containerLabels[WorkspaceKindLabel] == "bind" {
 			if mounted.Type != "bind" || mounted.Source == "" {
-				return nil, fmt.Errorf(updateInvalidMountsFormat, update.container)
+				return containerConfiguration{}, fmt.Errorf(updateInvalidMountsFormat, update.container)
 			}
 			replacement.workspaceSource = mounted.Source
 			continue
 		}
 		if mounted.Type != "volume" || mounted.Name != volume.name {
-			return nil, fmt.Errorf(updateInvalidMountsFormat, update.container)
+			return containerConfiguration{}, fmt.Errorf(updateInvalidMountsFormat, update.container)
 		}
 		if !volume.exists {
-			return nil, fmt.Errorf(updateMissingVolumeFormat, volume.name)
+			return containerConfiguration{}, fmt.Errorf(updateMissingVolumeFormat, volume.name)
 		}
 	}
 	return replacement, nil
@@ -138,8 +120,7 @@ func (update *Update) Apply(ctx context.Context) error {
 	if err := update.runPodman(ctx, "rename", update.container, update.backup); err != nil {
 		return err
 	}
-	args := update.replacement.createArguments(update.image)
-	args = append(args[:len(args)-1], "--label", UpdateWasRunningLabel+"="+strconv.FormatBool(update.containerRunning), update.image)
+	args := update.replacement.createArguments(update.image, UpdateWasRunningLabel+"="+strconv.FormatBool(update.containerRunning))
 	if err := update.runPodman(ctx, args...); err != nil {
 		return err
 	}
@@ -164,4 +145,11 @@ func (update *Update) Apply(ctx context.Context) error {
 	}
 	_, err := fmt.Fprintln(update.streams.Stdout, fmt.Sprintf(updateSuccessFormat, update.name))
 	return err
+}
+
+func (update *Update) CheckInterruptedUpdate() error {
+	if update.backupExists {
+		return fmt.Errorf(updateInterruptedFormat, update.backup, update.name)
+	}
+	return nil
 }

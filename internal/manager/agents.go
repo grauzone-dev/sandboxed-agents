@@ -25,6 +25,10 @@ var agentIdentity = process.Identity{UID: 1000, GID: 1000}
 func (m *Manager) agents(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
 	var apply func() error
 	switch {
+	case len(args) > 0 && args[0] == "session-worker":
+		return m.runSessionWorker(ctx, args[1:], streams, run)
+	case len(args) > 0 && args[0] == "session":
+		return m.agentSession(ctx, args[1:], streams, run)
 	case len(args) > 0 && args[0] == "login":
 		return m.login(ctx, args[1:], streams, run)
 	case len(args) > 0 && args[0] == "check-enabled":
@@ -50,15 +54,9 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 	}
 	identity := m.options.User()
 	if identity.UID == 0 {
-		code, err := run(ctx, process.Request{Name: ExecutablePath, Args: append([]string{"agents"}, args...), User: &agentIdentity, Dir: "/", Env: agentEnvironment(m.options.Home), Streams: streams})
-		if err != nil {
-			return fmt.Errorf("start manager worker as agent: %w", err)
-		}
-		if code != 0 {
-			return fmt.Errorf("manager worker failed with exit status %d", code)
-		}
-		return nil
+		return m.forwardToAgentWorker(ctx, append([]string{"agents"}, args...), streams, run)
 	}
+
 	if identity != agentIdentity {
 		return errors.New(agentIdentityMessage)
 	}

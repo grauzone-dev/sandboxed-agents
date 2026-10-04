@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
@@ -33,7 +34,11 @@ func (m *Manager) runAgent(ctx context.Context, args []string, streams process.S
 	if _, enabled := selection[entry.Name]; !enabled {
 		return fmt.Errorf(agentNotEnabledFormat, entry.Name, args[0], entry.Name)
 	}
-	code, err := run(ctx, process.Request{Name: filepath.Join(m.options.Home, ".local", "bin", entry.Command), Args: args[2:], User: &agentIdentity, Dir: "/workspace", Env: agentEnvironment(m.options.Home), Streams: streams})
+	return m.executeAgent(ctx, entry, args[2:], agentEnvironment(m.options.Home), streams, run)
+}
+
+func (m *Manager) executeAgent(ctx context.Context, entry agentcatalog.Entry, args, environment []string, streams process.Streams, run process.Runner) error {
+	code, err := run(ctx, process.Request{Name: filepath.Join(m.options.Home, ".local", "bin", entry.Command), Args: args, User: &agentIdentity, Dir: "/workspace", Env: environment, Streams: streams})
 	if err != nil {
 		return fmt.Errorf(agentRunStartFormat, entry.Name, err)
 	}

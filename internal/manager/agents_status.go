@@ -20,16 +20,28 @@ func (m *Manager) agentStatus(ctx context.Context, entry agentcatalog.Entry, str
 	if err != nil {
 		return err
 	}
-	if _, enabled := selection[entry.Name]; !enabled {
-		_, err := fmt.Fprintf(streams.Stdout, "Agent %s is not enabled.\n", entry.Name)
-		return err
+	_, enabled := selection[entry.Name]
+	var version string
+	if enabled {
+		version, err = installedVersion(m.options.Home, entry.Install.Package)
+		if err != nil {
+			return err
+		}
 	}
-	version, err := installedVersion(m.options.Home, entry.Install.Package)
+	sessions, err := m.runningSessions(ctx, run)
 	if err != nil {
 		return err
 	}
+	state := agentStatusSessionStopped
+	if sessionRunning(sessions, entry.Name) {
+		state = agentStatusSessionRunning
+	}
+	if !enabled {
+		_, err := fmt.Fprintf(streams.Stdout, agentStatusNotEnabledFormat, entry.Name, state)
+		return err
+	}
 	signIn := m.signInState(ctx, entry, run)
-	_, err = fmt.Fprintf(streams.Stdout, "Agent %s is enabled (version %s).\nSign-in state: %s.\n", entry.Name, version, signIn)
+	_, err = fmt.Fprintf(streams.Stdout, agentStatusEnabledFormat, entry.Name, version, signIn, state)
 	return err
 }
 

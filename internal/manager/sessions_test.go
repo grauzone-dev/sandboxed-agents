@@ -12,10 +12,12 @@ import (
 
 func TestSessionsListReportsOutputFailure(t *testing.T) {
 	var stderr bytes.Buffer
-	app := manager.New("test-version", func(context.Context, process.Request) (int, error) {
-		t.Fatal("sessions list invoked a process")
-		return 1, nil
-	})
+	app := manager.NewWithOptions("test-version", func(_ context.Context, request process.Request) (int, error) {
+		if request.Name != "/usr/bin/tmux" {
+			t.Fatalf("unexpected session query: %+v", request)
+		}
+		return 0, nil
+	}, manager.Options{User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
 	code := app.Run(context.Background(), []string{"sessions", "list"}, process.Streams{
 		Stdout: sessionsFailingWriter{err: errors.New("session output unavailable")},
 		Stderr: &stderr,

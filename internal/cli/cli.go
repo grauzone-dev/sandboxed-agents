@@ -367,7 +367,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		group, err = controllergroup.CurrentGroup()
 		return err
 	}, Commands: []Command{
-		{Name: "agents", Commands: []Command{agentCommand("enable", &group, run, catalog), agentCommand("disable", &group, run, catalog), agentCommand("status", &group, run, catalog), runAgentCommand(&group, run, catalog), loginAgentCommand(&group, run, catalog)}},
+		{Name: "agents", Commands: []Command{agentCommand("enable", &group, run, catalog), agentCommand("disable", &group, run, catalog), agentCommand("status", &group, run, catalog), runAgentCommand(&group, run, catalog), sessionAgentCommand(&group, run, catalog), loginAgentCommand(&group, run, catalog)}},
 		withLifecycleLock(upCommand(assetHash, host, &group, run, check, catalog), host, &group),
 		withLifecycleLock(updateCommand(assetHash, &group, run, check), host, &group),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {

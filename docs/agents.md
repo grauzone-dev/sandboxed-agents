@@ -2,7 +2,7 @@
 
 An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there, and `sandboxed-agents agents login NAME AGENT [WORKFLOW]` runs one of its login workflows there. `sandboxed-agents agents disable NAME AGENT` removes the agent's command and its record and keeps its credentials and cached data. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT`, `agents disable NAME AGENT`, and `agents status NAME AGENT`, which take no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, and `agents run NAME AGENT [ARG...]`, which runs an enabled agent once.
+This page covers `agents enable NAME AGENT`, `agents disable NAME AGENT`, and `agents status NAME AGENT`, which take no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, `agents run NAME AGENT [ARG...]`, which runs an enabled agent once, and `agents session NAME AGENT [--stop]`, which keeps an enabled agent running in a persistent agent session.
 
 ## Agent catalog
 
@@ -70,7 +70,7 @@ When the agent is not enabled, `agents disable` changes nothing, prints `Agent A
 
 If removing the command or writing the selection fails, `agents disable` reports the failure and exits with status 1. The two steps are not undone together: when writing the selection fails after the command was removed, the agent stays in the selection without its command. Run `agents disable` again to finish the removal.
 
-`agents disable` does not check for a running agent session of the agent; agent sessions are not part of this version. Refusing while a session runs, and `--force`, come with #46.
+`agents disable` does not check for a running [agent session](#keep-an-agent-running-in-a-session) of the agent. Refusing while a session runs, and `--force`, come with #46.
 
 ## How the request reaches the manager
 
@@ -108,6 +108,8 @@ On Windows, both calls also name the selected Podman machine with `--connection`
 The manager serializes changes to the agent installations with one lock, the file `/home/agent/.local/state/sandboxed-agents/manager.lock` in the home volume. It is an advisory lock held through the operating system, so the operating system releases it when the process that holds it ends, also after a crash.
 
 `agents enable` and `agents disable` hold the lock from before they read the selection until their change is complete. One exception keeps `agents disable` from creating files: when the lock file does not exist yet, it first reads the selection without the lock, and if the agent is not listed there, it reports that nothing was to do and stops. A second `agents enable` or `agents disable` that takes the lock on the same sandbox, for the same or another agent, waits until the first has released it. Two concurrent `agents enable` calls for different agents therefore leave both agents in the selection.
+
+Starting an [agent session](#keep-an-agent-running-in-a-session) and ending one with `agents session NAME AGENT --stop` take the same lock. A session start or `--stop` issued while an installation change holds it does not run until the lock is released. Attaching to a running session takes no lock.
 
 ## Enable agents with `up`
 
@@ -147,14 +149,22 @@ sandboxed-agents agents status NAME AGENT
 
 `NAME` is the sandbox and `AGENT` is a name from the [agent catalog](#agent-catalog). The sandbox must be running. The request reaches the manager as for `agents enable`, with `agents status AGENT` in place of `agents enable AGENT`.
 
-For an enabled agent, it prints the installed version and the sign-in state:
+For an enabled agent, it prints the installed version, the sign-in state, and whether an [agent session](#keep-an-agent-running-in-a-session) of the agent is running:
 
 ```text
 Agent claude is enabled (version 1.2.3).
 Sign-in state: signed in.
+Agent session: running.
 ```
 
-The sign-in state is `signed in`, `not signed in`, or `unknown`. For an agent that is not enabled, it prints only `Agent AGENT is not enabled.` and runs nothing of the agent.
+The sign-in state is `signed in`, `not signed in`, or `unknown`. The session field is `running` while the agent runs in its session and `not running` otherwise; the manager reads it from the tmux server of `agent`, as for the [session query](#session-query). For an agent that is not enabled, it prints only these two lines and runs nothing of the agent:
+
+```text
+Agent claude is not enabled.
+Agent session: not running.
+```
+
+The session field of an agent that is not enabled comes from the same query, so it reads `running` when the agent's session still runs after `agents disable`. When the manager cannot read the sessions, `agents status` reports the failure and exits with status 1.
 
 The sign-in state comes from the agent's status probe in the catalog. The manager's worker runs the installed command `/home/agent/.local/bin/COMMAND` with the probe's arguments as the user `agent`, never as root, and with the same fixed environment as an installation. It reads the probe's standard output and does not show it; the probe's standard error is discarded. When the output is one JSON object whose field named by the probe is `true`, the state is `signed in`; when it is `false`, the state is `not signed in`. This holds whatever status the command exits with. The state is `unknown` when:
 
@@ -167,7 +177,7 @@ The probe runs in a process group of its own. When the 30 seconds run out, the m
 
 `unknown` means only that the manager could not tell; it says nothing about whether the agent is signed in. The report shows what the agent's own command answered at the moment of the call.
 
-`agents status` exits with status 0 whenever it can report, whatever it reports: also for an agent that is not enabled, not signed in, or in the `unknown` state. It changes neither the installation nor the agent selection, and for an agent that is not enabled it writes nothing to the home volume. The report contains no pin and does not say whether an agent session is running.
+`agents status` exits with status 0 whenever it can report, whatever it reports: also for an agent that is not enabled, not signed in, or in the `unknown` state. It changes neither the installation nor the agent selection, and for an agent that is not enabled it writes nothing to the home volume. The report contains no pin.
 
 `agents status` refuses in the same cases and in the same order as `agents enable` ([Refusals](#refusals)), and reports no state of the agent then.
 
@@ -258,6 +268,63 @@ The agent runs as `agent`, UID and GID 1000, in `/workspace`, with a fixed envir
 
 An agent selection that cannot be read or is not a valid JSON object is refused as well. [How the request reaches the manager](#how-the-request-reaches-the-manager) describes the Podman call.
 
+## Keep an agent running in a session
+
+```sh
+sandboxed-agents agents session NAME AGENT
+sandboxed-agents agents session NAME AGENT --stop
+```
+
+`NAME` is the sandbox and `AGENT` an agent enabled in it. The sandbox must be running.
+
+Without `--stop`, `agents session` starts a persistent agent session for the agent and attaches your terminal to it. The session is a tmux session named `sandboxed-agents-AGENT`. It lives on a tmux server of its own, with the socket name `sandboxed-agents`, which reads no tmux configuration file. The session's first window does not run the agent directly: it runs the manager from the image, which starts the agent's command `/home/agent/.local/bin/COMMAND` from the catalog as `agent`, UID and GID 1000, with `/workspace` as its working directory, and waits for it. When a session of the agent is already running, `agents session` attaches to it and starts no second one, also when you call it from another terminal while the first is still attached.
+
+Detaching from tmux with its default key binding Ctrl-b d, or closing the terminal leaves the agent running in its session. The next `agents session NAME AGENT` attaches to it again.
+
+A session ends with its agent. As soon as the agent's process exits, whatever its exit status, the manager in the first window ends the whole tmux session, also when you opened further windows in it, so a running session always means a running agent. It ends the session in the same way when the agent's command cannot start. The next `agents session NAME AGENT` then starts a fresh session.
+
+Starting a session and attaching to one need an interactive terminal on standard input and standard output. Without one, `agents session` exits with status 1, starts no session, and attaches to none, whether or not a session is running. Starting a session without a terminal is not part of this version. When the call into the sandbox cannot run or ends with a non-zero status, `agents session` reports it and exits with status 1.
+
+### End a session
+
+`agents session NAME AGENT --stop` ends the agent's session, which ends the agent running in it. It prints `Ended the agent session of AGENT.` and exits with status 0. When no session of the agent is running, and also when the agent is not enabled, it ends no session, prints `No agent session of AGENT is running; nothing to do.`, and exits with status 0. The same holds when the agent exits on its own while `--stop` is ending its session. `--stop` needs no terminal, so a script can call it.
+
+### Identity
+
+The tmux server, the session, and the agent in it run as the user `agent`, UID and GID 1000. Starting a session, attaching to it, and `--stop` all address the tmux server of `agent`. The executable checks the names and the sandbox, and makes the `version` check as container root, as for [`agents enable`](#how-the-request-reaches-the-manager), to find out whether the manager answers. It then starts the manager as `agent`. For `--stop` the call is:
+
+```sh
+podman exec --user=1000:1000 --workdir=/workspace --env HOME=/home/agent sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents session NAME AGENT --stop
+```
+
+Without `--stop`, the executable first asks the manager whether the agent is enabled, as `agents login` does, then checks for the terminal, and makes the same call without `--stop` and with `--interactive --tty`. On Windows, every call also names the [selected Podman machine](sandboxes.md#target-on-windows) with `--connection`. The manager refuses `agents session` under any identity other than UID and GID 1000, and checks again that the agent is enabled and, without `--stop`, that it has a terminal. It never starts a session or an agent as container root.
+
+`--stop` holds the [manager lock](#manager-lock) while it ends the session. Starting a session holds it until the new session runs and releases it before attaching. Attaching to a session that is already running takes no lock.
+
+### Session query
+
+The manager's query for the running sessions of a sandbox, the call `stop`, `restart`, and `remove` use for their session guard ([Running agent sessions](sandboxes.md#running-agent-sessions)), answers with every running agent session of the sandbox, and with an empty list when none runs:
+
+```sh
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+```
+
+The executable addresses the manager as container root for this query, as for every administrative call. The manager, called as root, starts itself again as `agent`, UID and GID 1000, and that process reads the sessions from the tmux server of `agent`, not from a tmux server of root, which would always be empty. Each element names the session, `sandboxed-agents-AGENT`, and its agent, for example `[{"name":"sandboxed-agents-claude","agent":"claude"}]`. Sessions on that server whose names do not start with `sandboxed-agents-` are not listed, and when no tmux server of `agent` runs, the answer is `[]`. `stop`, `restart`, and `remove` therefore refuse on a sandbox with a session started by `agents session` unless `--force` is given. The query fails when tmux cannot be started, does not answer within 5 seconds, or fails for another reason, and when a session name names an agent outside the catalog or appears twice. The commands that sent the query then treat the manager as not answering.
+
+### Session refusals
+
+`agents session` checks the names, the sandbox, and the manager in the [order of checks](development.md#order-of-checks) and reports the first failure. In each case it exits with status 1 and starts no session:
+
+| Step | Refusal |
+| --- | --- |
+| 1. Usage and names | A usage error, an invalid sandbox name, or an unknown agent name, which lists the valid agent names. None of these calls Podman. |
+| 3. Sandbox existence | An unknown sandbox. A sandbox of which only volumes remain is refused with a message naming `sandboxed-agents up NAME`, which adopts the volumes. |
+| 4. Owner | The container, one of the volumes, or the backup container has a missing or different owner label. The message names each such Podman object and points to Podman. |
+| 5. Interrupted update | The message names `sandboxed-agents update NAME`. |
+| 6. Running state | The sandbox is stopped. The message names `sandboxed-agents start NAME`, also when the agent is not enabled there, and nothing starts on its own. |
+| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step, also with `--stop` and without a terminal. Without `--stop`, the agent is not enabled; the message names `sandboxed-agents agents enable NAME AGENT`. |
+| 8. Terminal | No interactive terminal, without `--stop`. This is reported only when the manager answers and the agent is enabled. |
+
 ## Catalog data format
 
 The catalog is the file `internal/agentcatalog/catalog.json` in the repository. The host executable `sandboxed-agents` and the manager `sandboxed-agents-manager` both embed it and read it through the same Go types in `internal/agentcatalog` (ADR-0001). The host uses it to check agent names before any Podman call; the manager uses it to install and to run status probes.
@@ -328,10 +395,15 @@ Offline tests cover the behavior on this page as follows ([Test seams](developme
 - the `AGENTS` column of `list` against a fake `podman`: names, `none`, a stopped sandbox, unusable or failed answers, the 5-second bound, the Windows target, and `agents enable` followed by `list` with a fifth catalog entry;
 - the manager's `agents list` query: a missing and a written selection, the worker started as UID and GID 1000, a refused identity, and invalid selection files left unchanged;
 - `agents login` at the CLI boundary against a fake `podman`, on the Linux and the Windows target, including the name checks before any Podman call, the order of checks up to the missing terminal, the arguments and identity of each call into the sandbox, and the exit status 0 or 1. For terminal detection these tests give the executable a native pseudo-terminal on Linux and the native console on Windows, and replace standard input or standard output with a non-terminal file to check the refusal. The terminal is local to the test; the fake `podman` behind it starts no sandbox and no workflow;
-- the manager's workflow selection with injected process functions: the login message before the workflow, the command and arguments from the catalog, and the requested UID and GID 1000, with a test that fails when the workflow would start as container root.
+- the manager's workflow selection with injected process functions: the login message before the workflow, the command and arguments from the catalog, and the requested UID and GID 1000, with a test that fails when the workflow would start as container root;
+- `agents session` and `agents session --stop` at the CLI boundary against a fake `podman`, on the Linux and the Windows target: usage errors and unknown agent names before any Podman call, `--help` without Podman, the refusals in their order up to the missing terminal, a terminal required on both standard input and standard output, `--stop` without a terminal and without asking whether the agent is enabled, the arguments of each call into the sandbox, the terminal passed through, and the exit status 1 for any non-zero status of the call;
+- the manager's `agents session` with injected process functions: a start, a second call that attaches to the running session and starts no second one, a fresh session after the agent exits, `--stop` without a terminal, repeated, and on an agent that is not enabled, a `--stop` that reports nothing to do when the agent exits between the session query and the end of the session, a failed or unlaunchable tmux start, attach, or stop reported with exit status 1, refusals of root and of other identities, of an agent that is not enabled, and of a missing terminal, none of which starts tmux, and a session start and a `--stop` that wait while an installation holds the manager lock;
+- the manager process in the session's first window with injected process functions: it refuses container root and a GID other than 1000 without starting tmux. Otherwise it starts the agent's command as UID and GID 1000 in `/workspace`, without arguments, and keeps the `TERM` that the manager process receives, and after the agent exits with status 0, exits with another status, cannot start, or is canceled, it asks tmux exactly once to kill the session `=sandboxed-agents-AGENT` by its exact name. That cleanup runs under a context of its own, bounded to 5 seconds, which a canceled request does not cancel. The tests check this request to tmux; that tmux then ends every window of the session is tmux's own behavior and is not tested;
+- the manager's session query with injected process functions: called as root, it starts only its worker as UID and GID 1000, which queries the tmux server of `agent`, and a test fails when the query addresses another user; no tmux server counts as no session, while a refused connection, a failed or timed-out query, an unknown agent, and a duplicate session make the query fail;
+- the session field of `agents status` in the manager with injected process functions: `running` while a session runs, `not running` after its agent exits, `not running` for an agent that is not enabled, and `running` for an agent that was disabled while its session still runs, without starting the agent's command.
 
 No test covers the line that names a removed pin, which comes with pins in #43, or a failure while writing the selection after the command was removed.
 
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
-The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, starts a real container, runs a real agent's status probe, removes an agent from a real sandbox, or signs in to an agent. Nothing on this page has been confirmed on a live host. One real login per agent is a manual check that comes with #64. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.
+The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, starts a real container, runs a real agent's status probe, removes an agent from a real sandbox, signs in to an agent, or starts a real tmux session. Nothing on this page has been confirmed on a live host. One real login per agent is a manual check that comes with #64. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.

@@ -47,7 +47,7 @@ func NewWithOptions(version string, run process.Runner, options Options) *Manage
 		options.User = func() process.Identity { return process.Identity{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())} }
 	}
 	m := &Manager{version: version, run: run, commands: make(map[string]Command), options: options}
-	m.Register("sessions", listSessions)
+	m.Register("sessions", m.listSessions)
 	m.Register("agents", m.agents)
 	m.Register("integrations", runIntegrationWorkflow)
 	m.Register("ssh", sshServer(options.SSHStateDirectory))

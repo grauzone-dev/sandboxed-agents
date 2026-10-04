@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -139,24 +138,6 @@ func TestAgentLoginReportsTheEarliestFailureAndStartsNoWorkflow(t *testing.T) {
 	}
 }
 
-func withAgentLoginTerminal(t *testing.T, action func()) {
-	t.Helper()
-	input := shellTerminal(t)
-	output := input
-	if runtime.GOOS == "windows" {
-		var err error
-		output, err = os.OpenFile("CONOUT$", os.O_RDWR, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { output.Close() })
-	}
-	originalInput, originalOutput := os.Stdin, os.Stdout
-	os.Stdin, os.Stdout = input, output
-	defer func() { os.Stdin, os.Stdout = originalInput, originalOutput }()
-	action()
-}
-
 func TestAgentLoginForwardsInteractiveWorkflowAndNormalizesExitStatus(t *testing.T) {
 	for _, test := range []struct{ agent, workflow string }{
 		{"copilot", ""}, {"copilot", "github"}, {"claude", "subscription"}, {"claude", "console"}, {"codex", "chatgpt"}, {"codex", "api-key"}, {"opencode", ""}, {"opencode", "provider"},
@@ -174,7 +155,7 @@ func TestAgentLoginForwardsInteractiveWorkflowAndNormalizesExitStatus(t *testing
 				}
 				var stdout, stderr bytes.Buffer
 				status := -1
-				withAgentLoginTerminal(t, func() {
+				withInteractiveTerminal(t, func() {
 					run := func(ctx context.Context, request process.Request) (int, error) {
 						if slices.Contains(request.Args, "login") {
 							if request.Streams.Stdin != os.Stdin || request.Streams.Stdout != os.Stdout || request.Streams.Stderr != &stderr {
@@ -223,7 +204,7 @@ func TestAgentLoginNeedsBothTerminalInputAndOutput(t *testing.T) {
 			fakes.Script("podman", responses...)
 			var stdout, stderr bytes.Buffer
 			status := -1
-			withAgentLoginTerminal(t, func() {
+			withInteractiveTerminal(t, func() {
 				pipe, err := os.Open(os.DevNull)
 				if err != nil {
 					t.Fatal(err)
@@ -263,7 +244,7 @@ func TestAgentLoginUsesSelectedWindowsTargetAndControllerGroup(t *testing.T) {
 	fakes.Script("podman", responses...)
 	var stderr bytes.Buffer
 	status := -1
-	withAgentLoginTerminal(t, func() {
+	withInteractiveTerminal(t, func() {
 		status = cli.RunWithWindowsHost([]string{"agents", "login", "agent01", "copilot"}, os.Stdout, &stderr, "test", "assets", platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true})
 	})
 	if status != 0 || stderr.Len() != 0 {
@@ -306,7 +287,7 @@ func TestAgentLoginHandlesAdditionalAndUndeliveredCatalogEntries(t *testing.T) {
 				fakes.Script("podman", responses...)
 			}
 			status := -1
-			withAgentLoginTerminal(t, func() {
+			withInteractiveTerminal(t, func() {
 				status = cli.RunWithCatalog([]string{"agents", "login", "agent01", "fifth"}, os.Stdout, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run}, catalog)
 			})
 			calls := fakes.Calls("podman")
@@ -372,7 +353,7 @@ func TestAgentLoginRejectsSuppliedOutputThatIsNotATerminal(t *testing.T) {
 				output = file
 			}
 			status := -1
-			withAgentLoginTerminal(t, func() {
+			withInteractiveTerminal(t, func() {
 				status = cli.RunWithHost([]string{"agents", "login", "agent01", "copilot"}, output, &stderr, "test", "assets", preflight.Host{Platform: "linux", Run: platform.Run})
 			})
 			if status != 1 || !strings.Contains(stderr.String(), "interactive terminal") || len(fakes.Calls("podman")) != len(responses) {

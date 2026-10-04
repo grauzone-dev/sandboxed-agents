@@ -25,6 +25,8 @@ var agentIdentity = process.Identity{UID: 1000, GID: 1000}
 func (m *Manager) agents(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
 	var apply func() error
 	switch {
+	case len(args) > 0 && args[0] == "run":
+		return m.runAgent(ctx, args[1:], streams, run)
 	case len(args) == 1 && args[0] == "list":
 		apply = func() error { return m.listAgents(streams.Stdout) }
 	case len(args) == 2 && args[0] == "enable":

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -85,6 +86,10 @@ func (m *Manager) Run(ctx context.Context, args []string, streams process.Stream
 		return 1
 	}
 	if err := command(ctx, args[1:], streams, m.run); err != nil {
+		var status agentExitStatus
+		if errors.As(err, &status) {
+			return int(status)
+		}
 		fmt.Fprintln(streams.Stderr, err)
 		return 1
 	}

@@ -2,7 +2,7 @@
 
 An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT`, which takes no options, `up NAME --agents LIST`, which enables agents as part of `up`, and the `AGENTS` column of `list`.
+This page covers `agents enable NAME AGENT`, which takes no options, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, and `agents run NAME AGENT [ARG...]`, which runs an enabled agent once.
 
 ## Agent catalog
 
@@ -74,6 +74,14 @@ The manager does not install the agent as root. It starts its own trusted worker
 
 While the manager runs as root, it starts no program and no script from the home volume or the workspace, and it takes no command or argument from data stored there. A selection file or an npm configuration in the home volume that names a command can only make that command run as UID and GID 1000.
 
+For `agents run`, the executable makes the same `version` check as root and then starts the manager directly as `agent`, with `--interactive` and without `--tty`:
+
+```sh
+podman exec --interactive --user=1000:1000 --workdir=/workspace --env HOME=/home/agent sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents run NAME AGENT [ARG...]
+```
+
+On Windows, both calls also name the selected Podman machine with `--connection`. The manager refuses any identity other than UID and GID 1000 before it reads the home volume or starts a process. `NAME` reaches it only for the recovery command in its not-enabled message. It reads the agent selection and starts `/home/agent/.local/bin/COMMAND` with an explicit request for UID and GID 1000, in `/workspace`, with the same fixed environment as the worker above. It takes no manager lock. The 30-second limit applies only to the `version` check, not to the run.
+
 ### Manager lock
 
 The manager serializes changes to the agent installations with one lock, the file `/home/agent/.local/state/sandboxed-agents/manager.lock` in the home volume. It is an advisory lock held through the operating system, so the operating system releases it when the process that holds it ends, also after a crash.
@@ -127,6 +135,30 @@ This version has no `check NAME` yet; the check of one sandbox comes with #20. U
 
 An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. If npm or another step of the installation fails, `agents enable` reports the failure, leaves the selection unchanged, and exits with status 1.
 
+## Run an agent
+
+```sh
+sandboxed-agents agents run NAME AGENT [ARG...]
+```
+
+`agents run` starts the enabled agent `AGENT` once in the running sandbox `NAME` and ends when the agent exits. Every `ARG` reaches the agent unchanged and in order, including `--help` and other arguments that start with `-`: `agents run` has no options and no help of its own. `sandboxed-agents agents run agent01 codex --help`, for example, prints the help of Codex.
+
+The agent runs as `agent`, UID and GID 1000, in `/workspace`, with a fixed environment, so variables from your host environment do not reach it. `agents run` allocates no terminal. Standard input, standard output, and standard error stay three separate streams whose bytes pass through unchanged, so a script can pipe input into the agent and redirect its output and errors separately.
+
+`agents run` exits with the agent's exit status. When it refuses or cannot start the agent, it exits with status 1. An agent can exit with status 1 itself, so the status alone does not tell the two apart.
+
+`agents run` checks the names, the sandbox, and the manager in the same [order](#refusals) as `agents enable`, and starts no agent when a check fails. It starts, updates, and repairs nothing on its own. An owner conflict names the Podman objects concerned, and these refusals name the next step:
+
+| Case | Next step |
+| --- | --- |
+| Only the volumes of the sandbox remain | `sandboxed-agents up NAME` |
+| An update was interrupted | `sandboxed-agents update NAME` |
+| The sandbox is stopped | `sandboxed-agents start NAME` |
+| The manager does not answer | `sandboxed-agents check NAME` for diagnosis ([comes with #20](#refusals)), then `sandboxed-agents restart NAME` |
+| The agent is not enabled in the sandbox | `sandboxed-agents agents enable NAME AGENT` |
+
+An agent selection that cannot be read or is not a valid JSON object is refused as well. [How the request reaches the manager](#how-the-request-reaches-the-manager) describes the Podman call.
+
 ## Catalog data format
 
 The catalog is the file `internal/agentcatalog/catalog.json` in the repository. The host executable `sandboxed-agents` and the manager `sandboxed-agents-manager` both embed it and read it through the same Go types in `internal/agentcatalog` (ADR-0001). The host uses it to check agent names before any Podman call; the manager uses it to install.
@@ -179,6 +211,7 @@ A further install method is a new `kind`. Adding one takes a Go type for the fie
 
 Offline tests cover the behavior on this page ([Test seams](development.md#test-seams)):
 
+- `agents run` at the CLI boundary and in the manager ([Agent runs](development.md#test-seams));
 - `agents enable` at the CLI boundary against a fake `podman`, on the Linux and the Windows target, including the order of checks and a fifth catalog entry;
 - the manager's catalog reading, installation, selection handling, and lock with injected process functions. These tests check the identity and arguments each process is requested with, including two concurrent calls and a failed installation;
 - a selection in a temporary home directory that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` runs no installation. The test does not stop or start a real container;

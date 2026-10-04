@@ -1,8 +1,8 @@
 # Agents
 
-An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
+An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there, and `sandboxed-agents agents login NAME AGENT [WORKFLOW]` runs one of its login workflows there. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT` and `agents status NAME AGENT`, which take no options, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, and `agents run NAME AGENT [ARG...]`, which runs an enabled agent once.
+This page covers `agents enable NAME AGENT` and `agents status NAME AGENT`, which take no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, and `agents run NAME AGENT [ARG...]`, which runs an enabled agent once.
 
 ## Agent catalog
 
@@ -15,7 +15,7 @@ The catalog lists the agents that `sandboxed-agents` can install. It is data emb
 | `codex` | Codex CLI | `@openai/codex` | `codex` | `chatgpt`, `api-key` | [Codex CLI reference](https://developers.openai.com/codex/cli/reference/) |
 | `opencode` | OpenCode | `opencode-ai` | `opencode` | `provider` | [OpenCode CLI](https://opencode.ai/docs/cli/) |
 
-Each login workflow names the arguments passed to the agent's own command to sign in. No command runs them yet; signing in comes with #41.
+Each login workflow names the arguments passed to the agent's own command to sign in. [`agents login`](#sign-in-to-an-agent) runs them.
 
 | Agent | Workflow | Runs | Signs in with |
 | --- | --- | --- | --- |
@@ -150,18 +150,64 @@ The probe runs in a process group of its own. When the 30 seconds run out, the m
 
 `agents status` refuses in the same cases and in the same order as `agents enable` ([Refusals](#refusals)), and reports no state of the agent then.
 
+## Sign in to an agent
+
+```sh
+sandboxed-agents agents login NAME AGENT [WORKFLOW]
+```
+
+`NAME` is the sandbox, `AGENT` an agent enabled in it, and `WORKFLOW` one of the agent's [login workflows](#agent-catalog). `WORKFLOW` may be left out for an agent with one login workflow, `copilot` and `opencode`, and is required for an agent with more, `claude` and `codex`. The command needs a running sandbox and an interactive terminal.
+
+```sh
+sandboxed-agents agents login dev copilot
+sandboxed-agents agents login dev claude console
+```
+
+The executable checks the agent and workflow names against its embedded catalog before it calls Podman, and resolves an omitted workflow name to the agent's only workflow. It then runs the sandbox checks of `agents enable`. To find out whether the manager answers, it sends the administrative session query as container root, the same call `remove` uses ([Running agent sessions](sandboxes.md#running-agent-sessions)):
+
+```sh
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager sessions list
+```
+
+The manager answers when this call exits with status 0 within 30 seconds and prints a valid JSON array of sessions. Only then does the executable ask the manager whether the agent is enabled, as `agent`:
+
+```sh
+podman exec --user=1000:1000 --env HOME=/home/agent sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents check-enabled AGENT
+```
+
+The manager prints `true` or `false`. A call that cannot be run, exits with a non-zero status, does not finish within 30 seconds, or prints any other answer counts as a manager that does not answer, and the command names `check NAME` and `restart NAME` as for a failed session query. When the agent is enabled, the executable checks that its standard input and standard output are a terminal, and then runs the workflow request in an interactive `podman exec` with a terminal:
+
+```sh
+podman exec --user=1000:1000 --env HOME=/home/agent -it --env SANDBOXED_AGENTS_SANDBOX=NAME sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents login AGENT WORKFLOW
+```
+
+`SANDBOXED_AGENTS_SANDBOX` tells the manager the sandbox name only so that its own refusal of an agent that is not enabled can name `sandboxed-agents agents enable NAME AGENT`.
+
+On Windows, all three calls also name the [selected Podman machine](sandboxes.md#target-on-windows) with `--connection`.
+
+The manager prints the agent's login message from the catalog, then starts the agent's command `/home/agent/.local/bin/COMMAND` with the workflow's arguments, for example `copilot login --device-code`. The message appears only after every check has passed and directly before the workflow starts. The workflow uses your terminal, so device codes, links, prompts, and API keys pass between you and the agent's own command.
+
+`agents login` exits with status 0 when the workflow ended with status 0, and with status 1 when it ended with any other status or could not start; it does not pass the workflow's status through. It does not check afterwards whether the agent is signed in; [`agents status`](#show-an-agents-status) reports the sign-in state.
+
+### Identity and credentials
+
+Only the session query runs as container root. The question whether the agent is enabled and the workflow itself run under the identity of `agent`, UID and GID 1000: the executable starts the manager for them with `--user=1000:1000`, and the manager refuses either request under any other identity. The manager starts the agent's command with UID and GID 1000 stated explicitly, in `/home/agent`, with the fixed environment of the installation worker (`HOME`, `USER`, `LOGNAME`, `SHELL`, and a `PATH` that starts with `/home/agent/.local/bin`) instead of the caller's. The only variable it keeps from the `podman exec` call is a non-empty `TERM`, so that the agent's command can drive your terminal. No part of a login workflow runs as container root (ADR-0006).
+
+The agent's command decides where it stores what you sign in with. Because its home directory `/home/agent` is the sandbox's home volume, files it writes there stay in that volume. They survive `stop`, `start`, `restart`, and `remove NAME` without `--volumes`, and every agent in the sandbox can read them. `remove NAME --volumes` deletes them. The executable reads, copies, and stores no credential on the host.
+
 ## Refusals
 
-`agents enable` and `agents status` share these refusals. In each case the command exits with status 1: `agents enable` installs nothing, and `agents status` reports no state of the agent. When several apply, the command reports the first in the [order of checks](development.md#order-of-checks):
+`agents enable`, `agents status`, and `agents login` share these refusals. In each case the command exits with status 1: `agents enable` installs nothing, `agents status` reports no state of the agent, and `agents login` starts no workflow and prints no login message. When several apply, the command reports the first in the [order of checks](development.md#order-of-checks):
 
 | Step | Refusal |
 | --- | --- |
-| 1. Usage and names | An invalid controller group, a usage error, or an invalid sandbox name. An unknown agent name lists the valid agent names. A catalog name whose agent is not delivered yet counts as unknown and is not listed; in this version all four agents are delivered. None of these calls Podman. |
+| 1. Usage and names | An invalid controller group, a usage error, or an invalid sandbox name. An unknown agent name lists the valid agent names. A catalog name whose agent is not delivered yet counts as unknown and is not listed; in this version all four agents are delivered. For `agents login`, a missing workflow name for an agent with more than one login workflow and an unknown workflow name list the agent's workflow names. None of these calls Podman. |
 | 3. Sandbox existence | An unknown sandbox, also one of another controller group. A sandbox of which only volumes remain is refused with a message naming `sandboxed-agents up NAME`, which adopts the volumes. |
 | 4. Owner | The container, one of the volumes, or the backup container has a missing or different owner label. The message names each such Podman object and points to Podman, also when the container carries the current owner and only a volume does not ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)). |
 | 5. Interrupted update | A backup container with the current owner exists. The message names `sandboxed-agents update NAME`. |
 | 6. Running state | The sandbox is stopped. The message names `sandboxed-agents start NAME`, and nothing starts on its own. |
-| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. |
+| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. For `agents login`, the agent is not enabled in the sandbox; the message names `sandboxed-agents agents enable NAME AGENT`. |
+| 8. Terminal | `agents login` without an interactive terminal. This is reported only when the manager answers and the agent is enabled. |
 
 This version has no `check NAME` yet; the check of one sandbox comes with #20. Until then, `sandboxed-agents check` without a name checks only the host prerequisites and does not diagnose a sandbox or its manager. `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
 
@@ -251,8 +297,10 @@ Offline tests cover the behavior on this page ([Test seams](development.md#test-
 - a selection in a temporary home directory that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` runs no installation. The test does not stop or start a real container;
 - `up NAME --agents` at the CLI boundary against a fake `podman`, on the Linux and the Windows target: a new sandbox; a stopped and a running existing sandbox, routed to a real manager with injected process functions, where an enabled agent is not reinstalled; invalid selections and undelivered names without a Podman call; failed installations with retry commands; a manager that does not answer before the first or after a failed installation; and the 15-minute bound of each installation with a fresh manager check afterwards;
 - the `AGENTS` column of `list` against a fake `podman`: names, `none`, a stopped sandbox, unusable or failed answers, the 5-second bound, the Windows target, and `agents enable` followed by `list` with a fifth catalog entry;
-- the manager's `agents list` query: a missing and a written selection, the worker started as UID and GID 1000, a refused identity, and invalid selection files left unchanged.
+- the manager's `agents list` query: a missing and a written selection, the worker started as UID and GID 1000, a refused identity, and invalid selection files left unchanged;
+- `agents login` at the CLI boundary against a fake `podman`, on the Linux and the Windows target, including the name checks before any Podman call, the order of checks up to the missing terminal, the arguments and identity of each call into the sandbox, and the exit status 0 or 1. For terminal detection these tests give the executable a native pseudo-terminal on Linux and the native console on Windows, and replace standard input or standard output with a non-terminal file to check the refusal. The terminal is local to the test; the fake `podman` behind it starts no sandbox and no workflow;
+- the manager's workflow selection with injected process functions: the login message before the workflow, the command and arguments from the catalog, and the requested UID and GID 1000, with a test that fails when the workflow would start as container root.
 
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
-The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, starts a real container, runs a real agent's status probe, or signs in to an agent. Nothing on this page has been confirmed on a live host. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.
+The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, starts a real container, runs a real agent's status probe, or signs in to an agent. Nothing on this page has been confirmed on a live host. One real login per agent is a manual check that comes with #64. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.

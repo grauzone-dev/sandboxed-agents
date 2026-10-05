@@ -60,6 +60,9 @@ func TestUpdateRestoresTheOriginalContainerWithoutStoppingItWhenCreationFails(t 
 				checkSSH := installUpdateSSHFixture(t, sshDir, state)
 				responses := updateObjectResponses(t, running, "old-image", "", "")
 				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
+				if running {
+					responses = append(responses, testutil.Response{Stdout: `[]`})
+				}
 				responses = append(responses, testutil.Response{}, testutil.Response{ExitCode: 42}, testutil.Response{}, testutil.Response{})
 				scriptUpdate(t, fakes, host.windows, responses)
 				stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
@@ -92,7 +95,11 @@ func TestUpdateRestoresTheOriginalRunningStateWhenStoppingOrStartingFails(t *tes
 					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 					checkSSH := installUpdateSSHFixture(t, sshDir, state)
 					responses := updateObjectResponses(t, running, "old-image", "", "")
-					responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{}, testutil.Response{})
+					responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
+					if running {
+						responses = append(responses, testutil.Response{Stdout: `[]`})
+					}
+					responses = append(responses, testutil.Response{}, testutil.Response{})
 					want := [][]string{{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"}}
 					if running {
 						want = append(want, []string{"stop", "sandboxed-agents-backup.default.agent01"})
@@ -130,7 +137,7 @@ func TestUpdateLeavesTheOriginalContainerUntouchedWhenRenameFails(t *testing.T) 
 			fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 			checkSSH := installUpdateSSHFixture(t, sshDir, state)
 			responses := updateObjectResponses(t, true, "old-image", "", "")
-			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{ExitCode: 42})
+			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{Stdout: `[]`}, testutil.Response{ExitCode: 42})
 			scriptUpdate(t, fakes, host.windows, responses)
 			stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
 			if status == 0 || !strings.Contains(stderr, "rename") || !strings.Contains(stderr, "42") || strings.Contains(stderr, "restored") || strings.Contains(stdout, "updated") {
@@ -160,7 +167,11 @@ func TestUpdateKeepsTheNewContainerWhenCleanupAfterReadinessFails(t *testing.T) 
 				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 				checkSSH := installUpdateSSHFixture(t, sshDir, state)
 				responses := updateObjectResponses(t, scenario.running, "old-image", "", "")
-				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{}, testutil.Response{})
+				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
+				if scenario.running {
+					responses = append(responses, testutil.Response{Stdout: `[]`})
+				}
+				responses = append(responses, testutil.Response{}, testutil.Response{})
 				want := [][]string{{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"}}
 				if scenario.running {
 					responses = append(responses, testutil.Response{})
@@ -216,7 +227,11 @@ func TestUpdateRestoresASandboxWhenEitherReadinessProbeNeverAnswers(t *testing.T
 			fakes, fixture, sshDir, state := sshSetupHost(t, scenario.windows)
 			checkSSH := installUpdateSSHFixture(t, sshDir, state)
 			responses := updateObjectResponses(t, scenario.running, "old-image", "", "")
-			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{}, testutil.Response{})
+			responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
+			if scenario.running {
+				responses = append(responses, testutil.Response{Stdout: `[]`})
+			}
+			responses = append(responses, testutil.Response{}, testutil.Response{})
 			want := [][]string{{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"}}
 			if scenario.running {
 				responses = append(responses, testutil.Response{})
@@ -257,7 +272,7 @@ func TestUpdateStopsAnIncompleteRollbackBeforeFurtherContainerChanges(t *testing
 				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 				checkSSH := installUpdateSSHFixture(t, sshDir, state)
 				responses := updateObjectResponses(t, true, "old-image", "", "")
-				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{ExitCode: 42})
+				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`}, testutil.Response{Stdout: `[]`}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{ExitCode: 42})
 				responses = append(responses, make([]testutil.Response, failureIndex)...)
 				responses = append(responses, testutil.Response{ExitCode: 43})
 				scriptUpdate(t, fakes, host.windows, responses)

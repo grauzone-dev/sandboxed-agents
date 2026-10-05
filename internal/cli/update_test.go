@@ -17,6 +17,7 @@ func TestUpdateKeepsTheWindowsWorkspaceBindRecordedByPodman(t *testing.T) {
 	source := "/mnt/c/projects/team,workspace"
 	responses := updateObjectResponses(t, true, "old-image", "", source)
 	responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`})
+	responses = append(responses, testutil.Response{Stdout: `[]`})
 	responses = append(responses, make([]testutil.Response, 4)...)
 	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1.2.3\n"}, testutil.Response{})
 	scriptUpdate(t, fakes, true, responses)
@@ -215,6 +216,7 @@ func TestUpdateMovesARunningSandboxToTheCurrentImageWithoutChangingItsConfigurat
 	responses = append(responses,
 		testutil.Response{}, testutil.Response{Stdout: `[{"Id":"new-image"}]`},
 	)
+	responses = append(responses, testutil.Response{Stdout: `[]`})
 	responses = append(responses, make([]testutil.Response, 4)...)
 	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1.2.3\n"}, testutil.Response{})
 	scriptUpdate(t, fakes, false, responses)
@@ -230,6 +232,7 @@ func TestUpdateMovesARunningSandboxToTheCurrentImageWithoutChangingItsConfigurat
 		}
 	}
 	want := [][]string{
+		{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"},
 		{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"},
 		nil,
 		{"stop", "sandboxed-agents-backup.default.agent01"},
@@ -241,11 +244,11 @@ func TestUpdateMovesARunningSandboxToTheCurrentImageWithoutChangingItsConfigurat
 		t.Fatalf("changes=%v", changes)
 	}
 	for i, args := range want {
-		if i != 1 && !reflect.DeepEqual(changes[i], args) {
+		if i != 2 && !reflect.DeepEqual(changes[i], args) {
 			t.Errorf("change %d=%v want=%v", i, changes[i], args)
 		}
 	}
-	create := changes[1]
+	create := changes[2]
 	for _, option := range []string{
 		"--name", "sandboxed-agents.default.agent01", "io.github.sandboxed-agents.owner=default",
 		"io.github.sandboxed-agents.toolchains=", "io.github.sandboxed-agents.update-was-running=true",

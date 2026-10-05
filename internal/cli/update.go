@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
@@ -11,7 +12,7 @@ import (
 func updateCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler) Command {
 	ctx := context.Background()
 	var update *sandbox.Update
-	var all bool
+	var all, force bool
 	forNamedTarget := func(check Handler) Handler {
 		return func(invocation *Invocation) error {
 			if all {
@@ -36,9 +37,16 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 			if all && options.WithProvided {
 				return errors.New(updateAllWithMessage)
 			}
-			if len(remaining) != 0 {
-				return errors.New(updateUsageMessage)
+			for _, arg := range remaining {
+				if arg != "--force" {
+					return errors.New(updateUsageMessage)
+				}
+				if options.Force {
+					return fmt.Errorf("duplicate option %q", arg)
+				}
+				options.Force = true
 			}
+			force = options.Force
 			if all {
 				return nil
 			}
@@ -52,9 +60,10 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 		Sandbox:           forNamedTarget(func(*Invocation) error { return update.CheckContainer(ctx) }),
 		Owner:             forNamedTarget(func(*Invocation) error { return update.CheckOwner(ctx) }),
 		InterruptedUpdate: forNamedTarget(func(*Invocation) error { return update.CheckInterruptedUpdate() }),
+		SessionGuard:      forNamedTarget(func(*Invocation) error { return update.CheckSessions(ctx) }),
 	}, Prepare: forNamedTarget(func(*Invocation) error { return update.Prepare(ctx) }), Action: func(invocation *Invocation) error {
 		if all {
-			return sandbox.UpdateAll(ctx, host.workspace.OS, *group, assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			return sandbox.UpdateAll(ctx, host.workspace.OS, *group, assetHash, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 		}
 		return update.Apply(ctx)
 	}}

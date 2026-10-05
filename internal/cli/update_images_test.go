@@ -11,7 +11,7 @@ import (
 )
 
 func successfulRunningUpdateResponses() []testutil.Response {
-	return []testutil.Response{{}, {}, {}, {}, {Stdout: "sandboxed-agents-manager v1.2.3\n"}, {}}
+	return []testutil.Response{{Stdout: `[]`}, {}, {}, {}, {}, {Stdout: "sandboxed-agents-manager v1.2.3\n"}, {}}
 }
 
 func updateCurrentNativeImageResponse() testutil.Response {

@@ -28,6 +28,8 @@ A sandbox is up to date when the selected set equals the recorded set and its co
 
 Every other sandbox is outdated, including every sandbox for which `--with` gives a set other than the recorded one. An image that is missing, or a toolchain image that was not built on the current base image, as after a `build` that failed to rebuild it, counts as missing. `update` builds a missing image as `up` does, the base image first when it is missing, and may use the layer cache. It does not rebuild an image that exists and is current. To get fresh packages, run `build` first and then `update`.
 
+`list` applies the same test with the recorded set and marks a `running` or `stopped` sandbox that is not up to date as outdated ([Outdated sandboxes](sandboxes.md#outdated-sandboxes)).
+
 ## What `update` does
 
 1. It checks the command line, the sandbox name, and the toolchain names of `--with`. `update` takes exactly one target, either `NAME` or `--all`. With neither or both, it exits non-zero with a usage message before it calls Podman. The other refusals of `--with` happen at this step too ([Change the toolchain set](#change-the-toolchain-set)).

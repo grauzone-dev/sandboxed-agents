@@ -487,20 +487,21 @@ The preflight (step 2), the running-state check (step 6), and the terminal check
 sandboxed-agents list
 ```
 
-`list` takes no arguments; an extra word is a usage error and calls no Podman command. It runs no preflight. On Windows it first selects the Podman machine, as `stop` does ([Target on Windows](#target-on-windows)). It only reads: it runs `podman ps --all`, `podman volume ls`, and `podman container inspect` or `podman volume inspect` for each object it shows, and it asks the manager of each running sandbox for its enabled agents ([`AGENTS` column](#agents-column)). It starts no sandbox and opens no SSH connection.
+`list` takes no arguments; an extra word is a usage error and calls no Podman command. It runs no preflight. On Windows it first selects the Podman machine, as `stop` does ([Target on Windows](#target-on-windows)). It only reads: it runs `podman ps --all`, `podman volume ls`, and `podman container inspect` or `podman volume inspect` for each object it shows, `podman image exists` and `podman image inspect` for the current images ([Outdated sandboxes](#outdated-sandboxes)), and it asks the manager of each running sandbox for its enabled agents ([`AGENTS` column](#agents-column)). It starts no sandbox and opens no SSH connection.
 
 `list` prints one row per sandbox of the current controller group, sorted by sandbox name:
 
 ```text
-NAME     STATE         WORKSPACE  SSH PORT  TOOLCHAINS  AGENTS  VOLUMES
-agent01  running       volume     2222      native      claude  -
-agent02  volumes only  volume     -         -           -       sandboxed-agents.default.agent02.home,sandboxed-agents.default.agent02.workspace
+NAME     STATE               WORKSPACE  SSH PORT  TOOLCHAINS  AGENTS  VOLUMES
+agent01  running             volume     2222      native      claude  -
+agent02  volumes only        volume     -         -           -       sandboxed-agents.default.agent02.home,sandboxed-agents.default.agent02.workspace
+agent03  running (outdated)  volume     2223      dotnet      none    sandboxed-agents.default.agent03.home,sandboxed-agents.default.agent03.ssh,sandboxed-agents.default.agent03.workspace
 ```
 
 | Column | Content |
 | --- | --- |
 | `NAME` | the sandbox name, not the Podman name |
-| `STATE` | one of the states below |
+| `STATE` | one of the states below, followed by ` (outdated)` for an [outdated](#outdated-sandboxes) `running` or `stopped` sandbox |
 | `WORKSPACE` | the workspace kind recorded on the container, `volume` or `bind`. Without a container, `volume` when the workspace volume exists, otherwise the kind recorded on the backup container. `-` when it is not known. |
 | `SSH PORT` | the value of the `ssh-port` label on the container, running or stopped, also in an `owner conflict` row. Without a container, the value on the backup container, also when volumes remain beside it. `-` for a `volumes only` row and when the label is missing or empty. |
 | `TOOLCHAINS` | the toolchain set recorded on the container, such as `native`. Without a container, the set recorded on the backup container. `-` for a sandbox without toolchains, for a container without the toolchain label, such as one created before the label existed, and when neither a container nor a backup container exists. |
@@ -512,9 +513,29 @@ A sandbox is shown when a container, a backup container, or a volume exists unde
 1. `owner conflict`: the container, a volume, or the backup container under the sandbox's Podman names has a missing owner label or one that names another group.
 2. `update interrupted`: a backup container exists, with or without a container under the sandbox's own name. A backup container never gets a row of its own.
 3. `volumes only`: no container exists, but some or all of the three volumes do.
-4. `running` or `stopped`: the state of the container.
+4. `running` or `stopped`: the state of the container, marked ` (outdated)` when the sandbox is [outdated](#outdated-sandboxes).
 
-If a Podman call fails or returns output that `list` cannot read, `list` prints no table, reports the failure, and exits with status 1. The agent query is the exception ([`AGENTS` column](#agents-column)).
+If a Podman call fails or returns output that `list` cannot read, `list` prints no table, reports the failure, and exits with status 1. This includes the image queries and the failures of the freshness check ([Outdated sandboxes](#outdated-sandboxes)). The agent query is the exception ([`AGENTS` column](#agents-column)).
+
+### Outdated sandboxes
+
+`list` appends ` (outdated)` to the state of a `running` or `stopped` sandbox that is outdated, so the row shows `running (outdated)` or `stopped (outdated)`. The suffix only marks the row: the sandbox stays running or stopped, every other column keeps its content, and `list` still asks the manager of a running outdated sandbox for its agents ([`AGENTS` column](#agents-column)). An `owner conflict`, `update interrupted`, or `volumes only` row is never marked: that state takes precedence, and `list` does not check the image for it.
+
+A sandbox is outdated when its container was not created from the current image for the toolchain set recorded on it. This is the test that `update NAME` applies without `--with` ([When a sandbox is outdated](updates.md#when-a-sandbox-is-outdated)):
+
+- `list` takes the image ID of the container from `podman container inspect` and the recorded set from the container's toolchain label. A missing or empty label records the empty set, so the current image is the base image.
+- It finds the current image for that set with the asset hash of the executable, by its tag ([Image names and labels](images.md#image-names-and-labels)): `podman image exists` and `podman image inspect` for the base image, and for a set with toolchains also for the toolchain image. A toolchain image is current only when its `base-image` label equals the ID of the current base image.
+- The sandbox is outdated when the current base image or toolchain image is missing, when the toolchain image is not current, or when the container's image ID differs from the ID of the current image.
+
+A toolchain label that does not hold a valid toolchain set, such as one with an unknown toolchain name, has no current image, so the sandbox counts as outdated. `list` issues no image query for such a label, shows the label's value as recorded in `TOOLCHAINS`, and asks the manager of a running sandbox for its agents as usual.
+
+The comparison uses image IDs, never tags. Every `build` rebuilds the images under their existing tags, and the images are shared by all controller groups, so a rebuild in any group marks the sandboxes of the current group that still run the previous image (ADR-0005). `update NAME` moves a sandbox to the current image ([Update a sandbox](updates.md)).
+
+During one `list`, the image queries run once per distinct recorded toolchain set, not once per sandbox. They only read: `list` builds, pulls, tags, and removes no image, changes no container, needs no network access, and reads and writes no host state.
+
+`list` prints no table and exits with status 1 when the container of a `running` or `stopped` sandbox reports no image ID, or when an image query fails or returns output that `list` cannot read. A missing image ID is reported with the container's name. A failed image query is reported with the image tag it asked about, usually together with the Podman query.
+
+The marker is covered by offline tests against a fake `podman`; it has not been tested against real Podman.
 
 ### `AGENTS` column
 

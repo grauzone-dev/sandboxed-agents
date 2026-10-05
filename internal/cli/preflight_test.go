@@ -182,7 +182,7 @@ func TestCheckEnforcesConfirmedPodmanMinimum(t *testing.T) {
 }
 
 func TestCheckRejectsUsageBeforeCallingPodman(t *testing.T) {
-	for _, arg := range []string{"--unknown", "sandbox-name"} {
+	for _, arg := range []string{"--unknown", "bad/name"} {
 		t.Run(arg, func(t *testing.T) {
 			fakes := linuxHost(t)
 			stdout, stderr, status := runCLI(t, "linux-preflight", "check", arg)

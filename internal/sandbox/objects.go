@@ -64,6 +64,16 @@ func newSandboxObjects(name, group string, run process.Runner, streams process.S
 }
 
 func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
+	if err := state.inspectSandbox(ctx); err != nil {
+		return err
+	}
+	if !state.containerExists {
+		return state.checkSandboxOwner()
+	}
+	return nil
+}
+
+func (state *sandboxObjects) inspectSandbox(ctx context.Context) error {
 	var err error
 	state.containerExists, err = state.objectExists(ctx, "container", state.container)
 	if err != nil {
@@ -97,7 +107,6 @@ func (state *sandboxObjects) CheckSandbox(ctx context.Context) error {
 		if err := state.inspectBackup(ctx); err != nil {
 			return err
 		}
-		return state.checkSandboxOwner()
 	}
 	return nil
 }

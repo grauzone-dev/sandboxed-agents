@@ -401,7 +401,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 			_, err := fmt.Fprintf(invocation.Stdout, "sandboxed-agents %s\nassets %s\n", version, assetHash)
 			return err
 		}},
-		{Name: "check", Checks: Checks{Usage: noArguments}, Action: check},
+		checkCommand(host, &group, check, run),
 	}}
 	return tree.Execute(args, stdout, stderr)
 }

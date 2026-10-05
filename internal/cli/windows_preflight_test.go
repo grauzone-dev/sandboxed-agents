@@ -244,7 +244,7 @@ func TestCheckUsesOnlyReadOnlyPodmanCalls(t *testing.T) {
 }
 
 func TestCheckRejectsUsageBeforeReadingTheHost(t *testing.T) {
-	for _, arg := range []string{"sandbox01", "--unknown"} {
+	for _, arg := range []string{"bad/name", "--unknown"} {
 		t.Run(arg, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			stdout, stderr, status := runCLI(t, "windows", "check", arg)

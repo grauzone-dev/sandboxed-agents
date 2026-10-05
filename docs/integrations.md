@@ -94,7 +94,7 @@ The file lies in the home volume. It is kept across `stop`, `start`, and [`updat
 sandboxed-agents integrations login NAME github [device]
 ```
 
-The command signs the GitHub CLI in the sandbox in to `github.com` with a device-code login and then makes Git in the sandbox use that login for `github.com` remotes. Afterwards, `git clone` and `git push` over HTTPS to a repository your GitHub account can reach ask for no further credentials. The GitHub CLI is part of the base image, so no toolchain is needed.
+The command signs the GitHub CLI in the sandbox in to `github.com` with a device-code login and then makes Git in the sandbox use that login for `github.com` and `gist.github.com` remotes. Afterwards, `git clone` and `git push` over HTTPS to a repository your GitHub account can reach ask for no further credentials. The GitHub CLI is part of the base image, so no toolchain is needed.
 
 `device` is the only login workflow of `github`, so `integrations login NAME github` and `integrations login NAME github device` do the same. The command takes no options.
 
@@ -109,10 +109,12 @@ podman exec --user=1000:1000 --env HOME=/home/agent -it sandboxed-agents.GROUP.N
 The manager refuses the request under any identity other than UID and GID 1000. It runs the GitHub CLI with UID and GID 1000 stated explicitly, in `/home/agent`, with a fixed environment: `HOME=/home/agent`, `USER=agent`, `LOGNAME=agent`, `PATH=/usr/local/bin:/usr/bin:/bin`, `GH_CONFIG_DIR=/home/agent/.config/gh`, and `GH_PROMPT_DISABLED=1`. First it signs in ([`gh auth login`](https://cli.github.com/manual/gh_auth_login)):
 
 ```sh
-gh auth login --hostname github.com --git-protocol https --web
+gh auth login --hostname github.com --git-protocol https --web --scopes workflow
 ```
 
-Only when this call ends with status 0 does the manager configure Git to use the GitHub CLI as credential helper for `github.com` ([`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git)):
+`--scopes workflow` requests the `workflow` scope in addition to the GitHub CLI's default scopes. Without it, GitHub refuses a push that adds or changes a GitHub Actions workflow file under `.github/workflows/`, unless the same file already exists on another branch ([Scopes for OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)). The GitHub CLI 2.23.0 adds this scope on its own only in the interactive Git setup that `GH_PROMPT_DISABLED=1` skips ([`login_flow.go`, v2.23.0](https://github.com/cli/cli/blob/v2.23.0/pkg/cmd/auth/shared/login_flow.go)), so the manager requests it explicitly.
+
+Only when this call ends with status 0 does the manager configure Git to use the GitHub CLI as credential helper for `github.com` and `gist.github.com` ([`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git)):
 
 ```sh
 gh auth setup-git --hostname github.com
@@ -130,7 +132,7 @@ The login needs an interactive terminal: standard input and standard output must
 
 The base image installs the GitHub CLI from Debian bookworm, version 2.23.0 ([Debian package `gh`](https://packages.debian.org/bookworm/gh)). After a successful login, that version writes the token in plain text into its configuration, together with the user name and the Git protocol ([`login_flow.go`, v2.23.0](https://raw.githubusercontent.com/cli/cli/v2.23.0/pkg/cmd/auth/shared/login_flow.go)). `GH_CONFIG_DIR` fixes that configuration at `/home/agent/.config/gh`, in the home volume. Every agent, shell, and program of the sandbox runs as `agent` and can read the token and use it. It is kept across `stop`, `start`, and `remove NAME` without `--volumes`; `remove NAME --volumes` deletes the home volume and the token with it.
 
-`gh auth setup-git` writes the GitHub CLI as credential helper for `github.com` into the Git configuration of `agent`, which also lies in the home volume. The helper serves only `github.com`: Git remotes on other hosts, including other GitHub instances, keep whatever credential helper is configured for them, such as the one from [`git credentials`](#git-credentials). Only the manager configures Git, and only through `gh auth setup-git`: the login itself skips its own Git setup because prompting is disabled. When the login fails, the manager does not run `gh auth setup-git`, so the Git configuration stays unchanged. When the login succeeds but `gh auth setup-git` fails, the command fails too; the token from the login stays stored.
+`gh auth setup-git --hostname github.com` writes the GitHub CLI as credential helper for two hosts, `https://github.com` and `https://gist.github.com`, into the global Git configuration of `agent`, which also lies in the home volume ([`setupgit.go`](https://github.com/cli/cli/blob/v2.23.0/pkg/cmd/auth/setupgit/setupgit.go) and [`git_credential.go`](https://github.com/cli/cli/blob/v2.23.0/pkg/cmd/auth/shared/git_credential.go), v2.23.0). For each of the two, it first replaces every existing helper entry for that host with an empty value and then adds the GitHub CLI. An empty helper value makes Git drop the helpers it has read from the configuration up to that entry ([gitcredentials](https://git-scm.com/docs/gitcredentials)). A helper configured earlier for one of these two hosts is therefore replaced, and for these two hosts Git no longer asks a helper for all hosts that comes before the new entries, such as one that [`git credentials`](#git-credentials) wrote before the login. Remotes on all other hosts, including other GitHub instances, keep the credential helpers configured for them. Only the manager configures Git, and only through `gh auth setup-git`: the login itself skips its own Git setup because prompting is disabled. When the login fails, the manager does not run `gh auth setup-git`, so the Git configuration stays unchanged. When the login succeeds but `gh auth setup-git` fails, the command fails too; the token from the login stays stored.
 
 ### Exit status
 

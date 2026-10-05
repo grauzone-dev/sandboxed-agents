@@ -21,7 +21,7 @@ func (m *Manager) loginGitHub(ctx context.Context, streams process.Streams, run 
 		name string
 		args []string
 	}{
-		{"login", []string{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"}},
+		{"login", []string{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--scopes", "workflow"}},
 		{"setup-git", []string{"auth", "setup-git", "--hostname", "github.com"}},
 	} {
 		status, err := run(ctx, process.Request{

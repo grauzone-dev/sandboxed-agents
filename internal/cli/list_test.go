@@ -95,6 +95,7 @@ func TestListUsesTheSelectedGroupOnLinuxAndWindows(t *testing.T) {
 			t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
 			owned := "team-a"
 			responses := listOneSandboxResponses("team-a", "agent01", &owned, true, nil, nil)
+			responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
 			if fixture == "windows" {
 				for _, key := range []string{"CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY"} {
 					t.Setenv(key, "ambient-other-target")
@@ -123,7 +124,9 @@ func TestListFindsOwnedContainersAfterTheirPodmanNameChanges(t *testing.T) {
 			fakes.Script("podman",
 				listJSONResponse([]map[string]any{{"Names": []string{name}, "Labels": labels}}),
 				testutil.Response{Stdout: `[]`},
-				listJSONResponse([]map[string]any{{"Name": name, "Config": map[string]any{"Labels": labels}, "State": map[string]bool{"Running": true}}}),
+				listJSONResponse([]map[string]any{{"Name": name, "Image": "current-base", "Config": map[string]any{"Labels": labels}, "State": map[string]bool{"Running": true}}}),
+				testutil.Response{},
+				testutil.Response{Stdout: `[{"Id":"current-base"}]`},
 			)
 			stdout, stderr, status := runCLI(t, "sandbox-host", "list")
 			want := "NAME STATE WORKSPACE SSH PORT TOOLCHAINS AGENTS VOLUMES agent01 running bind - - - -"
@@ -267,7 +270,7 @@ func listOneSandboxResponses(group, name string, containerOwner *string, running
 	container := func(podmanName, owner string) {
 		labels := map[string]string{"io.github.sandboxed-agents.owner": owner, "io.github.sandboxed-agents.workspace-kind": "volume"}
 		containers = append(containers, map[string]any{"Names": []string{podmanName}, "Labels": labels})
-		inspections = append(inspections, listJSONResponse([]map[string]any{{"Name": podmanName, "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": running}}}))
+		inspections = append(inspections, listJSONResponse([]map[string]any{{"Name": podmanName, "Image": "current-base", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": running}}}))
 	}
 	if containerOwner != nil {
 		container(containerName, *containerOwner)
@@ -294,6 +297,14 @@ func listOneSandboxResponses(group, name string, containerOwner *string, running
 	return append([]testutil.Response{listJSONResponse(containers), listJSONResponse(volumeRecords)}, inspections...)
 }
 
+func listCurrentImageResponses(set, imageID, baseID string) []testutil.Response {
+	responses := []testutil.Response{{}, listJSONResponse([]map[string]any{{"Id": baseID}})}
+	if set != "" {
+		responses = append(responses, testutil.Response{}, listJSONResponse([]map[string]any{{"Id": imageID, "Labels": map[string]string{"io.github.sandboxed-agents.base-image": baseID}}}))
+	}
+	return responses
+}
+
 func listJSONResponse(value any) testutil.Response {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -307,8 +318,10 @@ func TestListShowsOnlyCurrentControllerGroupWithUnavailableColumns(t *testing.T)
 	fakes.Script("podman",
 		testutil.Response{Stdout: `[{"Names":["sandboxed-agents.default.zeta"],"Labels":{"io.github.sandboxed-agents.owner":"default"}},{"Names":["sandboxed-agents.other.hidden"],"Labels":{"io.github.sandboxed-agents.owner":"other"}},{"Names":["sandboxed-agents.default.alpha"],"Labels":{"io.github.sandboxed-agents.owner":"default"}}]`},
 		testutil.Response{Stdout: `[]`},
-		testutil.Response{Stdout: `[{"Name":"sandboxed-agents.default.alpha","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.workspace-kind":"bind"}},"State":{"Running":false}}]`},
-		testutil.Response{Stdout: `[{"Name":"sandboxed-agents.default.zeta","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.workspace-kind":"volume"}},"State":{"Running":true}}]`},
+		testutil.Response{Stdout: `[{"Name":"sandboxed-agents.default.alpha","Image":"current-base","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.workspace-kind":"bind"}},"State":{"Running":false}}]`},
+		testutil.Response{Stdout: `[{"Name":"sandboxed-agents.default.zeta","Image":"current-base","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.workspace-kind":"volume"}},"State":{"Running":true}}]`},
+		testutil.Response{},
+		testutil.Response{Stdout: `[{"Id":"current-base"}]`},
 	)
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
 	if status != 0 || stderr != "" {
@@ -343,6 +356,10 @@ func assertListReadOnly(t *testing.T, fakes *testutil.FakePrograms, windows bool
 		case "container":
 			if len(call.Args) != 3 || call.Args[1] != "inspect" {
 				t.Fatalf("unexpected container operation: %v", call.Args)
+			}
+		case "image":
+			if len(call.Args) != 3 || (call.Args[1] != "exists" && call.Args[1] != "inspect") {
+				t.Fatalf("unexpected image operation: %v", call.Args)
 			}
 		case "volume":
 			if !slices.Equal(call.Args, []string{"volume", "ls", "--format", "json"}) && (len(call.Args) != 3 || call.Args[1] != "inspect") {

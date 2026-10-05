@@ -358,6 +358,7 @@ func TestListShowsABoundWorkspaceFromItsRecordedKind(t *testing.T) {
 	for index := range responses {
 		responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, `"io.github.sandboxed-agents.workspace-kind":"bind","io.github.sandboxed-agents.ssh-port":"2300"`)
 	}
+	responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
 	fakes.Script("podman", responses...)
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
 	if status != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "agent01 running bind 2300 - - -") {

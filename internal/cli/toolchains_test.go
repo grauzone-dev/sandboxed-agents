@@ -264,6 +264,10 @@ func TestListReadsTheToolchainSetOfTheSandbox(t *testing.T) {
 			responses := listOneSandboxResponses("default", "agent01", container, true, map[string]string{"workspace": owner}, backup)
 			for index := range responses {
 				responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, `"io.github.sandboxed-agents.workspace-kind":"volume","io.github.sandboxed-agents.toolchains":"native"`)
+				responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"Image":"current-base"`, `"Image":"current-native"`)
+			}
+			if !backupOnly {
+				responses = append(responses, listCurrentImageResponses("native", "current-native", "current-base")...)
 			}
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, "sandbox-host", "list")
@@ -320,7 +324,9 @@ func checkListedToolchains(t *testing.T, set string) {
 	responses := listOneSandboxResponses("default", "agent01", &owner, true, map[string]string{"workspace": owner}, nil)
 	for index := range responses {
 		responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, fmt.Sprintf(`"io.github.sandboxed-agents.workspace-kind":"volume","io.github.sandboxed-agents.toolchains":%q`, set))
+		responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"Image":"current-base"`, `"Image":"current-toolchain"`)
 	}
+	responses = append(responses, listCurrentImageResponses(set, "current-toolchain", "current-base")...)
 	fakes.Script("podman", responses...)
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
 	if status != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "agent01 running volume - "+set+" -") {

@@ -371,7 +371,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		withLifecycleLock(upCommand(assetHash, host, &group, run, check, catalog), host, &group),
 		updateCommand(assetHash, host, &group, run, check),
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
-			return sandbox.List(context.Background(), group, run, invocation.Stdout, catalog)
+			return sandbox.List(context.Background(), group, assetHash, run, invocation.Stdout, catalog)
 		}},
 		withLifecycleLock(removeCommand(host.workspace.OS, &group, run), host, &group),
 		{Name: "integrations", Commands: []Command{

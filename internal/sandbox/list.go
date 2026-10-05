@@ -14,6 +14,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
 type listObjects struct {
@@ -36,6 +37,8 @@ const (
 type listRow struct {
 	name       string
 	container  string
+	image      string
+	outdated   bool
 	state      sandboxState
 	workspace  string
 	sshPort    string
@@ -44,7 +47,7 @@ type listRow struct {
 	agents     string
 }
 
-func List(ctx context.Context, group string, run process.Runner, output io.Writer, catalog agentcatalog.Catalog) error {
+func List(ctx context.Context, group, assetHash string, run process.Runner, output io.Writer, catalog agentcatalog.Catalog) error {
 	objects, err := collectListObjects(ctx, group, run)
 	if err != nil {
 		return err
@@ -62,12 +65,52 @@ func List(ctx context.Context, group string, run process.Runner, output io.Write
 		}
 		rows = append(rows, row)
 	}
+	if err := markOutdatedImages(ctx, rows, assetHash, run); err != nil {
+		return err
+	}
 	for index := range rows {
 		if rows[index].state == sandboxRunning {
 			rows[index].agents = objects[rows[index].name].agentsColumn(ctx, rows[index].container, catalog)
 		}
 	}
 	return renderList(output, rows)
+}
+
+func markOutdatedImages(ctx context.Context, rows []listRow, assetHash string, run process.Runner) error {
+	type currentImage struct {
+		id      string
+		current bool
+	}
+	checked := make(map[toolchains.Set]currentImage)
+	for index := range rows {
+		row := &rows[index]
+		if row.state != sandboxRunning && row.state != sandboxStopped {
+			continue
+		}
+		if row.image == "" {
+			return fmt.Errorf(listMissingImageIDFormat, row.container)
+		}
+		var set toolchains.Set
+		if row.toolchains != "" {
+			var err error
+			set, err = toolchains.Parse(row.toolchains)
+			if err != nil {
+				row.outdated = true
+				continue
+			}
+		}
+		image, ok := checked[set]
+		if !ok {
+			var err error
+			image.id, image.current, err = images.Current(ctx, assetHash, set, run, process.Streams{})
+			if err != nil {
+				return err
+			}
+			checked[set] = image
+		}
+		row.outdated = !image.current || row.image != image.id
+	}
+	return nil
 }
 
 func collectListObjects(ctx context.Context, group string, run process.Runner) (map[string]*listObjects, error) {
@@ -149,7 +192,11 @@ func renderList(output io.Writer, rows []listRow) error {
 		if agents == "" {
 			agents = "-"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.name, row.state, workspace, port, selection, agents, existingVolumes)
+		state := string(row.state)
+		if row.outdated {
+			state += listOutdatedSuffix
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", row.name, state, workspace, port, selection, agents, existingVolumes)
 	}
 	if err := writer.Flush(); err != nil {
 		return err
@@ -196,6 +243,7 @@ func (row *listObjects) inspect(ctx context.Context) (listRow, error) {
 		conflict = conflict || !row.state.isOwned(record.Config.Labels[OwnerLabel])
 		if index == 0 || name == row.state.container {
 			result.container = name
+			result.image = record.Image
 			result.state = sandboxStopped
 			if record.State.Running {
 				result.state = sandboxRunning

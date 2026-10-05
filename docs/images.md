@@ -4,7 +4,7 @@ A sandbox is created from an image: the base contents every sandbox needs plus t
 
 ## Toolchains
 
-A toolchain is a set of SDKs or system packages built into a sandbox's image. All toolchains are off by default. `build --with SET` and `up NAME --with SET` select a toolchain set: a comma-separated list of toolchain names, such as `--with native`.
+A toolchain is a set of SDKs or system packages built into a sandbox's image. All toolchains are off by default. `build --with SET`, `up NAME --with SET`, and `update NAME --with SET` select a toolchain set: a comma-separated list of toolchain names, such as `--with native`.
 
 This version delivers three toolchains, which can be selected alone or in any combination:
 
@@ -122,7 +122,7 @@ The `dotnet` toolchain adds:
 - **SDKs:** the packages `dotnet-sdk-8.0`, `dotnet-sdk-9.0`, and `dotnet-sdk-10.0`, installed with APT without recommended packages and without a pinned version ([.NET SDK versions](#net-sdk-versions)). They are installed system-wide in the image, not in the home or workspace volume, so every sandbox created from the image has them and `agent` can use them.
 - **Smoke check:** the command `dotnet --list-sdks`, run as UID and GID 1000, with no script file of its own. Its output is expected to list every installed SDK; #29 checks that against a real image.
 
-Changing the toolchain set of an existing sandbox comes with #71.
+`update NAME --with SET` changes the toolchain set of an existing sandbox and keeps its volumes ([Change the toolchain set](updates.md#change-the-toolchain-set)).
 
 Each smoke check is meant to run as `agent` inside a sandbox created from the image. No command runs it in this version; running each toolchain's smoke check against real Podman comes with #29. No toolchain image has been built or run against real Podman.
 

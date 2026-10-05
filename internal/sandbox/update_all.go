@@ -41,7 +41,7 @@ func UpdateAll(ctx context.Context, hostOS, group, assetHash string, run process
 			continue
 		}
 		releases = append(releases, release)
-		update := NewUpdate(name, group, assetHash, run, streams)
+		update := NewUpdate(name, group, assetHash, UpdateOptions{}, run, streams)
 		if err := update.CheckSandbox(ctx); err != nil {
 			report(name, err)
 			continue

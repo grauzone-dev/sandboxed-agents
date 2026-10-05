@@ -1,13 +1,19 @@
 # Update a sandbox
 
-`sandboxed-agents update NAME` moves an existing sandbox to the image that the installed executable produces for the sandbox's toolchain set. It replaces the sandbox's container and keeps everything else. `sandboxed-agents update --all` does the same for every sandbox of the current controller group ([Update every sandbox](#update-every-sandbox)). This page describes what `update` does and how it rolls back when a step fails ([When a step fails](#when-a-step-fails)). Recovering an interrupted update, the session guard, and changing the toolchain set with `--with` come with later Stories ([Not in this version](#not-in-this-version)).
+`sandboxed-agents update NAME` moves an existing sandbox to the image that the installed executable produces for the sandbox's toolchain set. It replaces the sandbox's container and keeps everything else. `sandboxed-agents update NAME --with SET` does the same with another toolchain set ([Change the toolchain set](#change-the-toolchain-set)). `sandboxed-agents update --all` updates every sandbox of the current controller group ([Update every sandbox](#update-every-sandbox)). This page describes what `update` does and how it rolls back when a step fails ([When a step fails](#when-a-step-fails)). Recovering an interrupted update and the session guard come with later Stories ([Not in this version](#not-in-this-version)).
+
+```text
+sandboxed-agents update NAME [--with SET]
+sandboxed-agents update --all
+```
 
 ## What `update` keeps
 
 The new container gets the configuration recorded on the old one:
 
 - the three volumes, or the same host directory bound at `/workspace` in place of the workspace volume ([Workspace bind](sandboxes.md#workspace-bind));
-- the owner label, the resource limits, the toolchain set, and the SSH port on `127.0.0.1` ([Podman names and labels](sandboxes.md#podman-names-and-labels));
+- the owner label, the resource limits, and the SSH port on `127.0.0.1` ([Podman names and labels](sandboxes.md#podman-names-and-labels));
+- the toolchain set, unless `--with` gives another one ([Change the toolchain set](#change-the-toolchain-set));
 - the [container defaults](sandboxes.md#container-defaults).
 
 The agent selection, agent pins, credentials, the authorized key, and the SSH host keys live in the volumes. `update` does not rewrite or regenerate them, and it deletes no volume. It does not go through `remove` (ADR-0002): it creates, changes, and deletes no [SSH setup](ssh.md#ssh-setup), it leaves the SSH setup's files in host state unchanged, and it reads and writes no file in your SSH directory. Because the host keys stay in the SSH server state volume, a pinned host key still matches after the update. The only things `update` may create in host state are the separate `locks` directory and the empty [lifecycle lock](#lifecycle-lock) file in it.
@@ -16,21 +22,23 @@ A sandbox that was running before the update is running afterwards, and a sandbo
 
 ## When a sandbox is outdated
 
-A sandbox is up to date when its container was created from the current image for its toolchain set, compared by Podman image ID, and that image is current: for a toolchain image, its `base-image` label equals the ID of the current base image ([Image names and labels](images.md#image-names-and-labels)). `update` on an up-to-date sandbox prints `Sandbox NAME is already up to date.` and exits with status 0. It builds nothing and does not rename, create, start, stop, or remove any container.
+`update` works with the selected toolchain set: the set given with `--with`, or the set recorded on the container when `--with` is not given.
 
-Every other sandbox is outdated. An image that is missing, or a toolchain image that was not built on the current base image, as after a `build` that failed to rebuild it, counts as missing. `update` builds a missing image as `up` does, the base image first when it is missing, and may use the layer cache. It does not rebuild an image that exists and is current. To get fresh packages, run `build` first and then `update`.
+A sandbox is up to date when the selected set equals the recorded set and its container was created from the current image for that set, compared by Podman image ID, and that image is current: for a toolchain image, its `base-image` label equals the ID of the current base image ([Image names and labels](images.md#image-names-and-labels)). `update` on an up-to-date sandbox prints `Sandbox NAME is already up to date.` and exits with status 0. It builds nothing and does not rename, create, start, stop, or remove any container.
+
+Every other sandbox is outdated, including every sandbox for which `--with` gives a set other than the recorded one. An image that is missing, or a toolchain image that was not built on the current base image, as after a `build` that failed to rebuild it, counts as missing. `update` builds a missing image as `up` does, the base image first when it is missing, and may use the layer cache. It does not rebuild an image that exists and is current. To get fresh packages, run `build` first and then `update`.
 
 ## What `update` does
 
-1. It checks the command line and the sandbox name. `update` takes exactly one target, either `NAME` or `--all`. With neither or both, it exits non-zero with a usage message before it calls Podman.
+1. It checks the command line, the sandbox name, and the toolchain names of `--with`. `update` takes exactly one target, either `NAME` or `--all`. With neither or both, it exits non-zero with a usage message before it calls Podman. The other refusals of `--with` happen at this step too ([Change the toolchain set](#change-the-toolchain-set)).
 2. It runs the preflight, as `up` does ([Host prerequisites](host-prerequisites.md)). On Windows, the preflight selects the Podman machine, and every later Podman call names it with `--connection` (ADR-0006). A failing preflight stops `update` before it looks up any sandbox object.
 3. It takes the sandbox's [lifecycle lock](#lifecycle-lock).
 4. It looks up the sandbox's container, its volumes, and its backup container, and checks their owners. An unknown sandbox name exits non-zero. An owner conflict exits non-zero, names the Podman objects concerned, and points to Podman. A sandbox of which only volumes remain exits non-zero and names `sandboxed-agents up NAME`, which adopts the volumes. A backup container with the current owner, left by an interrupted update, is refused as well: the message names the backup container, says that recovering an interrupted update is not available in this version and that `update` changes nothing, and points to Podman to inspect it ([Not in this version](#not-in-this-version)).
-5. It decides whether the sandbox is [outdated](#when-a-sandbox-is-outdated). A container that reports no image ID is refused. A container without the toolchain label counts as recorded `none`, as for `up`. An up-to-date sandbox ends here.
+5. It decides whether the sandbox is [outdated](#when-a-sandbox-is-outdated) for the selected toolchain set. A container that reports no image ID is refused. A container without the toolchain label counts as recorded `none`, as for `up`. An up-to-date sandbox ends here.
 6. For an outdated sandbox, it reads the configuration recorded on the container and refuses when any part of it is malformed ([Recorded configuration](#recorded-configuration)).
-7. It builds the image it needs when that image is missing. When the image is not current after the build because it changed while `update` prepared it, `update` stops before the rename, says that the sandbox was not changed, and asks you to retry `sandboxed-agents update NAME`. Until the preflight has passed, the recorded configuration has been read, and the build has succeeded, nothing is stopped, renamed, or created.
+7. It builds the image for the selected set when that image is missing. When the image is not current after the build because it changed while `update` prepared it, `update` stops before the rename, says that the sandbox was not changed, and asks you to retry `sandboxed-agents update NAME`. Until the preflight has passed, the recorded configuration has been read, and the build has succeeded, nothing is stopped, renamed, or created.
 8. It renames the container from `sandboxed-agents.GROUP.NAME` to the backup name `sandboxed-agents-backup.GROUP.NAME` while the container keeps running.
-9. It creates the new container under `sandboxed-agents.GROUP.NAME` from the ID of the new image, not from its tag, without starting it. Its configuration is the one described in [What `update` keeps](#what-update-keeps), plus a label that records whether the sandbox was running or stopped before the update.
+9. It creates the new container under `sandboxed-agents.GROUP.NAME` from the ID of the new image, not from its tag, without starting it. Its configuration is the one described in [What `update` keeps](#what-update-keeps), plus a label that records whether the sandbox was running or stopped before the update. Its toolchain label records the selected set.
 10. It stops the old container if it runs, and only then starts the new one. That way the new container can publish the same SSH port, and two containers never run on the same volumes. A sandbox that was stopped is started here too, for the readiness wait.
 11. It [waits until the new container is ready](#readiness-wait).
 12. It removes the backup container.
@@ -53,9 +61,40 @@ When one of these does not hold, `update` names the container and the label or t
 
 Nothing about an update is stored outside Podman. Whether the sandbox was running before the update is recorded only in the label on the new container, and an update in progress is visible only in the backup container's name (ADR-0005).
 
+## Change the toolchain set
+
+`update NAME --with SET` replaces the sandbox's container with one created from the image for `SET`. It keeps the volumes and the rest of the recorded configuration, so you can add or drop toolchains without losing the sandbox's data.
+
+```text
+sandboxed-agents update agent01 --with dotnet
+sandboxed-agents update agent01 --with=azure,dotnet
+sandboxed-agents update agent01 --with none
+```
+
+`SET` takes the same values as `up NAME --with SET`: a comma-separated list of toolchain names, or `none` alone for the base image ([Create or start a sandbox](sandboxes.md#create-or-start-a-sandbox)). Order and repetition of names do not matter. Both `--with SET` and `--with=SET` are accepted.
+
+- **The given set replaces the recorded set.** The new container gets exactly the toolchains you name. `update` does not add them to the recorded set: a toolchain of the recorded set that you do not name is dropped. On a sandbox recorded with `native`, `update agent01 --with dotnet` creates a container with `dotnet` only.
+- **`--with none` selects the base image.** The new container has no toolchains.
+- **Without `--with`, `update` keeps the recorded set.**
+- **The same set on a current image changes nothing.** When the given set equals the recorded set and the sandbox is [up to date](#when-a-sandbox-is-outdated), `update` prints `Sandbox NAME is already up to date.`, exits with status 0, and does not touch the container. When the image is not current, `update` updates the sandbox as `update NAME` does.
+- **The image is built before the rename.** When the image for the given set is missing or not current, `update` builds it before it renames the old container ([What `update` does](#what-update-does)). When that build fails, the sandbox stays as it was, with its previous toolchain set.
+- **A rollback restores the previous set.** When a later step fails and the rollback completes, the old container is back under its name, in its original running or stopped state, with its previous toolchain set, and the new container is removed ([When a step fails](#when-a-step-fails)). An incomplete rollback gives no such guarantee ([When the rollback fails](#when-the-rollback-fails)).
+- **`list` shows the new set.** The new container records the given set in its toolchain label, and `list` reads it from there ([List sandboxes](sandboxes.md#list-sandboxes)).
+
+`update` refuses `--with` at step 1 of [What `update` does](#what-update-does), before the preflight, the lookup of the sandbox, and the owner check. It then exits non-zero, calls no Podman, and changes nothing. That holds even when a prerequisite is missing or the sandbox does not exist. It refuses:
+
+- `--with` without a value, or `--with` given more than once;
+- an unknown or undelivered toolchain name, or an empty name, such as in `--with nosuch` or `--with native,`. The message lists the valid values, `none` among them;
+- `none` combined with another name, such as `--with none,dotnet`;
+- `--with` together with `--all` ([Update every sandbox](#update-every-sandbox)).
+
+The session guard (#58) does not apply in this version: `update NAME --with SET` does not refuse a sandbox with a running agent session ([Not in this version](#not-in-this-version)).
+
 ## Update every sandbox
 
 `sandboxed-agents update --all` updates the sandboxes of the current controller group one after another, each as `update NAME` does. It never touches or names a sandbox of another controller group.
+
+`update --all` keeps the recorded toolchain set of each sandbox. It does not take `--with`: `update --all --with native` exits non-zero with a usage message before it calls Podman, and changes nothing. To change the toolchain set, run `update NAME --with SET` for one sandbox at a time ([Change the toolchain set](#change-the-toolchain-set)).
 
 1. It runs the preflight, as `update NAME` does.
 2. It finds the names of the group's sandboxes in `podman ps --all --format json` and `podman volume ls --format json`: every name with a container, a backup container, or volumes. It uses these lists for the names only, never as the state of a sandbox (ADR-0007).
@@ -75,7 +114,7 @@ Nothing about an update is stored outside Podman. Whether the sandbox was runnin
 
 ## When a step fails
 
-A failed `update` names the failed step, such as `create the new container` or `readiness wait of the new container`, and exits non-zero. When a step up to the readiness wait fails and the rollback completes, it leaves the sandbox as it was: the original container under its name, running when it was running before and stopped when it was stopped. That covers the container, the volumes, and the configuration, not the processes that ran in the old container. An incomplete rollback gives no such guarantee ([When the rollback fails](#when-the-rollback-fails)).
+A failed `update` names the failed step, such as `create the new container` or `readiness wait of the new container`, and exits non-zero. When a step up to the readiness wait fails and the rollback completes, it leaves the sandbox as it was: the original container under its name, running when it was running before and stopped when it was stopped. That covers the container, the volumes, and the configuration, including the toolchain set recorded before an `update NAME --with SET`, not the processes that ran in the old container. An incomplete rollback gives no such guarantee ([When the rollback fails](#when-the-rollback-fails)).
 
 | Failed step | What `update` does |
 | --- | --- |
@@ -133,10 +172,9 @@ When a Podman call fails unexpectedly, for example because something outside the
 ## Not in this version
 
 - **Interrupted updates** (#54). Recovering a sandbox from a backup container that an earlier update left behind: after an interruption such as Ctrl+C, after a failed backup removal, or after an incomplete rollback. Every other command that takes the sandbox name refuses such a sandbox and names `sandboxed-agents update NAME` ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)). In this version `update` refuses such a sandbox with its own message: recovering an interrupted update is not available yet, `update` changes nothing, and you can inspect the backup container with Podman. It neither completes nor undoes the interrupted update, and `update --all` passes such a sandbox over in the same way; recovery through `update` comes with #54.
-- **Session guard and `--force`** (#58). This version does not refuse an update, with `NAME` or `--all`, while an agent session runs. Stopping the old container ends every process in it, and a rollback does not restart them.
-- **Changing the toolchain set with `update NAME --with SET`** (#71), and its rollback, as well as the rejection of `update --all --with`.
+- **Session guard and `--force`** (#58). This version does not refuse an update, with `NAME`, `NAME --with SET`, or `--all`, while an agent session runs. Stopping the old container ends every process in it, and a rollback does not restart them.
 - **Rollback against real Podman** (#55). No live run has exercised a rollback yet.
 
 ## Verification
 
-`update` adds no new manager functionality: the readiness wait uses the manager's existing version query, which the existing manager tests cover. Offline tests cover the rest. The readiness tests run the manager and `ssh-keyscan` probes through injected process functions. The CLI tests run the executable against fake Podman and a fake `ssh-keyscan`, and check the order and arguments of the Podman calls, the already-up-to-date case, the refusals, and the lifecycle lock. They inject a failure at each step, from the preflight, the build, and the rename through the creation, the stop of the old container, the start of the new one, each readiness probe, the removal of the backup container, and the final stop, and check the rollback calls and their order, the warnings, and that no call removes a volume and no SSH setup file changes. Readiness failures run the full 60-second deadline against a manager that never answers on a running sandbox and against an `ssh-keyscan` that never answers on a stopped and on a running sandbox. Further tests drive `update` through its public entry point against fake Podman and a fake `ssh-keyscan`, cancel the caller's context during each readiness probe of a stopped sandbox, and check that the rollback still runs with its own limit of at most 30 seconds and restores the sandbox. For `update --all`, the CLI tests cover the builds before the first rename, at most one per toolchain set, the sequential updates, an up-to-date sandbox, including its report when a later build fails, a failure in one sandbox that does not stop the next, a build failure that changes no sandbox, a sandbox of another controller group, a sandbox of which only volumes remain, an owner conflict, a sandbox that disappeared after the name inventory, and the usage errors. They also cover the locks: a busy sandbox is passed over, each lock is taken before its sandbox is inspected, the locks are held through all builds and updates, and they are released when the command ends, after success and after a build failure. These tests do not show that an update or a rollback works against real Podman or a real sshd. No live run covers `update` yet; that coverage belongs to the live suite (#24, #55, [Live suite](live-suite.md)).
+`update` adds no new manager functionality: the readiness wait uses the manager's existing version query, which the existing manager tests cover. Offline tests cover the rest. The readiness tests run the manager and `ssh-keyscan` probes through injected process functions. The CLI tests run the executable against fake Podman and a fake `ssh-keyscan`, and check the order and arguments of the Podman calls, the already-up-to-date case, the refusals, and the lifecycle lock. They inject a failure at each step, from the preflight, the build, and the rename through the creation, the stop of the old container, the start of the new one, each readiness probe, the removal of the backup container, and the final stop, and check the rollback calls and their order, the warnings, and that no call removes a volume and no SSH setup file changes. Readiness failures run the full 60-second deadline against a manager that never answers on a running sandbox and against an `ssh-keyscan` that never answers on a stopped and on a running sandbox. Further tests drive `update` through its public entry point against fake Podman and a fake `ssh-keyscan`, cancel the caller's context during each readiness probe of a stopped sandbox, and check that the rollback still runs with its own limit of at most 30 seconds and restores the sandbox. For `update --all`, the CLI tests cover the builds before the first rename, at most one per toolchain set, the sequential updates, an up-to-date sandbox, including its report when a later build fails, a failure in one sandbox that does not stop the next, a build failure that changes no sandbox, a sandbox of another controller group, a sandbox of which only volumes remain, an owner conflict, a sandbox that disappeared after the name inventory, and the usage errors. They also cover the locks: a busy sandbox is passed over, each lock is taken before its sandbox is inspected, the locks are held through all builds and updates, and they are released when the command ends, after success and after a build failure. For `update NAME --with SET`, which adds no manager functionality either, the CLI tests cover the replacement of the recorded set with the same volumes and configuration, `--with none`, both forms of the option, and repeated names. They cover the build of a missing or stale image before the rename, a build failure that leaves the original sandbox, and a failed creation or start whose rollback renames the original container, with its previous toolchain label, back. They cover the already-up-to-date case for an equal set given in another order, a new toolchain label when the selected image has the same ID as the old one, and the refusals before any Podman call or host query: an unknown name, also for a sandbox that does not exist, an empty name, `none` with another name, a missing value, a repeated option, and `--all` with `--with`. These tests do not show that an update or a rollback works against real Podman or a real sshd. No live run covers `update` yet; that coverage belongs to the live suite (#24, #55, [Live suite](live-suite.md)).

@@ -19,11 +19,17 @@ type Update struct {
 	assetHash   string
 	image       string
 	current     bool
+	options     UpdateOptions
 	replacement containerConfiguration
 }
 
-func NewUpdate(name, group, assetHash string, run process.Runner, streams process.Streams) *Update {
-	return &Update{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash}
+type UpdateOptions struct {
+	Toolchains   toolchains.Set
+	WithProvided bool
+}
+
+func NewUpdate(name, group, assetHash string, options UpdateOptions, run process.Runner, streams process.Streams) *Update {
+	return &Update{sandboxObjects: newSandboxObjects(name, group, run, streams), assetHash: assetHash, options: options}
 }
 
 func (update *Update) Prepare(ctx context.Context) error {
@@ -50,11 +56,15 @@ func (update *Update) plan(ctx context.Context) (toolchains.Set, bool, error) {
 			return set, false, fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, update.container, "toolchain set"), err)
 		}
 	}
+	recordedSet := set
+	if update.options.WithProvided {
+		set = update.options.Toolchains
+	}
 	image, current, err := images.Current(ctx, update.assetHash, set, update.run, update.streams)
 	if err != nil {
 		return set, false, err
 	}
-	if current && image == update.containerImage {
+	if current && image == update.containerImage && set == recordedSet {
 		update.current = true
 		return set, false, nil
 	}

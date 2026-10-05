@@ -7,139 +7,196 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-func Check(ctx context.Context, name, group, hostOS string, run process.Runner, output io.Writer) error {
-	state := newSandboxObjects(name, group, run, process.Streams{})
-	if err := state.inspectSandbox(ctx); err != nil {
+type Check struct {
+	*sandboxObjects
+	hostOS string
+}
+
+func NewCheck(name, group, hostOS string, run process.Runner, streams process.Streams) *Check {
+	return &Check{sandboxObjects: newSandboxObjects(name, group, run, streams), hostOS: hostOS}
+}
+
+func (check *Check) CheckSandbox(ctx context.Context) error {
+	if err := check.inspectSandbox(ctx); err != nil {
 		return err
 	}
-	if err := state.inspectBackup(ctx); err != nil {
+	if err := check.inspectBackup(ctx); err != nil {
 		return err
 	}
-	if !state.containerExists && !state.hasVolumes() && !state.backupExists {
-		return state.checkContainerPresence()
-	}
-	var report bytes.Buffer
-	problems := false
-	finding := func(err error) { problems = true; fmt.Fprintf(&report, checkProblemFormat, err) }
-	conflicts := state.ownerConflicts()
-	status := sandboxVolumesOnly
-	if state.containerExists {
-		status = sandboxStopped
-		if state.containerRunning {
-			status = sandboxRunning
-		}
-	}
-	if state.backupExists {
-		status = sandboxUpdateInterrupted
-	}
-	if len(conflicts) > 0 {
-		status = sandboxOwnerConflict
-	}
-	fmt.Fprintf(&report, checkSandboxFormat, name, status)
-	containerStatus := checkContainerAbsent
-	if state.containerExists {
-		containerStatus = string(sandboxStopped)
-		if state.containerRunning {
-			containerStatus = string(sandboxRunning)
-		}
-	}
-	fmt.Fprintf(&report, checkContainerFormat, state.container, containerStatus, checkOwner(state.containerOwner))
-	if len(conflicts) > 0 {
-		finding(ownerConflict(conflicts))
-	}
-	if err := state.CheckInterruptedUpdate(); err != nil {
-		fmt.Fprintf(&report, checkBackupFormat, state.backup, checkOwner(state.backupOwner))
-		finding(err)
-	}
-	bind := ""
-	for _, mount := range state.containerMounts {
-		if mount.Type == "bind" && mount.Destination == "/workspace" {
-			bind = mount.Source
-			fmt.Fprintf(&report, checkWorkspaceBindFormat, mount.Source)
-		}
-	}
-	for _, volume := range state.volumes {
-		mounted := false
-		for _, mount := range state.containerMounts {
-			if mount.Type == "volume" && mount.Name == volume.name && mount.Destination == volume.target {
-				mounted = true
-			}
-		}
-		required := state.containerExists && !(volume.target == "/workspace" && bind != "")
-		volumeStatus := checkVolumePresent
-		if !volume.exists || (required && !mounted) {
-			volumeStatus = checkVolumeMissing
-		}
-		if volume.exists && volume.target == "/workspace" && bind != "" {
-			volumeStatus = checkVolumeUnused
-		}
-		if volume.exists || required {
-			fmt.Fprintf(&report, checkVolumeFormat, volume.name, volumeStatus, checkOwner(volume.owner))
-		}
-		if required && (!volume.exists || !mounted) {
-			finding(fmt.Errorf(checkMissingVolumeFormat, volume.name, volume.target))
-		}
-	}
-	if state.containerExists {
-		for _, limit := range defaultResourceLimits().limits {
-			value := state.containerLabels[limit.label]
-			if value == "" {
-				value = checkLimitMissing
-			}
-			fmt.Fprintf(&report, checkResourceFormat, strings.TrimPrefix(limit.option, "--"), value)
-		}
-	}
-	if len(conflicts) > 0 {
-		report.WriteString(checkAccessOwnerSkipped)
-	} else if !state.containerRunning {
-		report.WriteString(checkManagerSkipped)
-	} else {
-		probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := probeManagerVersion(probeContext, state.container, run)
-		cancel()
-		if err != nil {
-			finding(fmt.Errorf(checkManagerFailedFormat, err))
-		} else {
-			report.WriteString(checkManagerAnswered)
-		}
-	}
-	setup := &SSHSetup{sandboxObjects: state, hostOS: hostOS}
-	installed, err := setup.checkInstalled()
-	switch {
-	case err != nil:
-		finding(fmt.Errorf(checkSSHReadFailedFormat, err))
-	case !installed:
-		report.WriteString(checkSSHNotInstalled)
-	case !state.containerExists:
-		problems = true
-		fmt.Fprintf(&report, checkSSHStaleFormat, name)
-	case len(conflicts) > 0:
-	case !state.containerRunning:
-		report.WriteString(checkSSHSkipped)
-	default:
-		if err := setup.checkConnection(ctx); err != nil {
-			finding(fmt.Errorf(checkSSHFailedFormat, setup.hostName(), err))
-		} else {
-			fmt.Fprintf(&report, checkSSHAnsweredFormat, setup.hostName())
-		}
-	}
-	if _, err := io.Copy(output, &report); err != nil {
-		return err
-	}
-	if problems {
-		return fmt.Errorf(checkProblemsFormat, name)
+	if !check.containerExists && !check.hasVolumes() && !check.backupExists {
+		return check.checkContainerPresence()
 	}
 	return nil
 }
 
-func checkOwner(owner string) string {
+func (check *Check) Report(ctx context.Context) error {
+	report := &checkReport{Check: check, conflicts: check.ownerConflicts()}
+	report.describeObjects()
+	report.describeVolumes()
+	report.describeLimits()
+	report.checkManager(ctx)
+	accessErr := report.checkSSH(ctx)
+	if _, err := io.Copy(check.streams.Stdout, &report.output); err != nil {
+		return err
+	}
+	if accessErr != nil {
+		return accessErr
+	}
+	if report.problems {
+		return fmt.Errorf(checkProblemsFormat, check.name)
+	}
+	return nil
+}
+
+type checkReport struct {
+	*Check
+	output    bytes.Buffer
+	problems  bool
+	conflicts []string
+}
+
+func (report *checkReport) finding(err error) {
+	report.problems = true
+	fmt.Fprintf(&report.output, checkProblemFormat, err)
+}
+
+func (check *Check) containerState() sandboxState {
+	if !check.containerExists {
+		return sandboxState(checkContainerAbsent)
+	}
+	if check.containerRunning {
+		return sandboxRunning
+	}
+	return sandboxStopped
+}
+
+func (report *checkReport) describeObjects() {
+	status := sandboxVolumesOnly
+	if report.containerExists {
+		status = report.containerState()
+	}
+	if report.backupExists {
+		status = sandboxUpdateInterrupted
+	}
+	conflicts := report.conflicts
+	if len(conflicts) > 0 {
+		status = sandboxOwnerConflict
+	}
+	fmt.Fprintf(&report.output, checkSandboxFormat, report.name, status)
+	fmt.Fprintf(&report.output, checkContainerFormat, report.container, report.containerState(), reportedOwner(report.containerOwner))
+	if len(conflicts) > 0 {
+		report.finding(ownerConflict(conflicts))
+	}
+	if err := report.CheckInterruptedUpdate(); err != nil {
+		fmt.Fprintf(&report.output, checkBackupFormat, report.backup, reportedOwner(report.backupOwner))
+		report.finding(err)
+	}
+}
+
+func (report *checkReport) describeVolumes() {
+	bound := false
+	for _, mount := range report.containerMounts {
+		if mount.Type == "bind" && mount.Destination == "/workspace" {
+			bound = true
+			fmt.Fprintf(&report.output, checkWorkspaceBindFormat, mount.Source)
+		}
+	}
+	for _, volume := range report.volumes {
+		mounted := false
+		for _, mount := range report.containerMounts {
+			if mount.Type == "volume" && mount.Name == volume.name && mount.Destination == volume.target {
+				mounted = true
+			}
+		}
+		unused := volume.target == "/workspace" && bound
+		required := report.containerExists && !unused
+		missing := required && (!volume.exists || !mounted)
+		volumeStatus := checkVolumePresent
+		if missing {
+			volumeStatus = checkVolumeMissing
+		} else if unused {
+			volumeStatus = checkVolumeUnused
+		}
+		if volume.exists || required {
+			fmt.Fprintf(&report.output, checkVolumeFormat, volume.name, volumeStatus, reportedOwner(volume.owner))
+		}
+		if missing {
+			report.finding(fmt.Errorf(checkMissingVolumeFormat, volume.name, volume.target))
+		}
+	}
+}
+
+func (report *checkReport) describeLimits() {
+	if !report.containerExists {
+		return
+	}
+	for _, limit := range defaultResourceLimits().limits {
+		value := report.containerLabels[limit.label]
+		if value == "" {
+			value = checkLimitMissing
+		}
+		fmt.Fprintf(&report.output, checkResourceFormat, strings.TrimPrefix(limit.option, "--"), value)
+	}
+}
+
+func (report *checkReport) checkManager(ctx context.Context) {
+	if len(report.conflicts) > 0 {
+		report.output.WriteString(checkAccessOwnerSkipped)
+		return
+	}
+	if !report.containerRunning {
+		report.output.WriteString(checkManagerSkipped)
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := probeManagerVersion(ctx, report.container, report.run); err != nil {
+		report.finding(fmt.Errorf(checkManagerFailedFormat, err))
+	} else {
+		report.output.WriteString(checkManagerAnswered)
+	}
+}
+
+func (report *checkReport) checkSSH(ctx context.Context) error {
+	setup := &SSHSetup{sandboxObjects: report.sandboxObjects, hostOS: report.hostOS}
+	installed, err := setup.checkInstalled()
+	if err != nil {
+		return fmt.Errorf(checkSSHReadFailedFormat, err)
+	}
+	if !installed {
+		report.output.WriteString(checkSSHNotInstalled)
+		return nil
+	}
+	if !report.containerExists {
+		format := checkSSHStaleFormat
+		if report.backupExists || len(report.conflicts) > 0 {
+			format = checkSSHWithoutContainerFormat
+		}
+		report.finding(fmt.Errorf(format, report.name))
+		return nil
+	}
+	if len(report.conflicts) > 0 {
+		return nil
+	}
+	if !report.containerRunning {
+		report.output.WriteString(checkSSHSkipped)
+		return nil
+	}
+	if err := setup.checkConnection(ctx); err != nil {
+		report.finding(fmt.Errorf(checkSSHFailedFormat, setup.hostName(), err))
+	} else {
+		fmt.Fprintf(&report.output, checkSSHAnsweredFormat, setup.hostName())
+	}
+	return nil
+}
+
+func reportedOwner(owner string) string {
 	if owner == "" {
 		return checkOwnerMissing
 	}
@@ -155,21 +212,7 @@ func (setup *SSHSetup) checkInstalled() (bool, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	entry, err := os.ReadFile(filepath.Join(paths.sandboxDirectory, "entry"))
-	if err != nil {
-		return true, err
-	}
-	config, err := os.ReadFile(paths.config)
-	if err != nil {
-		return true, err
-	}
-	if len(entry) == 0 || !bytes.Contains(config, entry) {
-		return true, fmt.Errorf(sshIncompleteFormat, setup.name)
-	}
-	return true, nil
+	return err == nil, err
 }
 
 func (setup *SSHSetup) checkConnection(ctx context.Context) error {

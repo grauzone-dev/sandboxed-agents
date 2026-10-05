@@ -410,11 +410,10 @@ The preflight (step 2), the terminal check (step 8), and the session guard (step
 ssh agent01
 ```
 
-VS Code Remote SSH and other desktop UIs read the same SSH configuration, so they list the host entry and connect through it. No live run has confirmed a connection yet ([Verification](#verification)).
+VS Code Remote SSH and other desktop UIs read the same SSH configuration, so they list the host entry and connect through it. `sandboxed-agents check NAME` attempts one connection through the host entry of a running sandbox and reports whether it succeeded; it also reports an SSH setup that remains for a sandbox without a container ([Check a sandbox](check.md#manager-and-ssh)). No live run has confirmed a connection yet ([Verification](#verification)).
 
 ### Not in this version
 
-- **Reporting SSH access in `check NAME`** comes with #20.
 - **A real SSH connection against real Podman** comes with #35.
 
 ## Verification

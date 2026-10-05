@@ -240,7 +240,7 @@ The agent's command decides where it stores what you sign in with. Because its h
 | 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. For `agents login`, the agent is not enabled in the sandbox; the message names `sandboxed-agents agents enable NAME AGENT`. |
 | 8. Terminal | `agents login` without an interactive terminal. This is reported only when the manager answers and the agent is enabled. |
 
-This version has no `check NAME` yet; the check of one sandbox comes with #20. Until then, `sandboxed-agents check` without a name checks only the host prerequisites and does not diagnose a sandbox or its manager. `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
+`sandboxed-agents check NAME` reports whether the manager answers, together with the rest of the sandbox's state ([Check a sandbox](check.md)). `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
 
 An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. Whether the agent is enabled is known only to the manager, so `agents disable` reports these refusals also for an agent that is not enabled. If npm or another step of the installation fails, `agents enable` reports the failure, leaves the selection unchanged, and exits with status 1. If the manager cannot read the agent selection or, for an enabled agent, the installed version, `agents status` reports the failure, prints no report, and exits with status 1; it runs no status probe then.
 
@@ -263,7 +263,7 @@ The agent runs as `agent`, UID and GID 1000, in `/workspace`, with a fixed envir
 | Only the volumes of the sandbox remain | `sandboxed-agents up NAME` |
 | An update was interrupted | `sandboxed-agents update NAME` |
 | The sandbox is stopped | `sandboxed-agents start NAME` |
-| The manager does not answer | `sandboxed-agents check NAME` for diagnosis ([comes with #20](#refusals)), then `sandboxed-agents restart NAME` |
+| The manager does not answer | `sandboxed-agents check NAME` for diagnosis ([Check a sandbox](check.md)), then `sandboxed-agents restart NAME` |
 | The agent is not enabled in the sandbox | `sandboxed-agents agents enable NAME AGENT` |
 
 An agent selection that cannot be read or is not a valid JSON object is refused as well. [How the request reaches the manager](#how-the-request-reaches-the-manager) describes the Podman call.

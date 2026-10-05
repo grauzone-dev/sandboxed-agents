@@ -26,7 +26,17 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 				return errors.New(updateMissingNameMessage)
 			}
 			all = invocation.Args[0] == "--all"
-			if len(invocation.Args) != 1 {
+			var options sandbox.UpdateOptions
+			var remaining []string
+			var err error
+			options.Toolchains, options.WithProvided, remaining, err = parseToolchains(invocation.Args[1:])
+			if err != nil {
+				return err
+			}
+			if all && options.WithProvided {
+				return errors.New(updateAllWithMessage)
+			}
+			if len(remaining) != 0 {
 				return errors.New(updateUsageMessage)
 			}
 			if all {
@@ -35,7 +45,7 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 			if err := sandbox.ValidateName(invocation.Args[0]); err != nil {
 				return err
 			}
-			update = sandbox.NewUpdate(invocation.Args[0], *group, assetHash, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			update = sandbox.NewUpdate(invocation.Args[0], *group, assetHash, options, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Preflight:         check,

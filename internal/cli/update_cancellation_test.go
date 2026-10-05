@@ -27,7 +27,7 @@ func TestUpdateCanRestoreAStoppedSandboxAfterCallerCancellationDuringReadiness(t
 			defer cancel()
 			var stdout, stderr bytes.Buffer
 			cleanupCalls := 0
-			update := sandbox.NewUpdate("agent01", "default", "fixture-assets", func(requestCtx context.Context, request process.Request) (int, error) {
+			update := sandbox.NewUpdate("agent01", "default", "fixture-assets", sandbox.UpdateOptions{}, func(requestCtx context.Context, request process.Request) (int, error) {
 				if ctx.Err() != nil {
 					cleanupCalls++
 					deadline, present := requestCtx.Deadline()

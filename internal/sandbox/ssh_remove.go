@@ -60,10 +60,7 @@ func (setup *SSHSetup) removeHost() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	entry, err := os.ReadFile(filepath.Join(paths.sandboxDirectory, "entry"))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
+	entry, err := readOptionalFile(filepath.Join(paths.sandboxDirectory, "entry"))
 	if err != nil {
 		return false, err
 	}
@@ -71,14 +68,26 @@ func (setup *SSHSetup) removeHost() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if len(entry) == 0 {
+		entry = setup.managedRemovalEntry(paths, config)
+		_, err := os.Lstat(paths.sandboxDirectory)
+		if errors.Is(err, os.ErrNotExist) && len(entry) == 0 {
+			return false, nil
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
 	block := sshEntryBlock(entry)
 	remaining := config
 	if len(entry) > 0 {
 		remaining = bytes.ReplaceAll(config, block, nil)
 	}
 	if len(remaining) > 0 {
-		if err := setup.writeSSHFile(paths.config, remaining, 0600, false); err != nil {
-			return false, err
+		if !bytes.Equal(config, remaining) {
+			if err := setup.writeSSHFile(paths.config, remaining, 0600, false); err != nil {
+				return false, err
+			}
 		}
 	} else {
 		userConfig, err := readOptionalFile(paths.userConfig)
@@ -123,6 +132,26 @@ func (remove *Remove) removeSSH() error {
 		if volume.target == "/etc/ssh" && volume.exists && !remove.deleteVolumes {
 			_, err := fmt.Fprintf(remove.streams.Stdout, sshVolumeAuthorizationRemainsFormat, remove.name)
 			return err
+		}
+	}
+	return nil
+}
+
+func (setup *SSHSetup) managedRemovalEntry(paths sshPaths, config []byte) []byte {
+	hostLine := []byte("Host " + setup.hostName() + "\n")
+	identityLine := []byte("\n  IdentityFile " + sshConfigPath(filepath.Join(paths.sandboxDirectory, "id_ed25519")) + "\n")
+	var candidate []byte
+	active := false
+	for _, line := range bytes.SplitAfter(config, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("Host ")) {
+			if active && bytes.Equal(line, []byte("Host *\n")) && bytes.Contains(candidate, identityLine) {
+				return candidate
+			}
+			active = bytes.Equal(line, hostLine)
+			candidate = nil
+		}
+		if active {
+			candidate = append(candidate, line...)
 		}
 	}
 	return nil

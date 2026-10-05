@@ -33,7 +33,7 @@ func TestGitHubLoginAuthenticatesAsAgentThenConfiguresGitForGitHub(t *testing.T)
 				t.Fatalf("status=%d stderr=%q", status, stderr.String())
 			}
 			want := [][]string{
-				{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"},
+				{"auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--scopes", "workflow"},
 				{"auth", "setup-git", "--hostname", "github.com"},
 			}
 			if len(calls) != len(want) {

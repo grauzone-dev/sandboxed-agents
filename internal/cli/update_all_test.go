@@ -198,6 +198,9 @@ func TestUpdateAllRestoresAFailedSandboxAndContinuesWithTheRemainingSandboxes(t 
 					responses = append(responses, updateAllCurrentImage("")...)
 				}
 				responses = append(responses, successfulRunningUpdateResponses()...)
+				if running {
+					responses = append(responses, testutil.Response{Stdout: `[]`})
+				}
 				responses = append(responses, testutil.Response{}, testutil.Response{})
 				want := [][]string{{"rename", "sandboxed-agents.default.agent02", "sandboxed-agents-backup.default.agent02"}, {"create"}}
 				if running {
@@ -449,6 +452,9 @@ func TestUpdateAllContinuesAfterBackupRemovalOrFinalStopFails(t *testing.T) {
 				responses = append(responses, updateAllCurrentImage("")...)
 				responses = append(responses, updateAllObjects(t, "agent02", true, "old-base", "")...)
 				responses = append(responses, updateAllCurrentImage("")...)
+				if scenario.running {
+					responses = append(responses, testutil.Response{Stdout: `[]`})
+				}
 				responses = append(responses, testutil.Response{}, testutil.Response{})
 				want := [][]string{{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"}}
 				if scenario.running {

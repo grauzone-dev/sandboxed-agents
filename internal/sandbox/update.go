@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
+	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
@@ -16,16 +17,19 @@ const UpdateWasRunningLabel = "io.github.sandboxed-agents.update-was-running"
 
 type Update struct {
 	*sandboxObjects
-	assetHash   string
-	image       string
-	current     bool
-	options     UpdateOptions
-	replacement containerConfiguration
+	assetHash     string
+	image         string
+	current       bool
+	options       UpdateOptions
+	replacement   containerConfiguration
+	sessions      []manager.Session
+	sessionsKnown bool
 }
 
 type UpdateOptions struct {
 	Toolchains   toolchains.Set
 	WithProvided bool
+	Force        bool
 }
 
 func NewUpdate(name, group, assetHash string, options UpdateOptions, run process.Runner, streams process.Streams) *Update {
@@ -139,7 +143,13 @@ func (update *Update) replacementConfiguration(selected toolchains.Set) (contain
 	return replacement, nil
 }
 
-func (update *Update) Apply(ctx context.Context) error {
+func (update *Update) Apply(ctx context.Context) (err error) {
+	oldStopped := false
+	defer func() {
+		if oldStopped {
+			err = errors.Join(err, update.reportEndedSessions())
+		}
+	}()
 	if update.current {
 		_, err := fmt.Fprintln(update.streams.Stdout, fmt.Sprintf(updateAlreadyCurrentFormat, update.name))
 		return err
@@ -155,6 +165,7 @@ func (update *Update) Apply(ctx context.Context) error {
 		if err := update.runPodman(ctx, "stop", update.backup); err != nil {
 			return update.rollback(ctx, updateStopOldStep, err, true)
 		}
+		oldStopped = true
 	}
 	if err := update.runPodman(ctx, "start", update.container); err != nil {
 		return update.rollback(ctx, updateStartNewStep, err, true)
@@ -174,7 +185,7 @@ func (update *Update) Apply(ctx context.Context) error {
 			return fmt.Errorf(updateFinalStopFailureFormat, update.name, err)
 		}
 	}
-	_, err := fmt.Fprintln(update.streams.Stdout, fmt.Sprintf(updateSuccessFormat, update.name))
+	_, err = fmt.Fprintln(update.streams.Stdout, fmt.Sprintf(updateSuccessFormat, update.name))
 	return err
 }
 

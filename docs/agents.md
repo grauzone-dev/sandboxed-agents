@@ -303,13 +303,13 @@ Without `--stop`, the executable first asks the manager whether the agent is ena
 
 ### Session query
 
-The manager's query for the running sessions of a sandbox, the call `stop`, `restart`, and `remove` use for their session guard ([Running agent sessions](sandboxes.md#running-agent-sessions)), answers with every running agent session of the sandbox, and with an empty list when none runs:
+The manager's query for the running sessions of a sandbox, the call `stop`, `restart`, `remove`, and `update` use for their session guard ([Running agent sessions](sandboxes.md#running-agent-sessions), [Session guard of `update`](updates.md#session-guard)), answers with every running agent session of the sandbox, and with an empty list when none runs:
 
 ```sh
 podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager sessions list
 ```
 
-The executable addresses the manager as container root for this query, as for every administrative call. The manager, called as root, starts itself again as `agent`, UID and GID 1000, and that process reads the sessions from the tmux server of `agent`, not from a tmux server of root, which would always be empty. Each element names the session, `sandboxed-agents-AGENT`, and its agent, for example `[{"name":"sandboxed-agents-claude","agent":"claude"}]`. Sessions on that server whose names do not start with `sandboxed-agents-` are not listed, and when no tmux server of `agent` runs, the answer is `[]`. `stop`, `restart`, and `remove` therefore refuse on a sandbox with a session started by `agents session` unless `--force` is given. The query fails when tmux cannot be started, does not answer within 5 seconds, or fails for another reason, and when a session name names an agent outside the catalog or appears twice. The commands that sent the query then treat the manager as not answering.
+The executable addresses the manager as container root for this query, as for every administrative call. The manager, called as root, starts itself again as `agent`, UID and GID 1000, and that process reads the sessions from the tmux server of `agent`, not from a tmux server of root, which would always be empty. Each element names the session, `sandboxed-agents-AGENT`, and its agent, for example `[{"name":"sandboxed-agents-claude","agent":"claude"}]`. Sessions on that server whose names do not start with `sandboxed-agents-` are not listed, and when no tmux server of `agent` runs, the answer is `[]`. `stop`, `restart`, `remove`, and `update` therefore refuse on a sandbox with a session started by `agents session` unless `--force` is given. `update` sends the query only when it would replace a running sandbox's container, after its image builds and directly before the replacement. The query fails when tmux cannot be started, does not answer within 5 seconds, or fails for another reason, and when a session name names an agent outside the catalog or appears twice. The commands that sent the query then treat the manager as not answering.
 
 ### Session refusals
 

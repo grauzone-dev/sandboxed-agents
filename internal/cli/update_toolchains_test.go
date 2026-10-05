@@ -323,6 +323,9 @@ func TestUpdateToolchainFailureRestoresTheOriginalContainerAndRunningState(t *te
 				defer checkSSH()
 				responses := updateObjectResponses(t, scenario.running, "current-dotnet", "dotnet", "")
 				responses = append(responses, updateCurrentNativeImageResponses()...)
+				if scenario.running {
+					responses = append(responses, testutil.Response{Stdout: `[]`})
+				}
 				responses = append(responses, make([]testutil.Response, scenario.successfulChanges)...)
 				responses = append(responses, testutil.Response{ExitCode: 42})
 				responses = append(responses, make([]testutil.Response, len(scenario.want)-scenario.successfulChanges-1)...)

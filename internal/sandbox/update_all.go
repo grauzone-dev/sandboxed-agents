@@ -11,7 +11,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
-func UpdateAll(ctx context.Context, hostOS, group, assetHash string, run process.Runner, streams process.Streams) error {
+func UpdateAll(ctx context.Context, hostOS, group, assetHash string, force bool, run process.Runner, streams process.Streams) error {
 	names, err := discoverGroupSandboxes(ctx, group, run)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func UpdateAll(ctx context.Context, hostOS, group, assetHash string, run process
 			continue
 		}
 		releases = append(releases, release)
-		update := NewUpdate(name, group, assetHash, UpdateOptions{}, run, streams)
+		update := NewUpdate(name, group, assetHash, UpdateOptions{Force: force}, run, streams)
 		if err := update.CheckSandbox(ctx); err != nil {
 			report(name, err)
 			continue
@@ -95,6 +95,10 @@ func UpdateAll(ctx context.Context, hostOS, group, assetHash string, run process
 		}
 	}
 	for _, update := range updates {
+		if err := update.CheckSessions(ctx); err != nil {
+			report(update.name, err)
+			continue
+		}
 		if err := update.Apply(ctx); err != nil {
 			failed = true
 			fmt.Fprintln(streams.Stderr, err)

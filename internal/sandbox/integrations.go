@@ -94,6 +94,8 @@ func (integration *IntegrationWorkflow) Apply(ctx context.Context) error {
 	}
 	status, err := integration.run(ctx, process.Request{Name: "podman", Args: args, Streams: streams})
 	if err != nil {
+		// The runner's error is untrusted diagnostics and may carry the piped token.
+		// For azdo, report only the fixed message and never wrap or echo err.
 		if integration.request.Integration == "azdo" {
 			return fmt.Errorf("%s", integrations.AzdoRunFailure)
 		}

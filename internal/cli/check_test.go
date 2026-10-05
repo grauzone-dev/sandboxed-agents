@@ -564,3 +564,82 @@ func TestCheckStoppedSandboxDoesNotAddAnSSHIntegrityCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckRecognizesAnSSHHostEntryWithoutItsDataDirectory(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, group := range []string{"default", "team-a"} {
+			for _, test := range []struct {
+				name, report    string
+				exists, running bool
+				problem         bool
+			}{
+				{name: "running", report: "SSH connection through host entry", exists: true, running: true, problem: true},
+				{name: "stopped", report: "SSH: not checked; the SSH check needs a running sandbox", exists: true},
+				{name: "volumes only", report: "ssh-config agent01 --remove", problem: true},
+			} {
+				t.Run(host.name+"/"+group+"/"+test.name, func(t *testing.T) {
+					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+					installSSHForRemoval(t, fakes, fixture, host.windows, "agent01", group)
+					if err := os.RemoveAll(filepath.Join(state, "group-"+group, "ssh", "sandbox-6167656e743031")); err != nil {
+						t.Fatal(err)
+					}
+					beforePodman, beforeSSHCalls := len(fakes.Calls("podman")), len(fakes.Calls("ssh"))
+					responses := checkObjectResponses(t, group, "agent01", group, test.exists, test.running, map[string]string{"workspace": group, "home": group, "ssh": group}, nil, nil, "")
+					if test.running {
+						responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"})
+					}
+					scriptCheckObjects(fakes, host.windows, responses)
+					fakes.Script("ssh", testutil.Response{ExitCode: 255, Stderr: "identity file is missing"})
+					beforeSSH, beforeState := sshDirectoryContents(t, sshDir), managedSSHFiles(t, state)
+					stdout, stderr, status := runCLI(t, fixture, "check", "agent01")
+					if (status != 0) != test.problem || !strings.Contains(stdout, test.report) || strings.Contains(stdout, "SSH setup is not installed") {
+						t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+					}
+					calls := fakes.Calls("ssh")[beforeSSHCalls:]
+					if test.running {
+						alias := "agent01"
+						if group != "default" {
+							alias += "." + group
+						}
+						if len(calls) != 1 || !reflect.DeepEqual(calls[0].Args[len(calls[0].Args)-2:], []string{alias, "true"}) {
+							t.Fatalf("SSH did not use sandbox host entry: %v", calls)
+						}
+					} else if len(calls) != 0 {
+						t.Fatalf("SSH connection attempted without a running container: %v", calls)
+					}
+					assertCheckCallsReadOnly(t, fakes.Calls("podman")[beforePodman:], host.windows, test.running)
+					if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
+						t.Fatal("check changed files")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCheckDoesNotUseAnotherSandboxesSSHSetup(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, installed := range []struct{ name, group string }{{"agent02", "default"}, {"agent01", "team-a"}} {
+			t.Run(host.name+"/"+installed.group+"/"+installed.name, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				installSSHForRemoval(t, fakes, fixture, host.windows, installed.name, installed.group)
+				t.Setenv("SANDBOXED_AGENTS_GROUP", "default")
+				beforePodman, beforeSSHCalls := len(fakes.Calls("podman")), len(fakes.Calls("ssh"))
+				responses := checkObjectResponses(t, "default", "agent01", "default", true, true, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil, nil, "")
+				scriptCheckObjects(fakes, host.windows, append(responses, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}))
+				beforeSSH, beforeState := sshDirectoryContents(t, sshDir), managedSSHFiles(t, state)
+				stdout, stderr, status := runCLI(t, fixture, "check", "agent01")
+				if status != 0 || stderr != "" || !strings.Contains(stdout, "SSH: the SSH setup is not installed; no SSH connection was attempted\n") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				if len(fakes.Calls("ssh")) != beforeSSHCalls {
+					t.Fatal("check attempted an SSH connection through another sandbox's setup")
+				}
+				assertCheckCallsReadOnly(t, fakes.Calls("podman")[beforePodman:], host.windows, true)
+				if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
+					t.Fatal("check changed files")
+				}
+			})
+		}
+	}
+}

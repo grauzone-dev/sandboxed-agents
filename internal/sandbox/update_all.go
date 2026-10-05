@@ -50,8 +50,8 @@ func UpdateAll(ctx context.Context, hostOS, group, assetHash string, options Upd
 			report(name, err)
 			continue
 		}
-		if err := update.CheckInterruptedUpdate(); err != nil {
-			report(name, err)
+		if update.backupExists {
+			updates = append(updates, update)
 			continue
 		}
 		if !update.containerExists {

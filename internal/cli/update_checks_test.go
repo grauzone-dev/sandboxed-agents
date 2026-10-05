@@ -3,7 +3,6 @@ package cli_test
 import (
 	"encoding/json"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 
 func TestUpdateReportsPreflightFailureBeforeUnknownSandboxOrOwnerConflict(t *testing.T) {
 	for _, host := range resourceLimitHosts {
-		for _, sandboxState := range []string{"unknown", "foreign"} {
+		for _, sandboxState := range []string{"unknown", "foreign", "interrupted"} {
 			t.Run(host.name+"/"+sandboxState, func(t *testing.T) {
 				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 				checkSSH := installUpdateSSHFixture(t, sshDir, state)
@@ -20,6 +19,8 @@ func TestUpdateReportsPreflightFailureBeforeUnknownSandboxOrOwnerConflict(t *tes
 				var responses []testutil.Response
 				if sandboxState == "unknown" {
 					responses = upObjectResponses(nil, false, nil, nil)
+				} else if sandboxState == "interrupted" {
+					responses = recoveryObjectResponses(t, true, false, false, "true")
 				} else {
 					responses = updateObjectResponses(t, false, "old-image", "", "")
 					responses = updateObjectOwner(t, responses, "sandboxed-agents.default.agent01", "another-group")
@@ -129,28 +130,6 @@ func TestUpdateRefusesMissingAndForeignOwnersOnEverySandboxObject(t *testing.T) 
 					assertUpdateChecksReadOnly(t, fakes, host.windows, fakes.Calls("podman"))
 				})
 			}
-		}
-	}
-}
-
-func TestUpdateRefusesAnOwnedBackupWithoutCircularRecoveryAdvice(t *testing.T) {
-	for _, host := range resourceLimitHosts {
-		for _, withContainer := range []bool{false, true} {
-			t.Run(host.name+"/container-"+strconv.FormatBool(withContainer), func(t *testing.T) {
-				fakes, fixture := resourceLimitHost(t, host.windows)
-				owned := "default"
-				var containerOwner *string
-				if withContainer {
-					containerOwner = &owned
-				}
-				responses := upObjectResponses(containerOwner, true, nil, &owned)
-				scriptUpdate(t, fakes, host.windows, responses)
-				stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
-				if status == 0 || !strings.Contains(stderr, "sandboxed-agents-backup.default.agent01") || !strings.Contains(stderr, "interrupted update") || !strings.Contains(stderr, "not available in this version") || !strings.Contains(stderr, "Podman") || strings.Contains(stderr, "run sandboxed-agents update") {
-					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
-				}
-				assertUpdateChecksReadOnly(t, fakes, host.windows, fakes.Calls("podman"))
-			})
 		}
 	}
 }

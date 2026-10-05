@@ -6,7 +6,7 @@ import (
 )
 
 func (update *Update) CheckSessions(ctx context.Context) error {
-	if update.current || !update.containerRunning {
+	if update.backupExists || update.current || !update.containerRunning {
 		return nil
 	}
 	var err error

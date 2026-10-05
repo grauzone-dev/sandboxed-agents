@@ -24,6 +24,7 @@ type Update struct {
 	replacement   containerConfiguration
 	sessions      []manager.Session
 	sessionsKnown bool
+	recovered     bool
 }
 
 type UpdateOptions struct {
@@ -46,6 +47,9 @@ func (update *Update) Prepare(ctx context.Context) error {
 
 func (update *Update) plan(ctx context.Context) (toolchains.Set, bool, error) {
 	var recordedSet toolchains.Set
+	if update.backupExists {
+		return recordedSet, false, nil
+	}
 	if !update.containerExists {
 		return recordedSet, false, fmt.Errorf(updateNoContainerFormat, update.name)
 	}
@@ -144,6 +148,12 @@ func (update *Update) replacementConfiguration(selected toolchains.Set) (contain
 }
 
 func (update *Update) Apply(ctx context.Context) (err error) {
+	if update.backupExists {
+		if update.recovered {
+			return nil
+		}
+		return update.RecoverInterruptedUpdate(ctx)
+	}
 	oldStopAttempted := false
 	oldStopped := false
 	defer func() {
@@ -175,43 +185,52 @@ func (update *Update) Apply(ctx context.Context) (err error) {
 	if err := WaitReady(ctx, update.container, update.replacement.port, update.run); err != nil {
 		return update.rollback(ctx, updateReadinessStep, err, true)
 	}
-	if err := update.runPodman(ctx, "rm", update.backup); err != nil {
-		failure := fmt.Errorf(updateBackupRemovalFailureFormat, update.name, update.backup, err)
-		if !update.containerRunning {
-			return fmt.Errorf("%w%s", failure, updateBackupStillRunningMessage)
-		}
-		return failure
-	}
-	if !update.containerRunning {
-		if err := update.runPodman(ctx, "stop", update.container); err != nil {
-			return fmt.Errorf(updateFinalStopFailureFormat, update.name, err)
-		}
+	if err := update.finishReplacement(ctx, update.containerRunning); err != nil {
+		return err
 	}
 	_, err = fmt.Fprintln(update.streams.Stdout, fmt.Sprintf(updateSuccessFormat, update.name))
 	return err
 }
 
+func (update *Update) finishReplacement(ctx context.Context, wasRunning bool) error {
+	if err := update.runPodman(ctx, "rm", update.backup); err != nil {
+		failure := fmt.Errorf(updateBackupRemovalFailureFormat, update.name, update.backup, err)
+		if !wasRunning {
+			return fmt.Errorf("%w%s", failure, updateBackupStillRunningMessage)
+		}
+		return failure
+	}
+	if !wasRunning {
+		if err := update.runPodman(ctx, "stop", update.container); err != nil {
+			return fmt.Errorf(updateFinalStopFailureFormat, update.name, err)
+		}
+	}
+	return nil
+}
+
 func (update *Update) rollback(ctx context.Context, step string, cause error, oldMayHaveStopped bool) error {
 	failure := fmt.Errorf(updateStepFailureFormat, update.name, step, cause)
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if err := update.runPodman(ctx, "rm", "--force", "--ignore", update.container); err != nil {
-		return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, updateRollbackRemoveStep, err))
-	}
-	if err := update.runPodman(ctx, "rename", update.backup, update.container); err != nil {
-		return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, updateRollbackRenameStep, err))
-	}
-	if oldMayHaveStopped && update.containerRunning {
-		if err := update.runPodman(ctx, "start", update.container); err != nil {
-			return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, updateRollbackStartStep, err))
-		}
+	if step, err := update.restoreBackup(ctx, true, oldMayHaveStopped && update.containerRunning); err != nil {
+		return errors.Join(failure, fmt.Errorf(updateRollbackFailureFormat, update.name, step, err))
 	}
 	return fmt.Errorf("%w; %s", failure, fmt.Sprintf(updateRestoredFormat, update.name))
 }
 
-func (update *Update) CheckInterruptedUpdate() error {
-	if update.backupExists {
-		return fmt.Errorf(updateInterruptedFormat, update.backup, update.name)
+func (update *Update) restoreBackup(ctx context.Context, removeNew, restart bool) (string, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if removeNew {
+		if err := update.runPodman(ctx, "rm", "--force", "--ignore", update.container); err != nil {
+			return updateRollbackRemoveStep, err
+		}
 	}
-	return nil
+	if err := update.runPodman(ctx, "rename", update.backup, update.container); err != nil {
+		return updateRollbackRenameStep, err
+	}
+	if restart {
+		if err := update.runPodman(ctx, "start", update.container); err != nil {
+			return updateRollbackStartStep, err
+		}
+	}
+	return "", nil
 }

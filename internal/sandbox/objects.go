@@ -44,6 +44,7 @@ type sandboxObjects struct {
 	backupChecked    bool
 	backupExists     bool
 	backupOwner      string
+	backupRunning    bool
 	containerOwner   string
 	containerRunning bool
 	containerLabels  map[string]string
@@ -191,6 +192,7 @@ func (state *sandboxObjects) inspectBackup(ctx context.Context) error {
 			return err
 		}
 		state.backupOwner = backup.Config.Labels[OwnerLabel]
+		state.backupRunning = backup.State.Running
 	}
 	state.backupChecked = true
 	return nil

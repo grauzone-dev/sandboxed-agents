@@ -58,7 +58,7 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 		Preflight:         check,
 		Sandbox:           forNamedTarget(func(*Invocation) error { return update.CheckContainer(ctx) }),
 		Owner:             forNamedTarget(func(*Invocation) error { return update.CheckOwner(ctx) }),
-		InterruptedUpdate: forNamedTarget(func(*Invocation) error { return update.CheckInterruptedUpdate() }),
+		InterruptedUpdate: forNamedTarget(func(*Invocation) error { return update.RecoverInterruptedUpdate(ctx) }),
 		SessionGuard:      forNamedTarget(func(*Invocation) error { return update.CheckSessions(ctx) }),
 	}, Prepare: forNamedTarget(func(*Invocation) error { return update.Prepare(ctx) }), Action: func(invocation *Invocation) error {
 		if all {

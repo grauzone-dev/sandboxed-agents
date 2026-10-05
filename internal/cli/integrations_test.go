@@ -48,8 +48,9 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 		{[]string{"config", "agent01", "azdo"}, "valid integrations: git"},
 		{[]string{"config", "agent01", "git"}, "valid workflows: identity, credentials"},
 		{[]string{"login", "agent01", "github", "nosuch"}, "valid workflows: device"},
-		{[]string{"login", "agent01", "azure"}, "valid integrations: github"},
-		{[]string{"login", "agent01", "azdo"}, "valid integrations: github"},
+		{[]string{"login", "agent01", "azure", "nosuch"}, "valid workflows: device"},
+		{[]string{"login", "agent01", "azure", "--unknown"}, "unexpected argument or option"},
+		{[]string{"login", "agent01", "azdo"}, "valid integrations: github, azure"},
 		{[]string{"login", "agent01", "git"}, "valid config workflows: identity, credentials"},
 		{[]string{"config"}, "sandbox name"},
 		{[]string{"config", "agent01"}, "missing integration"},
@@ -76,7 +77,7 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 func TestIntegrationChecksReportTheFirstFailureAndNeverStartAnything(t *testing.T) {
 	owner, foreign, missing := "default", "other", ""
 	for _, command := range []struct{ kind, integration, workflow string }{
-		{"config", "git", "identity"}, {"config", "git", "credentials"}, {"login", "github", "device"},
+		{"config", "git", "identity"}, {"config", "git", "credentials"}, {"login", "github", "device"}, {"login", "azure", "device"},
 	} {
 		workflow := command.workflow
 		for _, test := range []struct {
@@ -109,9 +110,12 @@ func TestIntegrationChecksReportTheFirstFailureAndNeverStartAnything(t *testing.
 			if workflow == "credentials" && test.name == "terminal" {
 				continue
 			}
-			t.Run(workflow+"/"+test.name, func(t *testing.T) {
+			t.Run(command.integration+"/"+workflow+"/"+test.name, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				responses := sandboxObjectResponses(test.container, test.running, test.volumes, test.backup)
+				if command.integration == "azure" && test.name == "terminal" {
+					responses = withIntegrationToolchains(t, responses, "azure")
+				}
 				if test.manager != nil {
 					responses = append(responses, *test.manager)
 				}

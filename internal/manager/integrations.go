@@ -27,6 +27,8 @@ func (m *Manager) runIntegrationWorkflow(ctx context.Context, args []string, str
 		return configureGit(ctx, "credential.helper", "store --file=/home/agent/.git-credentials", streams, run)
 	case "github/device":
 		return m.loginGitHub(ctx, streams, run)
+	case "azure/device":
+		return m.loginAzure(ctx, streams, run)
 	default:
 		return fmt.Errorf(integrations.UnknownKind, request.Kind+" "+request.Integration+" "+request.Workflow)
 	}

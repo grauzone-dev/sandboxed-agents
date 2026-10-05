@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/images"
 	"github.com/grauzone-dev/sandboxed-agents/internal/integrations"
 	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
 type IntegrationWorkflow struct {
@@ -28,7 +31,7 @@ func NewIntegrationWorkflow(name, group string, workflow integrations.Request, r
 			for _, entry := range environment {
 				key, _, _ := strings.Cut(entry, "=")
 				key = strings.ToUpper(key)
-				if !strings.HasPrefix(key, "GIT_") && !strings.HasPrefix(key, "GH_") && !strings.HasPrefix(key, "GITHUB_") && key != "EMAIL" {
+				if !strings.HasPrefix(key, "GIT_") && !strings.HasPrefix(key, "GH_") && !strings.HasPrefix(key, "GITHUB_") && !strings.HasPrefix(key, "AZURE_") && !strings.HasPrefix(key, "ARM_") && key != "EMAIL" {
 					request.Env = append(request.Env, entry)
 				}
 			}
@@ -38,9 +41,27 @@ func NewIntegrationWorkflow(name, group string, workflow integrations.Request, r
 	return &IntegrationWorkflow{sandboxObjects: newSandboxObjects(name, group, cleanRun, streams), request: workflow}
 }
 
-func (integration *IntegrationWorkflow) CheckManager(ctx context.Context) error {
+func (integration *IntegrationWorkflow) CheckPreconditions(ctx context.Context) error {
 	if _, err := RunningSessions(ctx, integration.container, integration.run); err != nil {
 		return fmt.Errorf(managerUnavailableFormat, integration.name)
+	}
+	if integration.request.Integration != "azure" {
+		return nil
+	}
+	var set toolchains.Set
+	if recorded := integration.containerLabels[images.ToolchainsLabel]; recorded != "" {
+		var err error
+		set, err = toolchains.Parse(recorded)
+		if err != nil {
+			return err
+		}
+	}
+	if !slices.Contains(set.Names(), "azure") {
+		selected, err := toolchains.Parse(strings.Join(append(set.Names(), "azure"), ","))
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf(integrations.AzureToolchainRequired, integration.name, selected.String())
 	}
 	return nil
 }

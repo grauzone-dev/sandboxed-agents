@@ -16,7 +16,7 @@ func Catalog() []Integration {
 	return []Integration{
 		{Name: "git", Config: []string{"identity", "credentials"}},
 		{Name: "github", Login: []string{"device"}},
-		{Name: "azure"},
+		{Name: "azure", Login: []string{"device"}},
 		{Name: "azdo"},
 	}
 }

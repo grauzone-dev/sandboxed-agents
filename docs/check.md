@@ -79,7 +79,7 @@ A sandbox of which only volumes remain, all three or only some, each with the cu
 
 ### Interrupted update
 
-A backup container `sandboxed-agents-backup.GROUP.NAME` is reported with and without a container under the sandbox's own name. `check NAME` points to `sandboxed-agents update NAME` and restores nothing. In this version `update` does not recover an interrupted update yet; recovery comes with #54 ([Update a sandbox](updates.md#not-in-this-version)).
+A backup container `sandboxed-agents-backup.GROUP.NAME` is reported with and without a container under the sandbox's own name. `check NAME` points to `sandboxed-agents update NAME` and restores nothing. `update NAME` completes the interrupted update or restores the original container ([Recover an interrupted update](updates.md#recover-an-interrupted-update)).
 
 ### Owner conflicts
 

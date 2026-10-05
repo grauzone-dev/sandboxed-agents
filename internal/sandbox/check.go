@@ -209,10 +209,17 @@ func (setup *SSHSetup) checkInstalled() (bool, error) {
 		return false, err
 	}
 	_, err = os.Lstat(paths.sandboxDirectory)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+	if err == nil {
+		return true, nil
 	}
-	return err == nil, err
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	config, err := readOptionalFile(paths.config)
+	if err != nil {
+		return false, err
+	}
+	return len(setup.managedRemovalEntry(paths, config)) > 0, nil
 }
 
 func (setup *SSHSetup) checkConnection(ctx context.Context) error {

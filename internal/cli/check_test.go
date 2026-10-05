@@ -29,18 +29,26 @@ func TestCheckReportsAnIntactRunningSandboxAndRecordedLimits(t *testing.T) {
 				if status != 0 || stderr != "" {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				for _, want := range []string{"running", "sandboxed-agents.default.agent01", "default", "manager", "answered", "SSH setup", "not installed"} {
-					if !strings.Contains(stdout, want) {
+				lines := strings.Split(stdout, "\n")
+				for _, want := range []string{
+					"Sandbox agent01: state running",
+					"Container sandboxed-agents.default.agent01: running, owner default",
+					"Manager: the manager answered through podman exec",
+					"SSH: the SSH setup is not installed; no SSH connection was attempted",
+				} {
+					if !slices.Contains(lines, want) {
 						t.Errorf("output=%q lacks %q", stdout, want)
 					}
 				}
 				for option, value := range limits {
-					if !strings.Contains(stdout, option+": "+value) {
-						t.Errorf("output=%q lacks %s: %s", stdout, option, value)
+					want := "Resource limit " + option + ": " + value
+					if !slices.Contains(lines, want) {
+						t.Errorf("output=%q lacks %q", stdout, want)
 					}
 				}
 				for _, suffix := range []string{"workspace", "home", "ssh"} {
-					if !strings.Contains(stdout, "sandboxed-agents.default.agent01."+suffix) {
+					want := "Volume sandboxed-agents.default.agent01." + suffix + ": present, owner default"
+					if !slices.Contains(lines, want) {
 						t.Errorf("missing volume %s in %q", suffix, stdout)
 					}
 				}

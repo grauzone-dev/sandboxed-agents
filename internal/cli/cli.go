@@ -373,7 +373,7 @@ func runWithCatalog(args []string, stdout, stderr io.Writer, version, assetHash 
 		{Name: "list", Checks: Checks{Usage: noArguments}, Action: func(invocation *Invocation) error {
 			return sandbox.List(context.Background(), group, run, invocation.Stdout, catalog)
 		}},
-		withLifecycleLock(removeCommand(&group, run), host, &group),
+		withLifecycleLock(removeCommand(host.workspace.OS, &group, run), host, &group),
 		{Name: "integrations", Commands: []Command{
 			integrationCommand("config", &group, run),
 			integrationCommand("login", &group, run),

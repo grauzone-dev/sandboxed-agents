@@ -20,7 +20,7 @@ func sshServer(stateDirectory string) Command {
 	return func(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
 		wait := len(args) == 2 && args[0] == "host-key" && args[1] == "--wait"
 		if len(args) != 1 && !wait {
-			return errors.New("usage: sandboxed-agents-manager ssh start | host-key [--wait] | authorize")
+			return errors.New(sshUsage)
 		}
 		switch args[0] {
 		case "host-key":
@@ -61,9 +61,15 @@ func sshServer(stateDirectory string) Command {
 				return err
 			}
 			return os.Rename(file.Name(), filepath.Join(stateDirectory, "authorized_keys"))
+		case "deauthorize":
+			err := os.Remove(filepath.Join(stateDirectory, "authorized_keys"))
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
 		case "start":
 		default:
-			return errors.New("usage: sandboxed-agents-manager ssh start | host-key [--wait] | authorize")
+			return errors.New(sshUsage)
 		}
 		if err := os.MkdirAll(stateDirectory, 0755); err != nil {
 			return fmt.Errorf("initialize SSH server state: %w", err)

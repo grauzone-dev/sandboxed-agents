@@ -219,10 +219,10 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	include := "Include " + sshConfigPath(paths.config) + "\n"
+	include := sshIncludeLine(paths.config) + "\n"
 	hasInclude := false
 	for _, line := range strings.Split(string(userConfig), "\n") {
-		if strings.TrimSuffix(line, "\r") == strings.TrimSuffix(include, "\n") {
+		if sshIncludeMatches(line, paths.config) {
 			hasInclude = true
 		}
 	}
@@ -306,7 +306,7 @@ func (setup *SSHSetup) Install(ctx context.Context) (err error) {
 	if len(managed) > 0 && managed[len(managed)-1] != '\n' {
 		managed = append(managed, '\n')
 	}
-	managed = append(managed, []byte(entry+"Host *\n")...)
+	managed = append(managed, sshEntryBlock([]byte(entry))...)
 	configInfo, statErr := os.Stat(paths.config)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
@@ -472,4 +472,16 @@ func (setup *SSHSetup) createSSHDirectories(path string) ([]string, error) {
 		}
 	}
 	return missing, nil
+}
+
+func sshIncludeLine(configPath string) string {
+	return "Include " + sshConfigPath(configPath)
+}
+
+func sshIncludeMatches(line, configPath string) bool {
+	return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r") == sshIncludeLine(configPath)
+}
+
+func sshEntryBlock(entry []byte) []byte {
+	return append(bytes.Clone(entry), []byte("Host *\n")...)
 }

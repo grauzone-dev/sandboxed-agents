@@ -99,7 +99,7 @@ The preflight (step 2), the preconditions (step 7), the terminal check (step 8),
 
 ## SSH setup
 
-The SSH setup lets `ssh`, VS Code Remote SSH, and other desktop UIs reach a sandbox under a host entry name. It is opt-in (ADR-0002): only the commands below write it, and `up` and `start` without `--ssh-config` neither read nor write any file in your SSH directory.
+The SSH setup lets `ssh`, VS Code Remote SSH, and other desktop UIs reach a sandbox under a host entry name. It is opt-in (ADR-0002): only the commands below write or remove it, and `up` and `start` without `--ssh-config` neither read nor write any file in your SSH directory.
 
 | Command | What it does |
 | --- | --- |
@@ -107,6 +107,8 @@ The SSH setup lets `ssh`, VS Code Remote SSH, and other desktop UIs reach a sand
 | `ssh-config NAME --install` | installs the SSH setup of the running sandbox `NAME` |
 | `up NAME --ssh-config` | creates or starts the sandbox, then installs its SSH setup |
 | `start NAME --ssh-config` | starts the sandbox, then installs its SSH setup |
+| `ssh-config NAME --remove` | removes the SSH setup of the sandbox `NAME` ([Remove the SSH setup](#remove-the-ssh-setup)) |
+| `remove NAME` | removes the sandbox's container, and its volumes with `--volumes`, and the host side of its SSH setup ([Remove with `remove`](#remove-with-remove)) |
 
 An installed SSH setup consists of five parts:
 
@@ -198,6 +200,7 @@ Include "/home/alice/.local/state/sandboxed-agents/group-default/ssh/config"
 - **Once per controller group.** The line is added with the group's first SSH setup. When any line of the file is identical to it, a further installation in the group adds a host entry to the managed configuration and leaves your SSH configuration unchanged. Each controller group has its own line, so an installation in `live` after one in `default` adds the line of `live` and leaves the line of `default` and all host state of `default` unchanged.
 - **Everything else preserved.** The installation changes nothing else in the file: your host entries, the `Include` lines of other groups, and comments stay as they were. The installation writes the new content to a temporary file beside the file and puts it in place of the file. When `~/.ssh/config` is a symlink, it follows the link, replaces the target this way, and keeps the symlink. On Unix the new file gets the replaced file's mode, on Windows it keeps the replaced file's permissions ([Permissions on Windows](#permissions-on-windows)), and an existing `.ssh` directory is not changed.
 - **Created when missing.** When the file or the `.ssh` directory does not exist, the installation creates it, and the new file contains only the `Include` line.
+- **Removed with the group's last host entry.** Removing an SSH setup removes the line only when it removes the last host entry of the controller group ([The `Include` line on removal](#the-include-line-on-removal)).
 
 No controller group writes the files or the `Include` line of another group.
 
@@ -245,6 +248,7 @@ The manager accepts exactly one ed25519 public key, writes it as the only line o
 - **Exactly one key.** Every installation replaces the whole file, so it holds the key of the latest installation and nothing else. A key that an earlier SSH setup left there is replaced.
 - **Out of reach of agents.** The user `agent` can read the file but not change it, so an agent cannot authorize a key of its own or remove the dedicated one. sshd's `StrictModes` accepts a root-owned file that nobody else can write.
 - **Kept across `stop` and `start`.** The file lives in the volume, so the authorization survives `stop`, `start`, and `restart`. Neither `stop` nor `start` without `--ssh-config` changes it. It also survives `remove` and `up` as long as the SSH server state volume is kept, and `update`, which mounts the same volume in the new container and changes no host SSH file ([Update a sandbox](updates.md#what-update-keeps)).
+- **Removed by `ssh-config NAME --remove`.** On a running sandbox whose manager answers, `ssh-config NAME --remove` removes the authorization ([Remove the authorization](#remove-the-authorization)). `remove NAME` never does; the authorization stays in the SSH server state volume until `remove NAME --volumes` deletes that volume or the next installation replaces the key.
 
 ### Pinned host key
 
@@ -261,7 +265,7 @@ The pin is strict, and nothing re-pins it:
 - `ssh` with the host entry refuses a connection when the sandbox presents a different host key (`StrictHostKeyChecking yes`), and it never updates the pin (`UpdateHostKeys no`).
 - With the SSH setup installed, `ssh-config NAME --install` builds the pin line from the host key the manager reports and the recorded port and compares it with the pin. When they differ, it fails, leaves the pin and every other file unchanged, and names `ssh-config NAME --remove` followed by `ssh-config NAME --install` as the way out. `up NAME --ssh-config` and `start NAME --ssh-config` fail in the same way and leave the sandbox running.
 
-The host key changes only when the sandbox gets a new SSH server state volume, for example after `remove NAME --volumes` and `up NAME`. A new recorded port, for example after `remove NAME` and `up NAME --port N`, also makes the pin line differ. `ssh-config NAME --remove` comes with #37 and is not available in this version, and no other command removes an SSH setup or replaces a pin yet. Until #37, a host key mismatch cannot be resolved with a command of the executable.
+The host key changes only when the sandbox gets a new SSH server state volume, for example after `remove NAME --volumes` and `up NAME`. A new recorded port, for example after `remove NAME` and `up NAME --port N`, also makes the pin line differ. In both examples, `remove NAME` already deletes the pin with the rest of the host side of the SSH setup ([Remove with `remove`](#remove-with-remove)), so the next installation pins the new host key and port. For a mismatch that arises otherwise, `ssh-config NAME --remove` deletes the pin, and the next `ssh-config NAME --install` pins the host key the manager reports then. No command replaces a pin in place.
 
 ### Host entry conflicts
 
@@ -309,6 +313,67 @@ When the installation fails, whatever the reason, the sandbox stays and keeps ru
 
 With `--agents` as well, `up` enables the agents first and installs the SSH setup afterwards. When `up` fails before the installation, for example because the sandbox does not start or an agent is not enabled, it skips the SSH setup, exits with status 1, and names `sandboxed-agents ssh-config NAME --install` to run once the sandbox runs, besides its own retry commands.
 
+### Remove the SSH setup
+
+```sh
+sandboxed-agents ssh-config NAME --remove
+```
+
+`ssh-config NAME --remove` removes from your host everything `--install` created for the sandbox `NAME`:
+
+- its host entry, with the `Host *` line that follows it, from the managed configuration of the controller group;
+- its `sandbox-HEX` directory in host state, with the key pair, the pin, and the `entry` file;
+- the `Include` line of the controller group in your SSH configuration, when the removed host entry was the group's last ([The `Include` line on removal](#the-include-line-on-removal)).
+
+It does not change the container, its volumes, or the SSH server in the sandbox. Host entries, key pairs, and pins of other sandboxes stay intact. Whether the authorization in the sandbox is removed as well depends on the sandbox's state; the host side is removed in every case:
+
+| State of the sandbox | Authorization in the sandbox | Exit status |
+| --- | --- | --- |
+| Running, and the manager answers | removed through the manager ([Remove the authorization](#remove-the-authorization)) | 0 |
+| Running, and the manager does not answer | remains; the message says that it could not be removed and names `sandboxed-agents check NAME` and `sandboxed-agents restart NAME` | 1 |
+| Stopped | remains; `--remove` starts nothing, runs no command in the container, and says that the authorization remains in the sandbox | 0 |
+| No container, and only volumes with the current owner remain | remains in the SSH server state volume, if that volume exists; `--remove` creates and starts no container | 0 |
+
+An authorization that remains is replaced by the next `ssh-config NAME --install`, which needs the sandbox to run again, so exactly one key is authorized afterwards ([Authorized key](#authorized-key)). Until then, no file in host state holds the private key of the remaining authorization, because `--remove` deleted the key pair.
+
+- **No SSH setup.** When the sandbox has no SSH setup, that is, no `entry` file, `--remove` leaves your SSH directory unchanged, says that the sandbox has no SSH setup, and exits with status 0, because the requested state already holds.
+- **Incomplete SSH setup.** When the `entry` file exists but the managed configuration does not contain that host entry, or does not exist at all, `--remove` still removes the SSH setup. It removes from the managed configuration only blocks that match the `entry` file exactly, each followed by its `Host *` line, and leaves any other content there unchanged, then deletes the `sandbox-HEX` directory. This is the recovery that `ssh-config NAME` and `--install` name for an incomplete SSH setup: `ssh-config NAME --remove`, then `ssh-config NAME --install`.
+
+### Remove the authorization
+
+On a running sandbox, `--remove` asks the manager, as container root (ADR-0006), to remove the authorization:
+
+```sh
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager ssh deauthorize
+```
+
+The manager deletes `/etc/ssh/authorized_keys`, which holds only the dedicated key ([Authorized key](#authorized-key)). Without that file the SSH server accepts no key, so no one can sign in over SSH until the next installation. When the file is missing already, the call succeeds. When the manager does not answer, or the call fails, `--remove` does not stop at step 7 of the [order of checks](#order-of-checks-for-ssh-config) as `--install` does. It still removes the host side, reports that the authorization in the sandbox could not be removed, names `sandboxed-agents check NAME` and `sandboxed-agents restart NAME`, says that the next `ssh-config NAME --install` replaces the authorization, and exits with status 1.
+
+### The `Include` line on removal
+
+Each controller group has its own `Include` line in your SSH configuration ([Your SSH configuration](#your-ssh-configuration)). Removing an SSH setup keeps the line of the current controller group as long as the group's managed configuration still has content. When the managed configuration is empty after the removal, or does not exist, the removal deletes it and removes the group's line from your SSH configuration, so the line goes together with the group's last host entry. The `Include` lines and the host state of other controller groups are neither read nor changed, and the rest of your SSH configuration, such as your own host entries and comments, is preserved. When no other controller group has an SSH setup, your SSH configuration then has the content it had before the first installation.
+
+When the sandbox has no SSH setup, neither `ssh-config NAME --remove` nor `remove NAME` changes your SSH configuration, also when other sandboxes have an SSH setup.
+
+### Remove with `remove`
+
+`remove NAME`, with and without `--volumes`, also removes the host side of the sandbox's SSH setup (ADR-0002), in addition to what it does to the container and the volumes ([Remove a sandbox](sandboxes.md#remove-a-sandbox)). It deletes the same files and lines as `ssh-config NAME --remove`. It does not ask the manager to remove the authorization, also when the sandbox runs.
+
+- **Volumes kept.** Without `--volumes`, the SSH server state volume is kept, and with it the authorization. The output of `remove` says that the authorization remains in the volume and is replaced by the next `ssh-config NAME --install`. `up NAME` adopts the volume, and the authorization with it ([Kept volumes](sandboxes.md#kept-volumes)).
+- **Only volumes remain.** When no container exists and each remaining volume has the current owner, `remove NAME` and `remove NAME --volumes` remove the host side of the SSH setup, create and start no container, and exit with status 0.
+- **Foreign volume kept.** `remove NAME --volumes` that removes the container and keeps a volume with a missing or different owner ([Owners and kept volumes](sandboxes.md#owners-and-kept-volumes)) removes the host side of the SSH setup as well, because the container is gone, and still exits with status 1.
+- **Refused `remove`.** When `remove` refuses, it leaves the SSH setup untouched. This includes an owner conflict when no container exists and one of the sandbox's volumes has a missing or different owner, with and without `--volumes`, and a running agent session or a manager that does not answer without `--force`.
+
+`update` does not go through `remove` and keeps the SSH setup ([Update a sandbox](updates.md#what-update-keeps)).
+
+### Refusals of `--remove`
+
+`ssh-config NAME --remove` refuses, changes no file, and exits with status 1 in these cases, in the [order of checks](#order-of-checks-for-ssh-config):
+
+- **Unknown sandbox.** Neither the container, a volume, nor the backup container of `NAME` exists in the current controller group, also when a sandbox of that name exists in another group.
+- **Owner conflict.** The container, a volume, or the backup container has a missing owner label or one that names another controller group, with a container and when only volumes remain. The message names the Podman objects concerned and points to Podman. The only command that still removes the host side of the SSH setup then is `remove NAME --volumes`, and only when the sandbox's container exists with the current owner, no backup container exists, and only volumes have a missing or different owner ([Remove with `remove`](#remove-with-remove)).
+- **Interrupted update.** The backup container of an interrupted update exists with the current owner. The message names `sandboxed-agents update NAME`.
+
 ### Print the host entry
 
 `ssh-config NAME` prints the host entry on standard output, exits with status 0, and changes no file, neither in host state nor in your SSH directory. It works on a running and on a stopped sandbox and does not ask the manager.
@@ -319,20 +384,23 @@ With `--agents` as well, `up` enables the agents first and installs the SSH setu
 
 ### Command line
 
-`ssh-config` takes exactly one sandbox name, checked against the [sandbox name rules](sandboxes.md#sandbox-names), and optionally `--install`. A usage error prints a message and a usage line on standard error, calls no other program, and exits with status 1. `--remove` comes with #37; in this version it is a usage error.
+`ssh-config` takes exactly one sandbox name, checked against the [sandbox name rules](sandboxes.md#sandbox-names), and optionally one of `--install` and `--remove`. A usage error prints a message and a usage line on standard error, calls no other program, and exits with status 1:
+
+- Without a name, `ssh-config` reports `missing sandbox name; use sandboxed-agents ssh-config NAME [--install|--remove]`.
+- `--install` and `--remove` together, or either of them twice, is reported as `conflicting or repeated options; give at most one of --install and --remove, once`.
 
 ### Order of checks for `ssh-config`
 
-`ssh-config` runs its checks in the order described in [Development](development.md#order-of-checks) and reports only the first failure. Every refusal exits with status 1 and changes no file.
+`ssh-config` runs its checks in the order described in [Development](development.md#order-of-checks) and reports only the first failure. Every refusal exits with status 1 and changes no file. A manager that does not answer during `--remove` is not a refusal: `--remove` removes the host side first ([Remove the authorization](#remove-the-authorization)).
 
 | Step | What `ssh-config` does at this step |
 | --- | --- |
 | 1. Usage and names | reports an invalid controller group, then a usage error or an invalid sandbox name |
-| 3. Sandbox existence | reports an unknown sandbox name, also for a sandbox of another controller group. When only volumes remain, names `sandboxed-agents up NAME`, which adopts them; an owner conflict on one of them is reported instead. |
+| 3. Sandbox existence | reports an unknown sandbox name, also for a sandbox of another controller group. When only volumes remain, `ssh-config NAME` and `--install` name `sandboxed-agents up NAME`, which adopts them, and `--remove` continues; an owner conflict on one of them is reported instead. |
 | 4. Owner | reports an owner conflict on the container, a volume, or the backup container, names the Podman objects, and points to Podman |
 | 5. Interrupted update | reports a backup container with the current owner and names `sandboxed-agents update NAME` |
-| 6. Running state | `--install` only: reports a stopped sandbox and names `sandboxed-agents start NAME`; it starts nothing |
-| 7. Preconditions | `--install` only: reports a manager that does not answer. A host key that cannot be read, a host key that differs from the pin, a host entry conflict, and an existing `sandbox-HEX` path without an `entry` file are reported afterwards by the installation, before it writes anything. |
+| 6. Running state | `--install` only: reports a stopped sandbox and names `sandboxed-agents start NAME`; it starts nothing. `--remove` continues on a stopped sandbox and starts nothing either. |
+| 7. Preconditions | `--install` only: reports a manager that does not answer; `--remove` reports nothing here. A host key that cannot be read, a host key that differs from the pin, a host entry conflict, and an existing `sandbox-HEX` path without an `entry` file are reported afterwards by the installation, before it writes anything. |
 
 The preflight (step 2), the terminal check (step 8), and the session guard (step 9) do not apply to `ssh-config`. On Windows, the machine selection runs after step 1 and before step 3, as for `shell`. An owner conflict on a stopped sandbox is therefore reported instead of the message naming `start NAME`.
 
@@ -346,7 +414,6 @@ VS Code Remote SSH and other desktop UIs read the same SSH configuration, so the
 
 ### Not in this version
 
-- **Removing an SSH setup.** ADR-0002 states that `remove` deletes a sandbox's SSH setup. This is delivered in stages: #19 installs the SSH setup, and `ssh-config NAME --remove` and the cleanup of the host side by `remove NAME` come with #37. Until then, `remove NAME` leaves the host entry, the key pair, the pin, and the `Include` line in place. The messages for a host key mismatch and an incomplete SSH setup still name `ssh-config NAME --remove`, as #19 requires, although it is not available yet.
 - **Reporting SSH access in `check NAME`** comes with #20.
 - **A real SSH connection against real Podman** comes with #35.
 
@@ -358,6 +425,8 @@ The terminal tests give `shell` a real terminal handle of the test host as stand
 
 The SSH setup is covered by offline tests at the CLI boundary against the same fake programs, on Linux and with the fake Windows host identity. They check the files that `ssh-config`, `up --ssh-config`, and `start --ssh-config` change in host state and in the SSH directory, byte for byte, the Podman calls of the manager probe, the host key query, and the authorization, the `ssh -G` queries of the conflict check, the `ssh-keygen` call, and the refusals in the order of checks. The Unix permission modes are checked on Linux only. The manager's side, reading the host key and replacing `/etc/ssh/authorized_keys`, is covered by manager tests with injected process functions and files.
 
+The removal of the SSH setup is covered by offline tests at the CLI boundary against the same fake programs, on Linux and with the fake Windows host identity. They check the files that `ssh-config --remove` and `remove` delete or keep in host state and in the SSH directory, byte for byte, also those of other sandboxes and of another controller group, the Podman call that removes the authorization and its absence on a stopped sandbox, on a sandbox of which only volumes remain, and with `remove`, the exit statuses, and the refusals. The manager's side, deleting `/etc/ssh/authorized_keys`, is covered by manager tests with injected process functions.
+
 The Windows permissions are checked only in the Windows job of the offline suite, on the real file system of the test machine. After `ssh-config --install`, `up --ssh-config`, and `start --ssh-config` against the same fake programs, the tests read back the owner, whether inheritance is turned off, and every permission entry of each file and directory the installation creates, also after a second sandbox. They also check that an existing `.ssh` directory and an existing SSH configuration, with and without inherited permissions, keep their permissions. They show which permissions the installation sets, not that OpenSSH for Windows accepts them, and they do not run under a standard account.
 
-No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, not that OpenSSH for Windows accepts the files of the SSH setup with their permissions, and not that the installation sets these permissions under a standard account without administrator rights. That evidence needs the live suite (#24) and the live SSH tests (#35).
+No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, not that `ssh-config --remove` removes the authorization from a real sandbox, not that OpenSSH for Windows accepts the files of the SSH setup with their permissions, and not that the installation sets these permissions under a standard account without administrator rights. That evidence needs the live suite (#24) and the live SSH tests (#35).

@@ -13,14 +13,15 @@ import (
 
 type Remove struct {
 	*sandboxObjects
+	hostOS        string
 	deleteVolumes bool
 	force         bool
 	sessions      []manager.Session
 	sessionsKnown bool
 }
 
-func NewRemove(name, group string, deleteVolumes, force bool, run process.Runner, streams process.Streams) *Remove {
-	return &Remove{sandboxObjects: newSandboxObjects(name, group, run, streams), deleteVolumes: deleteVolumes, force: force}
+func NewRemove(name, group, hostOS string, deleteVolumes, force bool, run process.Runner, streams process.Streams) *Remove {
+	return &Remove{sandboxObjects: newSandboxObjects(name, group, run, streams), hostOS: hostOS, deleteVolumes: deleteVolumes, force: force}
 }
 
 func (remove *Remove) CheckSandbox(ctx context.Context) error {
@@ -53,6 +54,7 @@ func (remove *Remove) CheckOwner(ctx context.Context) error {
 }
 
 func (remove *Remove) Apply(ctx context.Context) error {
+	var reportErr error
 	if remove.containerExists {
 		if remove.containerRunning {
 			if err := remove.runPodman(ctx, "stop", remove.container); err != nil {
@@ -65,10 +67,12 @@ func (remove *Remove) Apply(ctx context.Context) error {
 		if err := remove.runPodman(ctx, "rm", remove.container); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(remove.streams.Stdout, "Removed container %s.\n", remove.container); err != nil {
-			return err
-		}
-	} else if !remove.deleteVolumes {
+		_, reportErr = fmt.Fprintf(remove.streams.Stdout, "Removed container %s.\n", remove.container)
+	}
+	if err := errors.Join(reportErr, remove.removeSSH()); err != nil {
+		return err
+	}
+	if !remove.containerExists && !remove.deleteVolumes {
 		_, err := fmt.Fprintf(remove.streams.Stdout, "sandbox %s has no container; its volumes were kept, and sandboxed-agents remove %s --volumes deletes them\n", remove.name, remove.name)
 		return err
 	}

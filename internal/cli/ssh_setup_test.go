@@ -535,7 +535,7 @@ func TestSSHCommandsApplySandboxOwnerAndInterruptedUpdateChecksBeforeRunningAndI
 }
 
 func TestSSHUsageErrorsRunBeforePodmanOrHostWrites(t *testing.T) {
-	for _, args := range [][]string{{"ssh-config"}, {"ssh-config", "invalid/name", "--install"}, {"ssh-config", "agent01", "--install", "--install"}, {"ssh-config", "agent01", "--unknown"}, {"ssh-config", "agent01", "extra"}, {"ssh-config", "agent01", "--remove"}, {"start", "agent01", "--ssh-config", "--ssh-config"}, {"up", "agent01", "--ssh-config", "--ssh-config"}} {
+	for _, args := range [][]string{{"ssh-config"}, {"ssh-config", "invalid/name", "--install"}, {"ssh-config", "agent01", "--install", "--install"}, {"ssh-config", "agent01", "--unknown"}, {"ssh-config", "agent01", "extra"}, {"ssh-config", "agent01", "--remove", "--remove"}, {"ssh-config", "agent01", "--install", "--remove"}, {"ssh-config", "agent01", "--remove", "--install"}, {"start", "agent01", "--ssh-config", "--ssh-config"}, {"up", "agent01", "--ssh-config", "--ssh-config"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			fakes, fixture, sshDir, state := sshSetupHost(t, true)
 			stdout, stderr, status := runCLI(t, fixture, args...)

@@ -180,13 +180,13 @@ func TestUpdateBuildsTheReplacementToolchainImageBeforeChangingTheSandbox(t *tes
 		{
 			name:    "missing-toolchain",
 			initial: updateMissingNativeImageResponses(),
-			ensure:  append(updateMissingNativeImageResponses(), testutil.Response{}, updateCurrentNativeImageResponses()[3]),
+			ensure:  append(updateMissingNativeImageResponses(), testutil.Response{}, updateCurrentNativeImageResponse()),
 			builds:  []string{"native"},
 		},
 		{
 			name:    "stale-toolchain",
 			initial: updateStaleNativeImageResponses(),
-			ensure:  append(updateStaleNativeImageResponses(), testutil.Response{}, updateCurrentNativeImageResponses()[3]),
+			ensure:  append(updateStaleNativeImageResponses(), testutil.Response{}, updateCurrentNativeImageResponse()),
 			builds:  []string{"native"},
 		},
 		{
@@ -265,50 +265,79 @@ func TestUpdateToolchainBuildFailureKeepsTheOriginalSandbox(t *testing.T) {
 
 func TestUpdateToolchainFailureRestoresTheOriginalContainerAndRunningState(t *testing.T) {
 	for _, host := range resourceLimitHosts {
-		for _, running := range []bool{true, false} {
-			for _, failure := range []string{"create", "stop", "start"} {
-				if failure == "stop" && !running {
-					continue
+		for _, scenario := range []struct {
+			name, failure     string
+			running           bool
+			successfulChanges int
+			want              [][]string
+		}{
+			{
+				name: "running/create", failure: "create", running: true, successfulChanges: 1,
+				want: [][]string{
+					{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"},
+					{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"},
+					{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"},
+				},
+			},
+			{
+				name: "stopped/create", failure: "create", successfulChanges: 1,
+				want: [][]string{
+					{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"},
+					{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"},
+					{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"},
+				},
+			},
+			{
+				name: "running/stop", failure: "stop", running: true, successfulChanges: 2,
+				want: [][]string{
+					{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"},
+					{"stop", "sandboxed-agents-backup.default.agent01"},
+					{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"},
+					{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"},
+					{"start", "sandboxed-agents.default.agent01"},
+				},
+			},
+			{
+				name: "running/start", failure: "start", running: true, successfulChanges: 3,
+				want: [][]string{
+					{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"},
+					{"stop", "sandboxed-agents-backup.default.agent01"}, {"start", "sandboxed-agents.default.agent01"},
+					{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"},
+					{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"},
+					{"start", "sandboxed-agents.default.agent01"},
+				},
+			},
+			{
+				name: "stopped/start", failure: "start", successfulChanges: 2,
+				want: [][]string{
+					{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"},
+					{"start", "sandboxed-agents.default.agent01"},
+					{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"},
+					{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"},
+				},
+			},
+		} {
+			t.Run(host.name+"/"+scenario.name, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				checkSSH := installUpdateSSHFixture(t, sshDir, state)
+				defer checkSSH()
+				responses := updateObjectResponses(t, scenario.running, "current-dotnet", "dotnet", "")
+				responses = append(responses, updateCurrentNativeImageResponses()...)
+				responses = append(responses, make([]testutil.Response, scenario.successfulChanges)...)
+				responses = append(responses, testutil.Response{ExitCode: 42})
+				responses = append(responses, make([]testutil.Response, len(scenario.want)-scenario.successfulChanges-1)...)
+				scriptUpdate(t, fakes, host.windows, responses)
+				stdout, stderr, status := runCLI(t, fixture, "update", "agent01", "--with", "native")
+				if status == 0 || !strings.Contains(stderr, scenario.failure) || !strings.Contains(stderr, "restored") || !strings.Contains(stderr, "42") || strings.Contains(stdout, "updated") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				t.Run(fmt.Sprintf("%s/running-%t/%s", host.name, running, failure), func(t *testing.T) {
-					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
-					checkSSH := installUpdateSSHFixture(t, sshDir, state)
-					defer checkSSH()
-					responses := updateObjectResponses(t, running, "current-dotnet", "dotnet", "")
-					responses = append(responses, updateCurrentNativeImageResponses()...)
-					responses = append(responses, testutil.Response{})
-					want := [][]string{{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"}}
-					if failure != "create" {
-						responses = append(responses, testutil.Response{})
-						if running {
-							if failure != "stop" {
-								responses = append(responses, testutil.Response{})
-							}
-							want = append(want, []string{"stop", "sandboxed-agents-backup.default.agent01"})
-						}
-						if failure == "start" {
-							want = append(want, []string{"start", "sandboxed-agents.default.agent01"})
-						}
-					}
-					responses = append(responses, testutil.Response{ExitCode: 42}, testutil.Response{}, testutil.Response{})
-					want = append(want, []string{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"}, []string{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"})
-					if failure != "create" && running {
-						responses = append(responses, testutil.Response{})
-						want = append(want, []string{"start", "sandboxed-agents.default.agent01"})
-					}
-					scriptUpdate(t, fakes, host.windows, responses)
-					stdout, stderr, status := runCLI(t, fixture, "update", "agent01", "--with", "native")
-					if status == 0 || !strings.Contains(stderr, failure) || !strings.Contains(stderr, "restored") || !strings.Contains(stderr, "42") || strings.Contains(stdout, "updated") {
-						t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
-					}
-					if changes := assertUpdateChangesPreserveData(t, fakes); !reflect.DeepEqual(changes, want) {
-						t.Fatalf("rollback did not restore the original container with its dotnet label: changes=%v want=%v", changes, want)
-					}
-					if create := assertUpdateCreatedFromImage(t, fakes, "current-native"); !slices.Contains(create, "io.github.sandboxed-agents.toolchains=native") {
-						t.Fatalf("replacement did not request the new set: %v", create)
-					}
-				})
-			}
+				if changes := assertUpdateChangesPreserveData(t, fakes); !reflect.DeepEqual(changes, scenario.want) {
+					t.Fatalf("rollback did not restore the original container with its dotnet label: changes=%v want=%v", changes, scenario.want)
+				}
+				if create := assertUpdateCreatedFromImage(t, fakes, "current-native"); !slices.Contains(create, "io.github.sandboxed-agents.toolchains=native") {
+					t.Fatalf("replacement did not request the new set: %v", create)
+				}
+			})
 		}
 	}
 }
@@ -322,10 +351,20 @@ func TestUpdateRetryKeepsTheRequestedToolchainSetWhenTheImageChanges(t *testing.
 				missing := updateMissingNativeImageResponses()
 				responses = append(responses, missing...)
 				responses = append(responses, missing...)
-				responses = append(responses, testutil.Response{}, updateCurrentNativeImageResponses()[3])
-				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"changed-base"}]`}, testutil.Response{}, updateCurrentNativeImageResponses()[3])
+				successfulBuild := testutil.Response{}
+				builtNativeImage := updateCurrentNativeImageResponse()
+				responses = append(responses, successfulBuild, builtNativeImage)
+				baseImageExists := testutil.Response{}
+				changedBaseImage := testutil.Response{Stdout: `[{"Id":"changed-base"}]`}
+				nativeImageExists := testutil.Response{}
+				nativeFromPreviousBase := updateCurrentNativeImageResponse()
+				responses = append(responses, baseImageExists, changedBaseImage, nativeImageExists, nativeFromPreviousBase)
 			} else {
-				responses = append(responses, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{}, testutil.Response{ExitCode: 1})
+				missingDuringPlanning := testutil.Response{ExitCode: 1}
+				missingBeforeBuild := testutil.Response{ExitCode: 1}
+				successfulBuild := testutil.Response{}
+				missingAfterBuild := testutil.Response{ExitCode: 1}
+				responses = append(responses, missingDuringPlanning, missingBeforeBuild, successfulBuild, missingAfterBuild)
 			}
 			scriptUpdate(t, fakes, false, responses)
 			stdout, stderr, status := runCLI(t, "linux-build", "update", "agent01", "--with", selection)

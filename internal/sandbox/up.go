@@ -71,14 +71,8 @@ func (up *Up) CheckOptions() error {
 		return err
 	}
 	if up.withProvided && up.containerLabels[images.ToolchainsLabel] != up.toolchains.String() {
-		recorded := up.containerLabels[images.ToolchainsLabel]
-		if recorded == "" {
-			recorded = "none"
-		}
-		given := up.toolchains.String()
-		if given == "" {
-			given = "none"
-		}
+		recorded := toolchains.Display(up.containerLabels[images.ToolchainsLabel])
+		given := toolchains.Display(up.toolchains.String())
 		return fmt.Errorf("toolchain set conflict: recorded %q, given %q; use sandboxed-agents update %s --with %s to change it", recorded, given, up.name, given)
 	}
 	return nil

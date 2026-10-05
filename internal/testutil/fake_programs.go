@@ -179,6 +179,7 @@ func runFake(state, name string, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 99
 	}
+	responseCount := len(responses)
 	for len(responses) > 0 && responses[0].RepeatForArgs != nil && !slices.Equal(responses[0].RepeatForArgs, args) {
 		responses = responses[1:]
 	}
@@ -238,14 +239,16 @@ func runFake(state, name string, args []string) int {
 	if response.RepeatForArgs == nil {
 		responses = responses[1:]
 	}
-	data, err = json.Marshal(responses)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 99
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 99
+	if len(responses) != responseCount {
+		data, err = json.Marshal(responses)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 99
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 99
+		}
 	}
 	fmt.Fprint(os.Stdout, response.Stdout)
 	fmt.Fprint(os.Stderr, response.Stderr)

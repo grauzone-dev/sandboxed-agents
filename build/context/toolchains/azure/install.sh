@@ -18,4 +18,5 @@ trap 'rm -rf "$azure_config"' EXIT HUP INT TERM
 export AZURE_CONFIG_DIR="$azure_config"
 az extension add --system --name azure-devops --allow-preview false
 extension_directory=$(/opt/az/bin/python3 -c 'from azure.cli.core.extension import EXTENSIONS_SYS_DIR; print(EXTENSIONS_SYS_DIR)')
+/opt/az/bin/python3 -m pip install --no-cache-dir keyring==25.7.0
 chmod -R a+rX "$extension_directory/azure-devops"

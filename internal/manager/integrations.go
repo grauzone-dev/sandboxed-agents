@@ -29,6 +29,8 @@ func (m *Manager) runIntegrationWorkflow(ctx context.Context, args []string, str
 		return m.loginGitHub(ctx, streams, run)
 	case "azure/device":
 		return m.loginAzure(ctx, streams, run)
+	case "azdo/pat":
+		return m.loginAzureDevOps(ctx, streams, run)
 	default:
 		return fmt.Errorf(integrations.UnknownKind, request.Kind+" "+request.Integration+" "+request.Workflow)
 	}

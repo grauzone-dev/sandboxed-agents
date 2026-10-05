@@ -27,7 +27,7 @@ func TestWorkflowNameIsOptionalOnlyForOneWorkflowOfTheRequestedKind(t *testing.T
 }
 
 func TestIntegrationCatalogContainsOnlyDeliveredWorkflows(t *testing.T) {
-	want := []integrations.Integration{{Name: "git", Config: []string{"identity", "credentials"}}, {Name: "github", Login: []string{"device"}}, {Name: "azure", Login: []string{"device"}}, {Name: "azdo"}}
+	want := []integrations.Integration{{Name: "git", Config: []string{"identity", "credentials"}}, {Name: "github", Login: []string{"device"}}, {Name: "azure", Login: []string{"device"}}, {Name: "azdo", Login: []string{"pat"}}}
 	if got := integrations.Catalog(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("catalog=%v", got)
 	}

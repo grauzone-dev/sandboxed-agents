@@ -2,7 +2,7 @@
 
 An integration connects a sandbox to an external account or service, such as Git, GitHub, Azure, or Azure DevOps. It offers login workflows, config workflows, or both, and has no installable program of its own. The workflow handlers are built into the in-container manager, which the executable reaches through `podman exec`. The catalog of integrations and workflows is also embedded in the executable, so that names are checked on the host before Podman is called.
 
-This version delivers the two config workflows of `git` and the login workflows of `github` and `azure`. `identity` sets the commit name and email of a sandbox ([Git identity](#git-identity)), `credentials` makes Git store HTTPS credentials in the sandbox ([Git credentials](#git-credentials)), `github device` signs the sandbox in to GitHub ([GitHub login](#github-login)), and `azure device` signs the Azure CLI of the sandbox in to an Azure account ([Azure login](#azure-login)). The login workflow of `azdo` (#49) arrives with a later Story.
+This version delivers the two config workflows of `git` and the login workflows of `github`, `azure`, and `azdo`. `identity` sets the commit name and email of a sandbox ([Git identity](#git-identity)), `credentials` makes Git store HTTPS credentials in the sandbox ([Git credentials](#git-credentials)), `github device` signs the sandbox in to GitHub ([GitHub login](#github-login)), `azure device` signs the Azure CLI of the sandbox in to an Azure account ([Azure login](#azure-login)), and `azdo pat` stores an Azure DevOps personal access token in the sandbox ([Azure DevOps login](#azure-devops-login)).
 
 ## Command line
 
@@ -20,14 +20,14 @@ Only delivered integrations and workflows are valid names. One whose Story is no
 | Command | Valid integrations | Valid workflows |
 | --- | --- | --- |
 | `integrations config` | `git` | `git`: `identity`, `credentials` |
-| `integrations login` | `github`, `azure` | `github`: `device`; `azure`: `device` |
+| `integrations login` | `github`, `azure`, `azdo` | `github`: `device`; `azure`: `device`; `azdo`: `pat` |
 
 As a result:
 
 - `integrations config NAME github` fails as an unknown integration and lists `git`.
 - `integrations config NAME git` without a workflow name fails and lists `identity` and `credentials`.
-- `integrations login NAME azdo` fails as an unknown integration and lists `github` and `azure`.
 - `integrations login NAME github WORKFLOW` or `integrations login NAME azure WORKFLOW` with any name other than `device` fails as an unknown workflow and lists `device`.
+- `integrations login NAME azdo WORKFLOW` with any name other than `pat` fails as an unknown workflow and lists `pat`. The message does not repeat the given word, in case it was a token.
 - `integrations login NAME git` fails because `git` has no login workflow, and names its config workflows `identity` and `credentials`.
 
 All of these fail before Podman is called.
@@ -196,11 +196,93 @@ The login is kept across `stop`, `start`, and `remove NAME` without `--volumes`;
 
 The command exits with status 0 when the Azure CLI login ended with status 0, and with status 1 otherwise. The exit status of the Azure CLI is not passed through; the message names it.
 
+## Azure DevOps login
+
+```sh
+sandboxed-agents integrations login NAME azdo [pat]
+```
+
+The command stores an Azure DevOps personal access token (PAT) in the sandbox, for the Azure DevOps CLI extension and for Git remotes on `https://dev.azure.com`. `pat` is the only login workflow of `azdo`, so it may be left out. The command takes no token argument and no option. Any further word is a usage error that does not repeat the word, and it is reported before Podman is called.
+
+### Entering the token
+
+The executable reads the token on the host, after the manager has answered and the `azure` toolchain has been found ([Order of checks](#order-of-checks)). A command refused before that point never reads standard input. How the token is read depends on standard input:
+
+- **Standard input is a terminal.** The command prompts with `Azure DevOps personal access token:` on standard error and reads the token without echoing it.
+- **Standard input is not a terminal.** The command reads the first line of standard input, whatever standard output is. This is the way for scripts:
+
+  ```sh
+  sandboxed-agents integrations login agent01 azdo < ~/azdo-pat.txt
+  ```
+
+The token is one line, ending with a line feed, a carriage return and line feed, or the end of input. Empty input fails with a message that no token was given, and stores nothing. A token that contains a space or other whitespace, a NUL character, or more than 65,536 bytes is refused as invalid and stored nowhere. A Microsoft PAT is 84 characters long ([PAT format](https://learn.microsoft.com/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate#pat-format)).
+
+### What the workflow runs
+
+The executable passes the token, followed by a line feed, to the standard input of one `podman exec` call. The call has `-i` and no `-t`:
+
+```sh
+podman exec --user=1000:1000 --env HOME=/home/agent -i sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager integrations login azdo pat
+```
+
+The manager refuses the request under any identity other than UID and GID 1000. It reads and checks the token again, then runs these steps as UID and GID 1000, in `/home/agent`, with a fixed environment. It stops at the first step that fails. The environment is:
+
+- `HOME=/home/agent`, `USER=agent`, `LOGNAME=agent`, and `PATH=/usr/local/bin:/usr/bin:/bin`;
+- `AZURE_CONFIG_DIR=/home/agent/.azure`;
+- `AZURE_LOGGING_ENABLE_LOG_FILE=no` and `AZURE_CORE_COLLECT_TELEMETRY=no`, which turn off the Azure CLI's log files and telemetry ([Azure CLI configuration options](https://learn.microsoft.com/cli/azure/azure-cli-configuration#cli-configuration-values-and-environment-variables));
+- `PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring`, which selects the `keyring` backend that refuses every write ([Where the token is stored](#where-the-token-is-stored-and-who-can-read-it)).
+
+The steps are:
+
+1. `az devops login`, with the token on standard input. The Azure DevOps CLI extension reads a piped token as one line. Without `--organization`, it checks the token against no organization, which takes no network call, and stores it as the default credential ([`credentials.py`, release 20260902.1](https://github.com/Azure/azure-devops-cli-extension/blob/20260902.1/azure-devops/azext_devops/dev/team/credentials.py#L21-L38)).
+2. `git credential-store --file=/home/agent/.git-credentials-azdo store`, with the entry on standard input: protocol `https`, host `dev.azure.com`, an empty user name, and the token as the password. Azure DevOps accepts a PAT with an empty user name ([Use a PAT](https://learn.microsoft.com/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate#use-a-pat)).
+3. For each of `https://dev.azure.com` and `https://*.visualstudio.com`, two `git config --global` calls for the key `credential.SCOPE.helper`. The first replaces every value with an empty one, which clears the helpers Git has gathered up to that point ([gitcredentials](https://git-scm.com/docs/gitcredentials)). The second adds this helper:
+
+   ```sh
+   !f() { if test "$1" = get; then sed -e '/^username=/d' -e '/^path=/d' -e 's/^host=.*/host=dev.azure.com/' | git credential-store --file=/home/agent/.git-credentials-azdo get; fi; }; f
+   ```
+
+The helper answers only when Git asks for a credential:
+
+- **User name dropped.** It drops the user name of the remote URL, such as the organization in `https://contoso@dev.azure.com/contoso/…`, so the stored entry matches remotes with any user name or none. It also drops the repository path, which Git sends when `credential.useHttpPath` is set, so the one entry serves every repository ([gitcredentials, `useHttpPath`](https://git-scm.com/docs/gitcredentials)).
+- **Rejections keep the token.** It ignores Git's `store` and `erase` requests, so a remote that refuses the token does not delete it.
+- **Separate from `git credentials`.** The entry lies in its own file, so a store helper that [`git credentials`](#git-credentials) configures for all hosts neither finds nor erases it.
+- **Legacy hosts.** The `*.visualstudio.com` scope gives those hosts the same `dev.azure.com` entry; whether Azure DevOps accepts it there is not established.
+
+### Keeping the token private
+
+The token travels only through standard input: from the terminal or pipe to the executable, to the `podman exec` call, to the manager, and to `az` and `git`. It appears in no argument of the Podman call or of any process the manager starts, and in no environment variable. Apart from the prompt, the command prints nothing when it succeeds. The executable discards the output of the `podman exec` call, and the manager discards the output of `az` and `git`. Every message of the workflow is fixed text that names at most a step and an exit status. Neither the executable nor the manager writes a log, and the manager turns off the Azure CLI's own log files for `az devops login`.
+
+### Toolchain
+
+The Azure DevOps CLI extension comes with the `azure` toolchain ([Toolchain image contents](images.md#toolchain-image-contents)). Without it, the command fails before it reads the token and prints the complete command that adds the toolchain:
+
+```text
+Azure DevOps login requires the azure toolchain; run sandboxed-agents update agent01 --with azure,dotnet
+```
+
+The printed set follows the same rules as for the Azure login ([Toolchain](#toolchain)): every recorded toolchain plus `azure`, in canonical form, and never `none`. An invalid recorded set fails at the same step.
+
+### Where the token is stored and who can read it
+
+Both copies of the token lie in the home volume, as plain text:
+
+- **Azure DevOps CLI extension.** The extension keeps credentials in its configuration directory, `azuredevops` under the Azure CLI configuration directory ([`const.py`](https://github.com/Azure/azure-devops-cli-extension/blob/20260902.1/azure-devops/azext_devops/dev/common/const.py#L11-L13)), here `/home/agent/.azure/azuredevops`. It first tries a system keyring, through the `keyring` package that the `azure` toolchain installs ([Toolchain image contents](images.md#toolchain-image-contents)). The manager selects `keyring`'s `fail` backend, which refuses that write. On Linux, the extension then writes the token unencrypted to the file `personalAccessTokens` in that directory ([`credential_store.py`](https://github.com/Azure/azure-devops-cli-extension/blob/20260902.1/azure-devops/azext_devops/dev/common/credential_store.py#L21-L49)). Selecting the backend explicitly keeps a `keyring` configuration in the home directory from choosing a backend that would store nothing.
+- **Git.** `/home/agent/.git-credentials-azdo`, written by `git credential-store`, which creates it readable only by `agent` ([`credential-store.c`, v2.39.5](https://github.com/git/git/blob/v2.39.5/builtin/credential-store.c#L166)).
+
+Every agent, shell, and program of the sandbox runs as `agent` and can read the token and use it. The token is kept across `stop`, `start`, and `remove NAME` without `--volumes`; `remove NAME --volumes` deletes it with the home volume. Keeping it across `update` is not covered in this version (#52).
+
+The login sets no default organization. An `az devops` command therefore needs `--organization https://dev.azure.com/ORG`, or a default set with `az devops configure --defaults organization=https://dev.azure.com/ORG`. When the Azure CLI is also signed in with [`azure` login](#azure-login), the extension tries that sign-in before the stored token ([`services.py`](https://github.com/Azure/azure-devops-cli-extension/blob/20260902.1/azure-devops/azext_devops/dev/common/services.py#L60-L89)).
+
+### Exit status
+
+The command exits with status 0 when all steps ended with status 0, and with status 1 otherwise. When a step fails, the steps before it stay done; run the command again to store the token for both consumers. No program's exit status is passed through, and its output is not shown. The message reports only the exit status of the workflow call.
+
 ## What the host contributes
 
-The commit name and email come only from the options you pass and the values you type, and credentials only from what you enter inside the sandbox or authorize on GitHub or Microsoft's sign-in page. No workflow imports host Git configuration, host Azure CLI configuration, or host credentials, and none adds a mount. Each `integrations` command treats the host environment the same way:
+The commit name and email come only from the options you pass and the values you type, and credentials only from what you enter inside the sandbox, type at the `azdo` prompt or pass on its standard input, or authorize on GitHub or Microsoft's sign-in page. No workflow imports host Git configuration, host Azure CLI configuration, or host credentials, and none adds a mount. Each `integrations` command treats the host environment the same way:
 
-- It forwards no Git-, GitHub-, or Azure-related host variable into the sandbox. The Podman calls that look up the sandbox, query the manager, and run the workflow leave out every variable whose name starts with `GIT_`, `GH_`, `GITHUB_`, `AZURE_`, or `ARM_`, and `EMAIL`, so `GH_TOKEN`, `GITHUB_TOKEN`, `GH_CONFIG_DIR`, `AZURE_CONFIG_DIR`, `AZURE_CLIENT_SECRET`, and `ARM_CLIENT_SECRET` of the host are among them. The `podman exec` call of the workflow sets only `HOME=/home/agent` in the container, and the manager runs Git, the GitHub CLI, and the Azure CLI with the fixed environments described above.
+- It forwards no Git-, GitHub-, or Azure-related host variable into the sandbox. The Podman calls that look up the sandbox, query the manager, and run the workflow leave out every variable whose name starts with `GIT_`, `GH_`, `GITHUB_`, `AZURE_`, or `ARM_`, and `EMAIL`, so `GH_TOKEN`, `GITHUB_TOKEN`, `GH_CONFIG_DIR`, `AZURE_CONFIG_DIR`, `AZURE_CLIENT_SECRET`, `ARM_CLIENT_SECRET`, and `AZURE_DEVOPS_EXT_PAT` of the host are among them. The `podman exec` call of the workflow sets only `HOME=/home/agent` in the container, and the manager runs Git, the GitHub CLI, and the Azure CLI with the fixed environments described above.
 - It reads `SANDBOXED_AGENTS_GROUP` to select the [controller group](sandboxes.md#controller-groups), as every command does.
 - On Windows, it selects the Podman machine before its first lookup of the sandbox, as `start` does ([Target on Windows](sandboxes.md#target-on-windows)). The selection runs only the read-only queries `podman machine list` and `podman machine inspect`, under the environment rule of every Windows Podman call: `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` are removed. The Git-, GitHub-, and Azure-related filter above does not apply to these queries.
 
@@ -213,10 +295,11 @@ Every `integrations` command needs a running container of a known sandbox. It ne
 - **Unknown sandbox.** The name does not exist in the current controller group. The command fails and says so.
 - **Only volumes remain.** The sandbox has volumes but no container. The command fails and names `sandboxed-agents up NAME`, which adopts the volumes.
 - **Stopped sandbox.** The command fails, names `sandboxed-agents start NAME`, and starts nothing.
-- **Manager does not answer.** The container runs, but its manager does not answer the session query. The command fails, says so, and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. It attempts nothing around the manager and issues no further Podman call. For `azure` login, this is reported also when the sandbox lacks the `azure` toolchain.
-- **Missing toolchain.** For `azure` login, the sandbox's recorded toolchain set does not contain `azure`. The command fails, names the toolchain, prints the `update NAME --with` command that adds it ([Toolchain](#toolchain)), starts no workflow, and writes nothing in the sandbox.
-- **Workflow failure.** Git, the GitHub CLI, or the Azure CLI could not be started or exited with a non-zero status. The command shows its output and the manager's message with its exit status, and reports that the integration workflow failed.
-- **Workflow timeout.** For `git credentials`, and for `git identity` with both `--name` and `--email` given, the `podman exec` call that runs the workflow has 30 seconds to finish. When it does not, the executable ends that call and the command fails. When the command prompts for a missing value, and for `github` and `azure` login, this call has no added deadline, so it waits for your input.
+- **Manager does not answer.** The container runs, but its manager does not answer the session query. The command fails, says so, and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. It attempts nothing around the manager and issues no further Podman call. For `azure` and `azdo` login, this is reported also when the sandbox lacks the `azure` toolchain.
+- **Missing toolchain.** For `azure` and `azdo` login, the sandbox's recorded toolchain set does not contain `azure`. The command fails, names the toolchain, prints the `update NAME --with` command that adds it ([Toolchain](#toolchain)), starts no workflow, and writes nothing in the sandbox. `azdo` login reads no token in this case.
+- **No valid token.** For `azdo` login, the input is empty or the token is invalid ([Entering the token](#entering-the-token)). The command fails before it runs the workflow and stores nothing.
+- **Workflow failure.** Git, the GitHub CLI, or the Azure CLI could not be started or exited with a non-zero status. For `git`, `github`, and `azure`, the command shows that program's output and the manager's message with its exit status, and reports that the integration workflow failed. For `azdo` login, it shows no program output and reports only the exit status of the workflow call.
+- **Workflow timeout.** For `git credentials`, for `git identity` with both `--name` and `--email` given, and for `azdo` login, the `podman exec` call that runs the workflow has 30 seconds to finish. When it does not, the executable ends that call and the command fails. For `azdo` login, the token is read before that call starts, so the deadline does not include the time you take to enter it. When the command prompts for a missing value, and for `github` and `azure` login, this call has no added deadline, so it waits for your input.
 
 Owner conflicts and interrupted updates are refused as for the other commands ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)).
 
@@ -233,11 +316,11 @@ The command exits with status 0 when it did what was asked, and with status 1 wh
 | 4. Owner | reports an owner conflict on the container, its volumes, or the backup container, names the Podman objects concerned, and points to Podman, also when only a volume has a missing or different owner |
 | 5. Interrupted update | reports a backup container with the current owner |
 | 6. Running state | reports a stopped sandbox |
-| 7. Preconditions | reports a manager that does not answer; then, for `azure` login, a missing `azure` toolchain |
+| 7. Preconditions | reports a manager that does not answer; then, for `azure` and `azdo` login, a missing `azure` toolchain |
 | 8. Terminal | `git identity` with `--name` or `--email` missing, and `github` and `azure` login: reports a missing terminal |
 
-The preflight (step 2) and the session guard (step 9) do not apply. An unknown workflow name is therefore reported ahead of an unknown sandbox, an owner conflict ahead of a stopped sandbox, and a stopped sandbox or a manager that does not answer ahead of a missing terminal. For `azure` login, a manager that does not answer is reported ahead of a missing toolchain, and a missing toolchain ahead of a missing terminal.
+The preflight (step 2) and the session guard (step 9) do not apply. An unknown workflow name is therefore reported ahead of an unknown sandbox, an owner conflict ahead of a stopped sandbox, and a stopped sandbox or a manager that does not answer ahead of a missing terminal. For `azure` login, a manager that does not answer is reported ahead of a missing toolchain, and a missing toolchain ahead of a missing terminal. `azdo` login has no terminal step: it reads the token only after step 7, so every failure up to a missing toolchain is reported before it reads standard input.
 
 ## Verification
 
-The behavior on this page is covered by offline tests against a fake `podman` and against the manager with injected process functions ([Development](development.md#test-seams)). For `git credentials`, a manager test checks that the workflow reads no input and makes exactly the one `git config --global --replace-all -- credential.helper 'store --file=/home/agent/.git-credentials'` call with the fixed environment. A CLI test runs the command without a terminal and checks that it ends with the session query and one `podman exec --user=1000:1000 --env HOME=/home/agent` call of the manager, without `-it`. No test runs Git against an HTTPS remote or looks at a stored credential file or its permissions. For `github`, the manager tests inject process functions in place of the GitHub CLI, and the CLI tests run against fake Podman; no test signs in to GitHub, runs the GitHub CLI of the image, or looks at where it writes the token. A login against real GitHub is an item of the manual checklist (#64). For `azure`, the manager tests inject process functions in place of the Azure CLI, and the CLI tests run against fake Podman, including the order of a manager that does not answer, a missing toolchain, and a missing terminal, the printed toolchain set, and an invalid recorded set. No test runs the Azure CLI, signs in to Azure, or looks at `/home/agent/.azure`. A login against a real Azure account is an item of the manual checklist (#64), and keeping the login across `update` is tracked in #52. Nothing on this page has been confirmed against Podman on a live host, and no test observes the isolation of the sandbox or a real Git configuration in its home volume. The [live suite](live-suite.md) does not run `integrations` commands.
+The behavior on this page is covered by offline tests against a fake `podman` and against the manager with injected process functions ([Development](development.md#test-seams)). For `git credentials`, a manager test checks that the workflow reads no input and makes exactly the one `git config --global --replace-all -- credential.helper 'store --file=/home/agent/.git-credentials'` call with the fixed environment. A CLI test runs the command without a terminal and checks that it ends with the session query and one `podman exec --user=1000:1000 --env HOME=/home/agent` call of the manager, without `-it`. No test runs Git against an HTTPS remote or looks at a stored credential file or its permissions. For `github`, the manager tests inject process functions in place of the GitHub CLI, and the CLI tests run against fake Podman; no test signs in to GitHub, runs the GitHub CLI of the image, or looks at where it writes the token. A login against real GitHub is an item of the manual checklist (#64). For `azure`, the manager tests inject process functions in place of the Azure CLI, and the CLI tests run against fake Podman, including the order of a manager that does not answer, a missing toolchain, and a missing terminal, the printed toolchain set, and an invalid recorded set. No test runs the Azure CLI, signs in to Azure, or looks at `/home/agent/.azure`. A login against a real Azure account is an item of the manual checklist (#64), and keeping the login across `update` is tracked in #52. For `azdo`, the manager tests inject process functions in place of `az` and `git`, and the CLI tests run against fake Podman. They pass a known token value and check that it appears in no argument, environment variable, or output. The hidden prompt and the restored terminal are tested on a Linux pseudo-terminal and on a native Windows console. No test runs `az devops login`, Git, or a credential helper, looks at the stored files, or uses a real token. Storing a real token and using it for `git clone` and an `az devops` query is an item of the manual checklist (#64). Nothing on this page has been confirmed against Podman on a live host, and no test observes the isolation of the sandbox or a real Git configuration in its home volume. The [live suite](live-suite.md) does not run `integrations` commands.

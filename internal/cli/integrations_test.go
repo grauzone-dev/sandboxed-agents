@@ -50,7 +50,7 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 		{[]string{"login", "agent01", "github", "nosuch"}, "valid workflows: device"},
 		{[]string{"login", "agent01", "azure", "nosuch"}, "valid workflows: device"},
 		{[]string{"login", "agent01", "azure", "--unknown"}, "unexpected argument or option"},
-		{[]string{"login", "agent01", "azdo"}, "valid integrations: github, azure"},
+		{[]string{"login", "agent01", "azdo", "nosuch"}, "valid workflows: pat"},
 		{[]string{"login", "agent01", "git"}, "valid config workflows: identity, credentials"},
 		{[]string{"config"}, "sandbox name"},
 		{[]string{"config", "agent01"}, "missing integration"},
@@ -77,7 +77,7 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 func TestIntegrationChecksReportTheFirstFailureAndNeverStartAnything(t *testing.T) {
 	owner, foreign, missing := "default", "other", ""
 	for _, command := range []struct{ kind, integration, workflow string }{
-		{"config", "git", "identity"}, {"config", "git", "credentials"}, {"login", "github", "device"}, {"login", "azure", "device"},
+		{"config", "git", "identity"}, {"config", "git", "credentials"}, {"login", "github", "device"}, {"login", "azure", "device"}, {"login", "azdo", "pat"},
 	} {
 		workflow := command.workflow
 		for _, test := range []struct {
@@ -107,7 +107,7 @@ func TestIntegrationChecksReportTheFirstFailureAndNeverStartAnything(t *testing.
 			{"manager null", &owner, true, nil, nil, &testutil.Response{Stdout: "null"}, "does not answer"},
 			{"terminal", &owner, true, nil, nil, &testutil.Response{Stdout: "[]"}, "terminal"},
 		} {
-			if workflow == "credentials" && test.name == "terminal" {
+			if (workflow == "credentials" || workflow == "pat") && test.name == "terminal" {
 				continue
 			}
 			t.Run(command.integration+"/"+workflow+"/"+test.name, func(t *testing.T) {

@@ -285,3 +285,14 @@ func TestUpdateKeepsBoundWorkspaceSourcesAndRetainedVolumes(t *testing.T) {
 		}
 	}
 }
+
+func updateMissingNativeImageResponses() []testutil.Response {
+	return []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {ExitCode: 1}}
+}
+
+func updateStaleNativeImageResponses() []testutil.Response {
+	return []testutil.Response{
+		{}, {Stdout: `[{"Id":"current-base"}]`},
+		{}, {Stdout: `[{"Id":"stale-native","Labels":{"io.github.sandboxed-agents.base-image":"old-base"}}]`},
+	}
+}

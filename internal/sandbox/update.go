@@ -41,40 +41,40 @@ func (update *Update) Prepare(ctx context.Context) error {
 }
 
 func (update *Update) plan(ctx context.Context) (toolchains.Set, bool, error) {
-	var set toolchains.Set
+	var recordedSet toolchains.Set
 	if !update.containerExists {
-		return set, false, fmt.Errorf(updateNoContainerFormat, update.name)
+		return recordedSet, false, fmt.Errorf(updateNoContainerFormat, update.name)
 	}
 	if update.containerImage == "" {
-		return set, false, fmt.Errorf(updateMissingImageIDFormat, update.container)
+		return recordedSet, false, fmt.Errorf(updateMissingImageIDFormat, update.container)
 	}
 	recorded := update.containerLabels[images.ToolchainsLabel]
 	if recorded != "" {
 		var err error
-		set, err = toolchains.Parse(recorded)
+		recordedSet, err = toolchains.Parse(recorded)
 		if err != nil {
-			return set, false, fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, update.container, "toolchain set"), err)
+			return recordedSet, false, fmt.Errorf("%s: %w", fmt.Sprintf(updateInvalidConfigurationFormat, update.container, "toolchain set"), err)
 		}
 	}
-	recordedSet := set
+	selected := recordedSet
 	if update.options.WithProvided {
-		set = update.options.Toolchains
+		selected = update.options.Toolchains
 	}
-	image, current, err := images.Current(ctx, update.assetHash, set, update.run, update.streams)
+	image, current, err := images.Current(ctx, update.assetHash, selected, update.run, update.streams)
 	if err != nil {
-		return set, false, err
+		return selected, false, err
 	}
-	if current && image == update.containerImage && set == recordedSet {
+	if current && image == update.containerImage && selected == recordedSet {
 		update.current = true
-		return set, false, nil
+		return selected, false, nil
 	}
-	replacement, err := update.recordedConfiguration(set)
+	replacement, err := update.replacementConfiguration(selected)
 	if err != nil {
-		return set, false, err
+		return selected, false, err
 	}
 	update.replacement = replacement
 	update.image = image
-	return set, !current, nil
+	return selected, !current, nil
 }
 
 func (update *Update) ensureImage(ctx context.Context, set toolchains.Set) error {
@@ -86,18 +86,26 @@ func (update *Update) ensureImage(ctx context.Context, set toolchains.Set) error
 		return err
 	}
 	if !current {
-		return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name)
+		suffix := ""
+		if update.options.WithProvided {
+			selection := set.String()
+			if selection == "" {
+				selection = "none"
+			}
+			suffix = " --with " + selection
+		}
+		return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name, suffix)
 	}
 	update.image = image
 	return nil
 }
 
-func (update *Update) recordedConfiguration(set toolchains.Set) (containerConfiguration, error) {
+func (update *Update) replacementConfiguration(selected toolchains.Set) (containerConfiguration, error) {
 	limits, port, err := recordedResourceConfiguration(update.container, update.containerLabels)
 	if err != nil {
 		return containerConfiguration{}, err
 	}
-	replacement := containerConfiguration{sandboxName: update.name, controllerGroup: update.group, limits: limits, port: port, toolchains: set}
+	replacement := containerConfiguration{sandboxName: update.name, controllerGroup: update.group, limits: limits, port: port, toolchains: selected}
 	kind := update.containerLabels[WorkspaceKindLabel]
 	if kind != "volume" && kind != "bind" {
 		return containerConfiguration{}, fmt.Errorf(updateInvalidConfigurationFormat, update.container, "workspace-kind")

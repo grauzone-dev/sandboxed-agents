@@ -346,7 +346,7 @@ sandboxed-agents remove NAME [--volumes] [--force]
 | `--volumes` | Also deletes the sandbox's volumes that carry the current owner. A volume with a missing or different owner is never deleted. |
 | `--force` | Removes a running sandbox even while agent sessions run in it or the manager does not answer, and ends those sessions. |
 
-`remove` prints one line for the removed container and one line per removed or kept volume, each with its Podman name. It changes no host SSH file; removing the host side of a sandbox's SSH setup comes with #37.
+`remove` prints one line for the removed container and one line per removed or kept volume, each with its Podman name. When the sandbox has an SSH setup, `remove` also removes its host side, the host entry, key pair, and pinned host key, as `ssh-config NAME --remove` does, also when only volumes of the sandbox remain; a refused `remove` leaves it untouched. `remove` does not remove the authorization from the sandbox's SSH server state volume: without `--volumes`, which keeps that volume, the output says that the authorization remains in it and is replaced by the next `ssh-config NAME --install` ([Remove with `remove`](ssh.md#remove-with-remove)).
 
 ### Running agent sessions
 

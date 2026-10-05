@@ -8,7 +8,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
-func removeCommand(group *string, run process.Runner) Command {
+func removeCommand(hostOS string, group *string, run process.Runner) Command {
 	ctx := context.Background()
 	var remove *sandbox.Remove
 	return Command{Name: "remove", Checks: Checks{
@@ -30,7 +30,7 @@ func removeCommand(group *string, run process.Runner) Command {
 					return unexpectedArgument(arg)
 				}
 			}
-			remove = sandbox.NewRemove(invocation.Args[0], *group, volumes, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			remove = sandbox.NewRemove(invocation.Args[0], *group, hostOS, volumes, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
 		Sandbox:           func(*Invocation) error { return remove.CheckSandbox(ctx) },

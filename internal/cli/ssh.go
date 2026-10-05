@@ -11,7 +11,7 @@ import (
 func sshConfigCommand(hostOS string, group *string, run process.Runner) Command {
 	ctx := context.Background()
 	var setup *sandbox.SSHSetup
-	var install bool
+	var mode string
 	return Command{Name: "ssh-config", Checks: Checks{
 		Usage: func(invocation *Invocation) error {
 			if len(invocation.Args) == 0 {
@@ -21,35 +21,43 @@ func sshConfigCommand(hostOS string, group *string, run process.Runner) Command 
 				return err
 			}
 			for _, arg := range invocation.Args[1:] {
-				if arg != "--install" {
+				if arg != "--install" && arg != "--remove" {
 					return unexpectedArgument(arg)
 				}
-				if install {
-					return errors.New(sshDuplicateInstall)
+				if mode != "" {
+					return errors.New(sshConflictingMode)
 				}
-				install = true
+				mode = arg
 			}
 			setup = sandbox.NewSSHSetup(invocation.Args[0], *group, hostOS, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 			return nil
 		},
-		Sandbox:           func(*Invocation) error { return setup.CheckContainer(ctx) },
+		Sandbox: func(*Invocation) error {
+			if mode == "--remove" {
+				return setup.CheckRemovalSandbox(ctx)
+			}
+			return setup.CheckContainer(ctx)
+		},
 		Owner:             func(*Invocation) error { return setup.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return setup.CheckInterruptedUpdate() },
 		Running: func(*Invocation) error {
-			if install {
+			if mode == "--install" {
 				return setup.CheckRunning()
 			}
 			return nil
 		},
 		Preconditions: func(*Invocation) error {
-			if install {
+			if mode == "--install" {
 				return setup.CheckManager(ctx)
 			}
 			return nil
 		},
 	}, Action: func(*Invocation) error {
-		if install {
+		if mode == "--install" {
 			return setup.Install(ctx)
+		}
+		if mode == "--remove" {
+			return setup.Remove(ctx)
 		}
 		return setup.Print()
 	}}

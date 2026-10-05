@@ -144,10 +144,11 @@ func (update *Update) replacementConfiguration(selected toolchains.Set) (contain
 }
 
 func (update *Update) Apply(ctx context.Context) (err error) {
+	oldStopAttempted := false
 	oldStopped := false
 	defer func() {
-		if oldStopped {
-			err = errors.Join(err, update.reportEndedSessions())
+		if oldStopAttempted {
+			err = errors.Join(err, update.reportEndedSessions(oldStopped))
 		}
 	}()
 	if update.current {
@@ -162,6 +163,7 @@ func (update *Update) Apply(ctx context.Context) (err error) {
 		return update.rollback(ctx, updateCreateStep, err, false)
 	}
 	if update.containerRunning {
+		oldStopAttempted = true
 		if err := update.runPodman(ctx, "stop", update.backup); err != nil {
 			return update.rollback(ctx, updateStopOldStep, err, true)
 		}

@@ -15,6 +15,14 @@ import (
 
 var errInvalidSessionResponse = errors.New("invalid manager session response: expected a JSON array of objects with nonempty name and agent strings")
 
+func formatSessionNames(sessions []manager.Session) string {
+	names := make([]string, len(sessions))
+	for index, session := range sessions {
+		names[index] = session.Name + " (" + session.Agent + ")"
+	}
+	return strings.Join(names, ", ")
+}
+
 func RunningSessions(ctx context.Context, container string, run process.Runner) ([]manager.Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

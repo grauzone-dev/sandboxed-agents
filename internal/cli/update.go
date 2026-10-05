@@ -12,7 +12,8 @@ import (
 func updateCommand(assetHash string, host sandboxHost, group *string, run process.Runner, check Handler) Command {
 	ctx := context.Background()
 	var update *sandbox.Update
-	var all, force bool
+	var all bool
+	var options sandbox.UpdateOptions
 	forNamedTarget := func(check Handler) Handler {
 		return func(invocation *Invocation) error {
 			if all {
@@ -27,7 +28,6 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 				return errors.New(updateMissingNameMessage)
 			}
 			all = invocation.Args[0] == "--all"
-			var options sandbox.UpdateOptions
 			var remaining []string
 			var err error
 			options.Toolchains, options.WithProvided, remaining, err = parseToolchains(invocation.Args[1:])
@@ -46,7 +46,6 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 				}
 				options.Force = true
 			}
-			force = options.Force
 			if all {
 				return nil
 			}
@@ -63,7 +62,7 @@ func updateCommand(assetHash string, host sandboxHost, group *string, run proces
 		SessionGuard:      forNamedTarget(func(*Invocation) error { return update.CheckSessions(ctx) }),
 	}, Prepare: forNamedTarget(func(*Invocation) error { return update.Prepare(ctx) }), Action: func(invocation *Invocation) error {
 		if all {
-			return sandbox.UpdateAll(ctx, host.workspace.OS, *group, assetHash, force, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
+			return sandbox.UpdateAll(ctx, host.workspace.OS, *group, assetHash, options, run, process.Streams{Stdout: invocation.Stdout, Stderr: invocation.Stderr})
 		}
 		return update.Apply(ctx)
 	}}

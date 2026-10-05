@@ -10,7 +10,9 @@ import (
 )
 
 func updateSessionQuery(name string) []string {
-	return []string{"exec", "--user=0:0", "sandboxed-agents.default." + name, "/usr/local/bin/sandboxed-agents-manager", "sessions", "list"}
+	args := sessionQueryArgs()
+	args[2] = "sandboxed-agents.default." + name
+	return args
 }
 
 func TestUpdateRefusesRunningAgentSessionsBeforeReplacingTheSandbox(t *testing.T) {
@@ -48,7 +50,7 @@ func TestForcedUpdateEndsReportedSessionsOnlyByStoppingTheOldContainer(t *testin
 			responses = append(responses, testutil.Response{Stdout: `[{"name":"sandboxed-agents-codex","agent":"codex"}]`})
 			responses = append(responses, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{Stdout: "sandboxed-agents-manager v1.2.3\n"}, testutil.Response{})
 			scriptUpdate(t, fakes, host.windows, responses)
-			stdout, stderr, status := runCLI(t, fixture, "update", "agent01", "--force")
+			stdout, stderr, status := runCLI(t, fixture, "update", "agent01", "--with=none", "--force")
 			if status != 0 || stderr != "" || !strings.Contains(stdout, "updated") || !strings.Contains(stdout, "ended") || !strings.Contains(stdout, "sandboxed-agents-codex") {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
@@ -175,7 +177,7 @@ func TestUpdateSessionGuardRunsAfterAllImageBuildsAndBeforeAnyReplacement(t *tes
 func TestForcedUpdatePreservesSessionsBeforeTheOldContainerStopsAndReportsThemAfter(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		for _, known := range []bool{true, false} {
-			for _, failure := range []string{"rename", "create", "start"} {
+			for _, failure := range []string{"rename", "create", "stop", "start"} {
 				t.Run(host.name+"/"+failure+"/"+map[bool]string{true: "known", false: "unknown"}[known], func(t *testing.T) {
 					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 					checkSSH := installUpdateSSHFixture(t, sshDir, state)
@@ -193,6 +195,9 @@ func TestForcedUpdatePreservesSessionsBeforeTheOldContainerStopsAndReportsThemAf
 					case "create":
 						responses = append(responses, testutil.Response{}, testutil.Response{ExitCode: 43}, testutil.Response{}, testutil.Response{})
 						want = append(want, []string{"create"}, []string{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"}, []string{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"})
+					case "stop":
+						responses = append(responses, testutil.Response{}, testutil.Response{}, testutil.Response{ExitCode: 43}, testutil.Response{}, testutil.Response{}, testutil.Response{})
+						want = append(want, []string{"create"}, []string{"stop", "sandboxed-agents-backup.default.agent01"}, []string{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"}, []string{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"}, []string{"start", "sandboxed-agents.default.agent01"})
 					case "start":
 						responses = append(responses, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{ExitCode: 43}, testutil.Response{}, testutil.Response{}, testutil.Response{})
 						want = append(want, []string{"create"}, []string{"stop", "sandboxed-agents-backup.default.agent01"}, []string{"start", "sandboxed-agents.default.agent01"}, []string{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"}, []string{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"}, []string{"start", "sandboxed-agents.default.agent01"})
@@ -204,6 +209,12 @@ func TestForcedUpdatePreservesSessionsBeforeTheOldContainerStopsAndReportsThemAf
 					}
 					if failure == "start" {
 						for _, phrase := range []string{"agent01", "ended", map[bool]string{true: "sandboxed-agents-codex", false: "cannot be named"}[known]} {
+							if !strings.Contains(stdout, phrase) {
+								t.Errorf("missing %q in %q", phrase, stdout)
+							}
+						}
+					} else if failure == "stop" {
+						for _, phrase := range []string{"agent01", "may have ended", "were not restarted", map[bool]string{true: "sandboxed-agents-codex", false: "cannot be named"}[known]} {
 							if !strings.Contains(stdout, phrase) {
 								t.Errorf("missing %q in %q", phrase, stdout)
 							}

@@ -47,9 +47,9 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 		{[]string{"config", "agent01", "azure"}, "valid integrations: git"},
 		{[]string{"config", "agent01", "azdo"}, "valid integrations: git"},
 		{[]string{"config", "agent01", "git"}, "valid workflows: identity, credentials"},
-		{[]string{"login", "agent01", "github"}, "no valid names are available yet"},
-		{[]string{"login", "agent01", "azure"}, "no valid names are available yet"},
-		{[]string{"login", "agent01", "azdo"}, "no valid names are available yet"},
+		{[]string{"login", "agent01", "github", "nosuch"}, "valid workflows: device"},
+		{[]string{"login", "agent01", "azure"}, "valid integrations: github"},
+		{[]string{"login", "agent01", "azdo"}, "valid integrations: github"},
 		{[]string{"login", "agent01", "git"}, "valid config workflows: identity, credentials"},
 		{[]string{"config"}, "sandbox name"},
 		{[]string{"config", "agent01"}, "missing integration"},
@@ -68,9 +68,6 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 			if status == 0 || stdout != "" || !strings.Contains(stderr, test.message) || !strings.Contains(stderr, "Usage:") || len(fakes.Calls("podman")) != 0 {
 				t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
 			}
-			if strings.Contains(test.message, "no valid names") && (strings.Contains(stderr, `"git"`) || strings.Contains(stderr, "identity") || strings.Contains(stderr, "valid integrations:")) {
-				t.Fatalf("undelivered login names leaked: %q", stderr)
-			}
 			assertNoSSH(t, fakes)
 		})
 	}
@@ -78,7 +75,10 @@ func TestIntegrationNamesAndUsageFailBeforePodman(t *testing.T) {
 
 func TestIntegrationChecksReportTheFirstFailureAndNeverStartAnything(t *testing.T) {
 	owner, foreign, missing := "default", "other", ""
-	for _, workflow := range []string{"identity", "credentials"} {
+	for _, command := range []struct{ kind, integration, workflow string }{
+		{"config", "git", "identity"}, {"config", "git", "credentials"}, {"login", "github", "device"},
+	} {
+		workflow := command.workflow
 		for _, test := range []struct {
 			name      string
 			container *string
@@ -116,7 +116,7 @@ func TestIntegrationChecksReportTheFirstFailureAndNeverStartAnything(t *testing.
 					responses = append(responses, *test.manager)
 				}
 				fakes.Script("podman", responses...)
-				stdout, stderr, status := runCLI(t, "sandbox-host", "integrations", "config", "agent01", "git", workflow)
+				stdout, stderr, status := runCLI(t, "sandbox-host", "integrations", command.kind, "agent01", command.integration, workflow)
 				calls := fakes.Calls("podman")
 				if status == 0 || stdout != "" || !strings.Contains(stderr, test.message) || len(calls) != len(responses) {
 					t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, calls)

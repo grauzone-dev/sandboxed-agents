@@ -49,7 +49,7 @@ func NewWithOptions(version string, run process.Runner, options Options) *Manage
 	m := &Manager{version: version, run: run, commands: make(map[string]Command), options: options}
 	m.Register("sessions", m.listSessions)
 	m.Register("agents", m.agents)
-	m.Register("integrations", runIntegrationWorkflow)
+	m.Register("integrations", m.runIntegrationWorkflow)
 	m.Register("ssh", sshServer(options.SSHStateDirectory))
 	return m
 }

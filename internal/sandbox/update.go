@@ -86,15 +86,11 @@ func (update *Update) ensureImage(ctx context.Context, set toolchains.Set) error
 		return err
 	}
 	if !current {
-		suffix := ""
+		retry := "sandboxed-agents update " + update.name
 		if update.options.WithProvided {
-			selection := set.String()
-			if selection == "" {
-				selection = "none"
-			}
-			suffix = " --with " + selection
+			retry += " --with " + toolchains.Display(set.String())
 		}
-		return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name, suffix)
+		return fmt.Errorf(updateImageChangedFormat, images.Tag(update.assetHash, set), update.name, retry)
 	}
 	update.image = image
 	return nil

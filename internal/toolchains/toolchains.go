@@ -10,6 +10,13 @@ type Set struct{ names string }
 
 func (set Set) String() string { return set.names }
 
+func Display(names string) string {
+	if names == "" {
+		return "none"
+	}
+	return names
+}
+
 func (set Set) Names() []string {
 	if set.names == "" {
 		return nil

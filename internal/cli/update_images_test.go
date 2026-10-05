@@ -14,10 +14,14 @@ func successfulRunningUpdateResponses() []testutil.Response {
 	return []testutil.Response{{}, {}, {}, {}, {Stdout: "sandboxed-agents-manager v1.2.3\n"}, {}}
 }
 
+func updateCurrentNativeImageResponse() testutil.Response {
+	return testutil.Response{Stdout: `[{"Id":"current-native","Labels":{"io.github.sandboxed-agents.base-image":"current-base"}}]`}
+}
+
 func updateCurrentNativeImageResponses() []testutil.Response {
 	return []testutil.Response{
 		{}, {Stdout: `[{"Id":"current-base"}]`},
-		{}, {Stdout: `[{"Id":"current-native","Labels":{"io.github.sandboxed-agents.base-image":"current-base"}}]`},
+		{}, updateCurrentNativeImageResponse(),
 	}
 }
 
@@ -104,7 +108,7 @@ func TestUpdateRebuildsAStaleToolchainImageEvenWhenItsIDMatchesTheSandbox(t *tes
 	responses := updateObjectResponses(t, true, "old-native", "native", "")
 	responses = append(responses, stale...)
 	responses = append(responses, stale...)
-	responses = append(responses, testutil.Response{}, updateCurrentNativeImageResponses()[3])
+	responses = append(responses, testutil.Response{}, updateCurrentNativeImageResponse())
 	responses = append(responses, updateCurrentNativeImageResponses()...)
 	responses = append(responses, successfulRunningUpdateResponses()...)
 	scriptUpdate(t, fakes, false, responses)

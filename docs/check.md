@@ -6,7 +6,7 @@ sandboxed-agents check NAME
 
 `check NAME` reports the state of one sandbox of the current [controller group](sandboxes.md#controller-groups): its container, its volumes and their owners, the resource limits recorded on the container, a backup container left by an interrupted update, whether the manager answers, and SSH access. Use it when a sandbox does not behave as expected, or when another command names it for diagnosis.
 
-`check` without a name is a different check: the [preflight](host-prerequisites.md#run-the-check), which reports missing host prerequisites and looks at no sandbox. `check NAME` runs no preflight.
+`check` without a name is a different check: the [preflight](host-prerequisites.md#run-the-check), which reports missing host prerequisites and looks at no sandbox. `check NAME` runs no preflight. On Windows it first selects the Podman machine as `stop` does ([Target on Windows](sandboxes.md#target-on-windows)) and never starts it.
 
 ## Command line
 

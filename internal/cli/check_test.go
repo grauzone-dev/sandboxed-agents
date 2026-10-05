@@ -3,6 +3,8 @@ package cli_test
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -480,5 +482,77 @@ func TestCheckUsesOnlyTheCurrentGroupsPodmanNames(t *testing.T) {
 				assertNoSSH(t, fakes)
 			})
 		}
+	}
+}
+
+func TestCheckSSHCleanupAdviceRespectsBackupsAndOwnerConflicts(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, test := range []struct {
+			name            string
+			backup, foreign bool
+		}{
+			{name: "backup", backup: true}, {name: "foreign volume", foreign: true}, {name: "both", backup: true, foreign: true},
+		} {
+			t.Run(host.name+"/"+test.name, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				installSSHForRemoval(t, fakes, fixture, host.windows, "agent01", "default")
+				beforePodman, beforeSSHCalls := len(fakes.Calls("podman")), len(fakes.Calls("ssh"))
+				volumes := map[string]string{"home": "default"}
+				if test.foreign {
+					volumes["home"] = "other"
+				}
+				var backup *string
+				if test.backup {
+					owner := "default"
+					backup = &owner
+				}
+				scriptCheckObjects(fakes, host.windows, checkObjectResponses(t, "default", "agent01", "default", false, false, volumes, backup, nil, ""))
+				beforeSSH, beforeState := sshDirectoryContents(t, sshDir), managedSSHFiles(t, state)
+				stdout, stderr, status := runCLI(t, fixture, "check", "agent01")
+				if status == 0 || !strings.Contains(stdout, "SSH setup") || !strings.Contains(stdout, "no container") || strings.Contains(stdout, "ssh-config agent01 --remove") {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				want := "update agent01"
+				if test.foreign {
+					want = "remove or rename each foreign object with Podman"
+				}
+				if !strings.Contains(stdout, want) {
+					t.Errorf("output=%q lacks %q", stdout, want)
+				}
+				if len(fakes.Calls("ssh")) != beforeSSHCalls {
+					t.Fatal("check attempted SSH without a container")
+				}
+				assertCheckCallsReadOnly(t, fakes.Calls("podman")[beforePodman:], host.windows, false)
+				if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
+					t.Fatal("check changed files")
+				}
+			})
+		}
+	}
+}
+
+func TestCheckStoppedSandboxDoesNotAddAnSSHIntegrityCheck(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		t.Run(host.name, func(t *testing.T) {
+			fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+			installSSHForRemoval(t, fakes, fixture, host.windows, "agent01", "default")
+			if err := os.Remove(filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743031", "entry")); err != nil {
+				t.Fatal(err)
+			}
+			beforePodman, beforeSSHCalls := len(fakes.Calls("podman")), len(fakes.Calls("ssh"))
+			scriptCheckObjects(fakes, host.windows, checkObjectResponses(t, "default", "agent01", "default", true, false, map[string]string{"workspace": "default", "home": "default", "ssh": "default"}, nil, nil, ""))
+			beforeSSH, beforeState := sshDirectoryContents(t, sshDir), managedSSHFiles(t, state)
+			stdout, stderr, status := runCLI(t, fixture, "check", "agent01")
+			if status != 0 || stderr != "" || !strings.Contains(stdout, "running sandbox") || strings.Contains(stdout, "problem:") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if len(fakes.Calls("ssh")) != beforeSSHCalls {
+				t.Fatal("SSH connection attempted on stopped sandbox")
+			}
+			assertCheckCallsReadOnly(t, fakes.Calls("podman")[beforePodman:], host.windows, false)
+			if !reflect.DeepEqual(beforeSSH, sshDirectoryContents(t, sshDir)) || !reflect.DeepEqual(beforeState, managedSSHFiles(t, state)) {
+				t.Fatal("check changed files")
+			}
+		})
 	}
 }

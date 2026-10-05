@@ -4,7 +4,7 @@
 
 `check` detects the host operating system and runs the [Linux](#linux) or the [Windows](#windows) preflight. Windows hosts run Podman in a WSL2 machine. On any other operating system, `check` reports that no preflight is available for that system yet. It checks nothing else and exits with a nonzero status.
 
-`check` only reports the host prerequisites. `sandboxed-agents build`, `sandboxed-agents up`, and `sandboxed-agents update` already run the same preflight for the host. `build` runs it before it writes the build context, and `up` and `update` run it before they look up or create any sandbox object. These commands stop if a required prerequisite is missing or, on Windows, could not be checked. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host), and it never repairs a missing prerequisite. The temporary build context that `build` creates and removes is part of the build, not of the preflight.
+`check` without a name only reports the host prerequisites. With a sandbox name, `sandboxed-agents check NAME` runs no preflight and reports the state of that sandbox instead ([Check a sandbox](check.md)). `sandboxed-agents build`, `sandboxed-agents up`, and `sandboxed-agents update` already run the same preflight for the host. `build` runs it before it writes the build context, and `up` and `update` run it before they look up or create any sandbox object. These commands stop if a required prerequisite is missing or, on Windows, could not be checked. The preflight itself only reads, apart from the Linux exception described in [What the check does to the host](#what-the-check-does-to-the-host), and it never repairs a missing prerequisite. The temporary build context that `build` creates and removes is part of the build, not of the preflight.
 
 ## Run the check
 
@@ -12,12 +12,12 @@
 sandboxed-agents check
 ```
 
-`check` takes no arguments or options, so it doesn't take a sandbox name yet. It checks every prerequisite in one run and prints one line per prerequisite. The status words depend on the host:
+Without arguments, `check` runs the preflight. It checks every prerequisite in one run and prints one line per prerequisite. The status words depend on the host:
 
 - On Linux, each line starts with `OK:` or `MISSING:`.
 - On Windows, each line starts with `ok:`, `missing:`, or `unknown:`. `unknown:` means the prerequisite could not be checked.
 
-An extra word on the command line is a usage error. A word starting with `-` is reported as an unknown option, any other word as an unexpected argument. In both cases the usage line follows, nothing is checked, and the exit status is 1:
+A single word that is a valid sandbox name selects [`check NAME`](check.md) instead of the preflight. Any other word on the command line is a usage error: a word starting with `-` is reported as an unknown option, an invalid sandbox name with the message every command gives for one, and more than one word with a message naming the form `sandboxed-agents check [NAME]`. In each case the usage line follows, nothing is checked, and the exit status is 1:
 
 ```text
 sandboxed-agents: unknown option "--json"

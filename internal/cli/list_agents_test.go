@@ -24,6 +24,7 @@ func TestListShowsTheAgentSelectionOfARunningSandbox(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
 	responses := listOneSandboxResponses("default", "agent01", &owned, true, nil, nil)
+	responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
 	responses = append(responses, testutil.Response{Stdout: "[\"codex\",\"claude\"]\n"})
 	fakes.Script("podman", responses...)
 	stdout, stderr, status := runCLI(t, "sandbox-host", "list")
@@ -39,45 +40,59 @@ func TestListShowsTheAgentSelectionOfARunningSandbox(t *testing.T) {
 }
 
 func TestListShowsAnAgentAfterEnableUsingTheSameCatalogAndHomeSelection(t *testing.T) {
-	catalog, err := agentcatalog.Load([]byte(`{"schema_version":1,"entries":[{"name":"fifth","delivered":true,"command":"fifth","install":{"kind":"npm","package":"@example/fifth"}}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fakes := testutil.NewFakePrograms(t)
-	owned := "default"
-	responses := sandboxObjectResponses(&owned, true, map[string]string{"home": "default"}, nil)
-	responses = append(responses, listOneSandboxResponses("default", "agent01", &owned, true, map[string]string{"home": "default"}, nil)...)
-	fakes.Script("podman", responses...)
-	home := t.TempDir()
-	installs := 0
-	app := manager.NewWithOptions("dev", func(_ context.Context, request process.Request) (int, error) {
-		installs++
-		if request.Name != "/usr/bin/npm" || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) {
-			t.Fatal(request)
-		}
-		path := filepath.Join(home, ".local", "lib", "node_modules", "@example", "fifth", "package.json")
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		return 0, os.WriteFile(path, []byte(`{"version":"1.2.3"}`), 0600)
-	}, manager.Options{Home: home, Catalog: &catalog, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
-	run := func(ctx context.Context, request process.Request) (int, error) {
-		if request.Args[0] == "exec" {
-			if request.Args[1] != "--user=0:0" || request.Args[2] != "sandboxed-agents.default.agent01" || request.Args[3] != "/usr/local/bin/sandboxed-agents-manager" {
-				t.Fatal(request.Args)
+	for _, outdated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "current", true: "outdated"}[outdated], func(t *testing.T) {
+			catalog, err := agentcatalog.Load([]byte(`{"schema_version":1,"entries":[{"name":"fifth","delivered":true,"command":"fifth","install":{"kind":"npm","package":"@example/fifth"}}]}`))
+			if err != nil {
+				t.Fatal(err)
 			}
-			return app.Run(ctx, request.Args[4:], request.Streams), nil
-		}
-		return platform.Run(ctx, request)
-	}
-	host := preflight.Host{Platform: "linux", Run: run}
-	var stdout, stderr bytes.Buffer
-	if status := cli.RunWithCatalog([]string{"agents", "enable", "agent01", "fifth"}, &stdout, &stderr, "test", "assets", host, catalog); status != 0 || stderr.Len() != 0 {
-		t.Fatalf("enable status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
-	}
-	stdout.Reset()
-	if status := cli.RunWithCatalog([]string{"list"}, &stdout, &stderr, "test", "assets", host, catalog); status != 0 || stderr.Len() != 0 || installs != 1 || !strings.Contains(strings.Join(strings.Fields(stdout.String()), " "), "agent01 running volume - - fifth ") {
-		t.Fatalf("list status=%d stdout=%q stderr=%q installs=%d", status, stdout.String(), stderr.String(), installs)
+			fakes := testutil.NewFakePrograms(t)
+			owned := "default"
+			responses := sandboxObjectResponses(&owned, true, map[string]string{"home": "default"}, nil)
+			listResponses := listOneSandboxResponses("default", "agent01", &owned, true, map[string]string{"home": "default"}, nil)
+			if outdated {
+				listResponses[2].Stdout = strings.ReplaceAll(listResponses[2].Stdout, `"Image":"current-base"`, `"Image":"old-base"`)
+			}
+			listResponses = append(listResponses, listCurrentImageResponses("", "current-base", "current-base")...)
+			responses = append(responses, listResponses...)
+			fakes.Script("podman", responses...)
+			home := t.TempDir()
+			installs := 0
+			app := manager.NewWithOptions("dev", func(_ context.Context, request process.Request) (int, error) {
+				installs++
+				if request.Name != "/usr/bin/npm" || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) {
+					t.Fatal(request)
+				}
+				path := filepath.Join(home, ".local", "lib", "node_modules", "@example", "fifth", "package.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				return 0, os.WriteFile(path, []byte(`{"version":"1.2.3"}`), 0600)
+			}, manager.Options{Home: home, Catalog: &catalog, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
+			run := func(ctx context.Context, request process.Request) (int, error) {
+				if request.Args[0] == "exec" {
+					if request.Args[1] != "--user=0:0" || request.Args[2] != "sandboxed-agents.default.agent01" || request.Args[3] != "/usr/local/bin/sandboxed-agents-manager" {
+						t.Fatal(request.Args)
+					}
+					return app.Run(ctx, request.Args[4:], request.Streams), nil
+				}
+				return platform.Run(ctx, request)
+			}
+			host := preflight.Host{Platform: "linux", Run: run}
+			var stdout, stderr bytes.Buffer
+			if status := cli.RunWithCatalog([]string{"agents", "enable", "agent01", "fifth"}, &stdout, &stderr, "test", "assets", host, catalog); status != 0 || stderr.Len() != 0 {
+				t.Fatalf("enable status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+			}
+			stdout.Reset()
+			state := "running"
+			if outdated {
+				state += " (outdated)"
+			}
+			if status := cli.RunWithCatalog([]string{"list"}, &stdout, &stderr, "test", "assets", host, catalog); status != 0 || stderr.Len() != 0 || installs != 1 || !strings.Contains(strings.Join(strings.Fields(stdout.String()), " "), "agent01 "+state+" volume - - fifth ") {
+				t.Fatalf("list status=%d stdout=%q stderr=%q installs=%d", status, stdout.String(), stderr.String(), installs)
+			}
+
+		})
 	}
 }
 
@@ -92,6 +107,7 @@ func TestListKeepsTheAgentSelectionUnavailableWhenTheManagerDoesNotAnswer(t *tes
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
 			responses := listOneSandboxResponses("default", "agent01", &owned, true, nil, nil)
+			responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
 			responses = append(responses, response)
 			fakes.Script("podman", responses...)
 			stdout, stderr, status := runCLI(t, "sandbox-host", "list")
@@ -110,6 +126,7 @@ func TestListDistinguishesNoEnabledAgentsFromAnUnavailableSelection(t *testing.T
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
 			responses := listOneSandboxResponses("default", "agent01", &owned, running, nil, nil)
+			responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
 			want := "agent01 stopped volume - - - -"
 			if running {
 				responses = append(responses, testutil.Response{Stdout: "[]\n"})
@@ -134,6 +151,7 @@ func TestWindowsListQueriesAgentsOnlyInTheSelectedGroupAndTarget(t *testing.T) {
 	owned := "team-a"
 	responses := append([]testutil.Response{}, healthyWindowsPodman()[1:3]...)
 	responses = append(responses, listOneSandboxResponses("team-a", "agent01", &owned, true, nil, nil)...)
+	responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
 	responses = append(responses, testutil.Response{Stdout: `["codex"]`})
 	for index := 2; index < len(responses); index++ {
 		responses[index].AbsentEnv = []string{"CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY"}
@@ -155,7 +173,9 @@ func TestListBoundsTheManagerQueryAndToleratesProcessFailure(t *testing.T) {
 		t.Run(failure.Error(), func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
-			fakes.Script("podman", listOneSandboxResponses("default", "agent01", &owned, true, nil, nil)...)
+			responses := listOneSandboxResponses("default", "agent01", &owned, true, nil, nil)
+			responses = append(responses, listCurrentImageResponses("", "current-base", "current-base")...)
+			fakes.Script("podman", responses...)
 			queries := 0
 			run := func(ctx context.Context, request process.Request) (int, error) {
 				if request.Args[0] != "exec" {

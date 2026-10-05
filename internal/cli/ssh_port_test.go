@@ -174,8 +174,10 @@ func TestListShowsRecordedSSHPortsForRunningAndStoppedSandboxes(t *testing.T) {
 			responses := []testutil.Response{
 				{Stdout: `[{"Names":["sandboxed-agents.default.running"],"Labels":{"io.github.sandboxed-agents.owner":"default"}},{"Names":["sandboxed-agents.default.stopped"],"Labels":{"io.github.sandboxed-agents.owner":"default"}}]`},
 				{Stdout: `[]`},
-				{Stdout: `[{"Name":"sandboxed-agents.default.running","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":"2300"}},"State":{"Running":true}}]`},
-				{Stdout: `[{"Name":"sandboxed-agents.default.stopped","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":"2301"}},"State":{"Running":false}}]`},
+				{Stdout: `[{"Name":"sandboxed-agents.default.running","Image":"current-base","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":"2300"}},"State":{"Running":true}}]`},
+				{Stdout: `[{"Name":"sandboxed-agents.default.stopped","Image":"current-base","Config":{"Labels":{"io.github.sandboxed-agents.owner":"default","io.github.sandboxed-agents.ssh-port":"2301"}},"State":{"Running":false}}]`},
+				{},
+				{Stdout: `[{"Id":"current-base"}]`},
 			}
 			if host.windows {
 				responses = append(healthyWindowsPodman()[1:3], responses...)
@@ -625,6 +627,10 @@ func TestListShowsToolchainsAndRecordedSSHPortTogether(t *testing.T) {
 				responses := listOneSandboxResponses("default", "agent01", container, true, map[string]string{"workspace": owner}, backup)
 				for index := range responses {
 					responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"io.github.sandboxed-agents.workspace-kind":"volume"`, `"io.github.sandboxed-agents.workspace-kind":"volume","io.github.sandboxed-agents.toolchains":"native","io.github.sandboxed-agents.ssh-port":"2300"`)
+					responses[index].Stdout = strings.ReplaceAll(responses[index].Stdout, `"Image":"current-base"`, `"Image":"current-native"`)
+				}
+				if !backupOnly {
+					responses = append(responses, listCurrentImageResponses("native", "current-native", "current-base")...)
 				}
 				if host.windows {
 					responses = append(healthyWindowsPodman()[1:3], responses...)

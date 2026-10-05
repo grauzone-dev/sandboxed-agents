@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/manager"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
@@ -72,7 +71,7 @@ func (lifecycle *Lifecycle) Apply(ctx context.Context) error {
 			}
 		}
 		if len(lifecycle.sessions) > 0 {
-			if _, err := fmt.Fprintf(lifecycle.streams.Stdout, "Ended agent sessions: %s.\n", lifecycle.sessionNames()); err != nil {
+			if _, err := fmt.Fprintf(lifecycle.streams.Stdout, "Ended agent sessions: %s.\n", formatSessionNames(lifecycle.sessions)); err != nil {
 				return err
 			}
 		}
@@ -84,17 +83,9 @@ func (lifecycle *Lifecycle) Apply(ctx context.Context) error {
 	return err
 }
 
-func (lifecycle *Lifecycle) sessionNames() string {
-	names := make([]string, len(lifecycle.sessions))
-	for index, session := range lifecycle.sessions {
-		names[index] = session.Name + " (" + session.Agent + ")"
-	}
-	return strings.Join(names, ", ")
-}
-
 func (lifecycle *Lifecycle) CheckSessions() error {
 	if len(lifecycle.sessions) > 0 && !lifecycle.force {
-		return fmt.Errorf("sandbox %s has running agent sessions: %s; use --force to end them", lifecycle.name, lifecycle.sessionNames())
+		return fmt.Errorf("sandbox %s has running agent sessions: %s; use --force to end them", lifecycle.name, formatSessionNames(lifecycle.sessions))
 	}
 	return nil
 }

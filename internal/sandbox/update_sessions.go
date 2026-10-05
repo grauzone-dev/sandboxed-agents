@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 func (update *Update) CheckSessions(ctx context.Context) error {
@@ -17,25 +16,25 @@ func (update *Update) CheckSessions(ctx context.Context) error {
 		return fmt.Errorf(updateSessionsUnknownFormat, update.name, err)
 	}
 	if len(update.sessions) > 0 && !update.options.Force {
-		return fmt.Errorf(updateSessionsRunningFormat, update.name, update.sessionNames())
+		return fmt.Errorf(updateSessionsRunningFormat, update.name, formatSessionNames(update.sessions))
 	}
 	return nil
 }
 
-func (update *Update) sessionNames() string {
-	names := make([]string, len(update.sessions))
-	for index, session := range update.sessions {
-		names[index] = session.Name + " (" + session.Agent + ")"
-	}
-	return strings.Join(names, ", ")
-}
-
-func (update *Update) reportEndedSessions() error {
+func (update *Update) reportEndedSessions(confirmed bool) error {
 	message := ""
 	if !update.sessionsKnown {
-		message = fmt.Sprintf(updateSessionsUnknownEndedFormat, update.name)
+		format := updateSessionsUnknownMayEndedFormat
+		if confirmed {
+			format = updateSessionsUnknownEndedFormat
+		}
+		message = fmt.Sprintf(format, update.name)
 	} else if len(update.sessions) > 0 {
-		message = fmt.Sprintf(updateSessionsEndedFormat, update.name, update.sessionNames())
+		format := updateSessionsMayEndedFormat
+		if confirmed {
+			format = updateSessionsEndedFormat
+		}
+		message = fmt.Sprintf(format, update.name, formatSessionNames(update.sessions))
 	}
 	if message == "" {
 		return nil

@@ -2,7 +2,7 @@
 
 An integration connects a sandbox to an external account or service, such as Git, GitHub, Azure, or Azure DevOps. It offers login workflows, config workflows, or both, and has no installable program of its own. The workflow handlers are built into the in-container manager, which the executable reaches through `podman exec`. The catalog of integrations and workflows is also embedded in the executable, so that names are checked on the host before Podman is called.
 
-This version delivers the two config workflows of `git`: `identity` sets the commit name and email of a sandbox ([Git identity](#git-identity)), and `credentials` makes Git store HTTPS credentials in the sandbox ([Git credentials](#git-credentials)). The login workflows of `github` (#51), `azure` (#50), and `azdo` (#49) arrive with later Stories.
+This version delivers the two config workflows of `git` and the login workflow of `github`. `identity` sets the commit name and email of a sandbox ([Git identity](#git-identity)), `credentials` makes Git store HTTPS credentials in the sandbox ([Git credentials](#git-credentials)), and `device` signs the sandbox in to GitHub ([GitHub login](#github-login)). The login workflows of `azure` (#50) and `azdo` (#49) arrive with later Stories.
 
 ## Command line
 
@@ -20,13 +20,14 @@ Only delivered integrations and workflows are valid names. One whose Story is no
 | Command | Valid integrations | Valid workflows |
 | --- | --- | --- |
 | `integrations config` | `git` | `git`: `identity`, `credentials` |
-| `integrations login` | none yet | none yet |
+| `integrations login` | `github` | `github`: `device` |
 
 As a result:
 
 - `integrations config NAME github` fails as an unknown integration and lists `git`.
 - `integrations config NAME git` without a workflow name fails and lists `identity` and `credentials`.
-- `integrations login NAME github`, `azure`, or `azdo` fails as an unknown integration and says that no valid names are available yet.
+- `integrations login NAME azure` or `azdo` fails as an unknown integration and lists `github`.
+- `integrations login NAME github WORKFLOW` with any name other than `device` fails as an unknown workflow and lists `device`.
 - `integrations login NAME git` fails because `git` has no login workflow, and names its config workflows `identity` and `credentials`.
 
 All of these fail before Podman is called.
@@ -87,15 +88,63 @@ Configuring the helper never needs a terminal: the command takes no options, pro
 
 The file lies in the home volume. It is kept across `stop`, `start`, and [`update`](updates.md#what-update-keeps), and across `remove NAME` without `--volumes`. `remove NAME --volumes` deletes the home volume and the credentials with it ([Remove a sandbox](sandboxes.md#remove-a-sandbox)).
 
+## GitHub login
+
+```sh
+sandboxed-agents integrations login NAME github [device]
+```
+
+The command signs the GitHub CLI in the sandbox in to `github.com` with a device-code login and then makes Git in the sandbox use that login for `github.com` remotes. Afterwards, `git clone` and `git push` over HTTPS to a repository your GitHub account can reach ask for no further credentials. The GitHub CLI is part of the base image, so no toolchain is needed.
+
+`device` is the only login workflow of `github`, so `integrations login NAME github` and `integrations login NAME github device` do the same. The command takes no options.
+
+### What the workflow runs
+
+After the [checks](#order-of-checks), the executable starts the manager as `agent` in an interactive `podman exec` with a terminal:
+
+```sh
+podman exec --user=1000:1000 --env HOME=/home/agent -it sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager integrations login github device
+```
+
+The manager refuses the request under any identity other than UID and GID 1000. It runs the GitHub CLI with UID and GID 1000 stated explicitly, in `/home/agent`, with a fixed environment: `HOME=/home/agent`, `USER=agent`, `LOGNAME=agent`, `PATH=/usr/local/bin:/usr/bin:/bin`, `GH_CONFIG_DIR=/home/agent/.config/gh`, and `GH_PROMPT_DISABLED=1`. First it signs in ([`gh auth login`](https://cli.github.com/manual/gh_auth_login)):
+
+```sh
+gh auth login --hostname github.com --git-protocol https --web
+```
+
+Only when this call ends with status 0 does the manager configure Git to use the GitHub CLI as credential helper for `github.com` ([`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git)):
+
+```sh
+gh auth setup-git --hostname github.com
+```
+
+### Signing in
+
+The login is GitHub's browser flow with a one-time device code, which `--web` selects. `GH_PROMPT_DISABLED=1` turns off every prompt of the GitHub CLI ([`default.go`, v2.23.0](https://github.com/cli/cli/blob/v2.23.0/pkg/cmd/factory/default.go)), so `gh auth login` runs non-interactively. In that mode the GitHub CLI asks no questions, sets up no Git credential helper of its own ([`login_flow.go`, v2.23.0](https://github.com/cli/cli/blob/v2.23.0/pkg/cmd/auth/shared/login_flow.go)), and launches no browser. It prints the one-time code and the address where you enter it, and waits for the authorization ([`flow.go`, v2.23.0](https://github.com/cli/cli/blob/v2.23.0/internal/authflow/flow.go)). Open that address in a browser on your own computer, enter the code, and authorize the GitHub CLI. The command waits until the GitHub CLI ends; the call has no added deadline. The GitHub CLI's output reaches you through the terminal of the interactive `podman exec`, which is why the command still requires one.
+
+### Terminal
+
+The login needs an interactive terminal: standard input and standard output must be a terminal. Without one, the command fails with `Integration login needs an interactive terminal` and starts no login. It reports this only after the manager has answered ([Order of checks](#order-of-checks)).
+
+### Credentials and Git configuration
+
+The base image installs the GitHub CLI from Debian bookworm, version 2.23.0 ([Debian package `gh`](https://packages.debian.org/bookworm/gh)). After a successful login, that version writes the token in plain text into its configuration, together with the user name and the Git protocol ([`login_flow.go`, v2.23.0](https://raw.githubusercontent.com/cli/cli/v2.23.0/pkg/cmd/auth/shared/login_flow.go)). `GH_CONFIG_DIR` fixes that configuration at `/home/agent/.config/gh`, in the home volume. Every agent, shell, and program of the sandbox runs as `agent` and can read the token and use it. It is kept across `stop`, `start`, and `remove NAME` without `--volumes`; `remove NAME --volumes` deletes the home volume and the token with it.
+
+`gh auth setup-git` writes the GitHub CLI as credential helper for `github.com` into the Git configuration of `agent`, which also lies in the home volume. The helper serves only `github.com`: Git remotes on other hosts, including other GitHub instances, keep whatever credential helper is configured for them, such as the one from [`git credentials`](#git-credentials). Only the manager configures Git, and only through `gh auth setup-git`: the login itself skips its own Git setup because prompting is disabled. When the login fails, the manager does not run `gh auth setup-git`, so the Git configuration stays unchanged. When the login succeeds but `gh auth setup-git` fails, the command fails too; the token from the login stays stored.
+
+### Exit status
+
+The command exits with status 0 when the login and the Git setup both ended with status 0, and with status 1 otherwise. The exit status of the GitHub CLI is not passed through; the message names the step, `login` or `setup-git`, and its exit status.
+
 ## What the host contributes
 
-The commit name and email come only from the options you pass and the values you type, and credentials only from what you enter inside the sandbox. Neither workflow imports host Git configuration or host credentials, and neither adds a mount. Each `integrations` command treats the host environment the same way:
+The commit name and email come only from the options you pass and the values you type, and credentials only from what you enter inside the sandbox or authorize on GitHub. No workflow imports host Git configuration or host credentials, and none adds a mount. Each `integrations` command treats the host environment the same way:
 
-- It forwards no Git-related host variable into the sandbox. The Podman calls that look up the sandbox, query the manager, and run the workflow leave out every variable whose name starts with `GIT_`, and `EMAIL`. The `podman exec` call of the workflow sets only `HOME=/home/agent` in the container, and the manager runs Git with a fixed `HOME`, `USER`, `LOGNAME`, and `PATH`.
+- It forwards no Git- or GitHub-related host variable into the sandbox. The Podman calls that look up the sandbox, query the manager, and run the workflow leave out every variable whose name starts with `GIT_`, `GH_`, or `GITHUB_`, and `EMAIL`, so `GH_TOKEN`, `GITHUB_TOKEN`, and `GH_CONFIG_DIR` of the host are among them. The `podman exec` call of the workflow sets only `HOME=/home/agent` in the container, and the manager runs Git and the GitHub CLI with the fixed environments described above.
 - It reads `SANDBOXED_AGENTS_GROUP` to select the [controller group](sandboxes.md#controller-groups), as every command does.
-- On Windows, it selects the Podman machine before its first lookup of the sandbox, as `start` does ([Target on Windows](sandboxes.md#target-on-windows)). The selection runs only the read-only queries `podman machine list` and `podman machine inspect`, under the environment rule of every Windows Podman call: `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` are removed. The Git-related filter above does not apply to these queries.
+- On Windows, it selects the Podman machine before its first lookup of the sandbox, as `start` does ([Target on Windows](sandboxes.md#target-on-windows)). The selection runs only the read-only queries `podman machine list` and `podman machine inspect`, under the environment rule of every Windows Podman call: `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` are removed. The Git- and GitHub-related filter above does not apply to these queries.
 
-The result is the same whether or not the host has a Git configuration or Git-related variables.
+The result is the same whether or not the host has a Git configuration, a GitHub CLI login, or Git- or GitHub-related variables.
 
 ## Failures
 
@@ -105,12 +154,12 @@ Every `integrations` command needs a running container of a known sandbox. It ne
 - **Only volumes remain.** The sandbox has volumes but no container. The command fails and names `sandboxed-agents up NAME`, which adopts the volumes.
 - **Stopped sandbox.** The command fails, names `sandboxed-agents start NAME`, and starts nothing.
 - **Manager does not answer.** The container runs, but its manager does not answer the session query. The command fails, says so, and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. It attempts nothing around the manager and issues no further Podman call.
-- **Workflow failure.** Git could not be started or exited with a non-zero status. The command shows Git's output and the manager's message with Git's exit status, and reports that the integration workflow failed.
-- **Workflow timeout.** For `git credentials`, and for `git identity` with both `--name` and `--email` given, the `podman exec` call that runs the workflow has 30 seconds to finish. When it does not, the executable ends that call and the command fails. When the command prompts for a missing value, this call has no added deadline, so it waits for your input.
+- **Workflow failure.** Git or the GitHub CLI could not be started or exited with a non-zero status. The command shows its output and the manager's message with its exit status, and reports that the integration workflow failed.
+- **Workflow timeout.** For `git credentials`, and for `git identity` with both `--name` and `--email` given, the `podman exec` call that runs the workflow has 30 seconds to finish. When it does not, the executable ends that call and the command fails. When the command prompts for a missing value, and for `github` login, this call has no added deadline, so it waits for your input.
 
 Owner conflicts and interrupted updates are refused as for the other commands ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)).
 
-The command exits with status 0 when it did what was asked, and with status 1 when it could not or refused. The exit status of Git is not passed through.
+The command exits with status 0 when it did what was asked, and with status 1 when it could not or refused. The exit status of Git or the GitHub CLI is not passed through.
 
 ### Order of checks
 
@@ -124,10 +173,10 @@ The command exits with status 0 when it did what was asked, and with status 1 wh
 | 5. Interrupted update | reports a backup container with the current owner |
 | 6. Running state | reports a stopped sandbox |
 | 7. Preconditions | reports a manager that does not answer |
-| 8. Terminal | `git identity` with `--name` or `--email` missing: reports a missing terminal |
+| 8. Terminal | `git identity` with `--name` or `--email` missing, and `github` login: reports a missing terminal |
 
 The preflight (step 2) and the session guard (step 9) do not apply. An unknown workflow name is therefore reported ahead of an unknown sandbox, an owner conflict ahead of a stopped sandbox, and a stopped sandbox or a manager that does not answer ahead of a missing terminal.
 
 ## Verification
 
-The behavior on this page is covered by offline tests against a fake `podman` and against the manager with injected process functions ([Development](development.md#test-seams)). For `git credentials`, a manager test checks that the workflow reads no input and makes exactly the one `git config --global --replace-all -- credential.helper 'store --file=/home/agent/.git-credentials'` call with the fixed environment. A CLI test runs the command without a terminal and checks that it ends with the session query and one `podman exec --user=1000:1000 --env HOME=/home/agent` call of the manager, without `-it`. No test runs Git against an HTTPS remote or looks at a stored credential file or its permissions. Nothing on this page has been confirmed against Podman on a live host, and no test observes the isolation of the sandbox or a real Git configuration in its home volume. The [live suite](live-suite.md) does not run `integrations` commands.
+The behavior on this page is covered by offline tests against a fake `podman` and against the manager with injected process functions ([Development](development.md#test-seams)). For `git credentials`, a manager test checks that the workflow reads no input and makes exactly the one `git config --global --replace-all -- credential.helper 'store --file=/home/agent/.git-credentials'` call with the fixed environment. A CLI test runs the command without a terminal and checks that it ends with the session query and one `podman exec --user=1000:1000 --env HOME=/home/agent` call of the manager, without `-it`. No test runs Git against an HTTPS remote or looks at a stored credential file or its permissions. For `github`, the manager tests inject process functions in place of the GitHub CLI, and the CLI tests run against fake Podman; no test signs in to GitHub, runs the GitHub CLI of the image, or looks at where it writes the token. A login against real GitHub is an item of the manual checklist (#64). Nothing on this page has been confirmed against Podman on a live host, and no test observes the isolation of the sandbox or a real Git configuration in its home volume. The [live suite](live-suite.md) does not run `integrations` commands.

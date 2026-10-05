@@ -110,11 +110,12 @@ The `azure` toolchain adds:
 
 - **APT repository:** `https://packages.microsoft.com/repos/azure-cli/` for `bookworm`, component `main`, architecture `amd64`. APT accepts it only when it is signed with Microsoft's key. The recipe downloads that key from `https://packages.microsoft.com/keys/microsoft.asc`, stores it as `/etc/apt/keyrings/microsoft.gpg`, and names that file in the repository's `signed-by` option.
 - **Azure CLI:** the `azure-cli` package, without a pinned version.
-- **Azure DevOps extension:** the latest stable `azure-devops` extension from the official extension index, installed with `az extension add --system --name azure-devops --allow-preview false`. `--system` installs it into the system extension directory of the Python that the Azure CLI bundles under `/opt/az`, so `agent` sees it without `AZURE_EXTENSION_DIR`. The recipe then makes the extension readable for every user with `chmod -R a+rX`. During the build, the Azure CLI writes its configuration to a temporary `AZURE_CONFIG_DIR` that is removed afterwards, so the image keeps no Azure configuration. In a sandbox, `HOME` stays `/home/agent`, so the Azure CLI keeps its configuration, and any sign-in a later Story adds, in the home volume.
+- **Azure DevOps extension:** the latest stable `azure-devops` extension from the official extension index, installed with `az extension add --system --name azure-devops --allow-preview false`. `--system` installs it into the system extension directory of the Python that the Azure CLI bundles under `/opt/az`, so `agent` sees it without `AZURE_EXTENSION_DIR`. The recipe then makes the extension readable for every user with `chmod -R a+rX`. During the build, the Azure CLI writes its configuration to a temporary `AZURE_CONFIG_DIR` that is removed afterwards, so the image keeps no Azure configuration. In a sandbox, `HOME` stays `/home/agent`, so the Azure CLI keeps its configuration and its sign-ins in the home volume.
+- **`keyring` package:** version `25.7.0`, installed with `/opt/az/bin/python3 -m pip install --no-cache-dir keyring==25.7.0` into the Python environment the Azure CLI bundles under `/opt/az`. Neither the `azure-cli` package nor the extension ships it, but `az devops login` needs it. Without it, the extension tries to install `keyring` with pip itself during the login, which fails in a sandbox ([`credential_store.py`, release 20260902.1](https://github.com/Azure/azure-devops-cli-extension/blob/20260902.1/azure-devops/azext_devops/dev/common/credential_store.py#L21-L27)). pip adds `keyring` and whatever dependencies are missing. It keeps a package already installed in that environment when its version satisfies `keyring`'s requirements. [Azure DevOps login](integrations.md#azure-devops-login) uses it.
 - **Version recorder:** `/usr/local/share/sandboxed-agents/versions.d/azure.sh` ([Version inventory](#version-inventory)).
 - **Smoke check:** the command `az version`, run as UID and GID 1000, with no script file of its own. Its output is expected to list the `azure-devops` extension; #29 checks that against a real image.
 
-The image contains no Azure credentials, and the `azure` toolchain adds no login or config workflow.
+The image contains no Azure credentials. The `azure` and `azdo` login workflows need this toolchain ([Integrations](integrations.md)); the toolchain itself signs nothing in.
 
 The `dotnet` toolchain adds:
 
@@ -128,7 +129,7 @@ Each smoke check is meant to run as `agent` inside a sandbox created from the im
 
 ### Azure versions
 
-The `azure` recipe pins no version. The Azure CLI and the extension are resolved again at each build without the layer cache, like every other package, so a `build` installs their current stable releases (#3). `versions.tsv` records the versions an image actually contains ([Version inventory](#version-inventory)).
+The `azure` recipe pins only `keyring`, at `25.7.0`. The Azure CLI and the extension are resolved again at each build without the layer cache, like every other package, so a `build` installs their current stable releases (#3). `versions.tsv` records the versions an image actually contains ([Version inventory](#version-inventory)). It has no line for `keyring` or the packages pip installs with it, because `dpkg-query` does not see them and the `azure` recorder lists only the extension.
 
 On 2026-10-04, these were the current releases:
 

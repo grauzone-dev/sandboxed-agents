@@ -1,6 +1,7 @@
 package integrations
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -26,10 +27,16 @@ func Parse(kind string, args []string) (Request, error) {
 	}
 	workflow, err := Resolve(Catalog(), kind, request.Integration, request.Workflow)
 	if err != nil {
+		if kind == "login" && request.Integration == "azdo" {
+			return request, errors.New(AzdoUnknownWorkflow)
+		}
 		return request, err
 	}
 	request.Workflow = workflow
 	for len(args) > 0 {
+		if kind == "login" && request.Integration == "azdo" {
+			return request, errors.New(AzdoUnexpectedArgument)
+		}
 		if request.Workflow != "identity" {
 			return request, fmt.Errorf(UnexpectedArgument, args[0])
 		}

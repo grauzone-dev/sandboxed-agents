@@ -74,7 +74,7 @@ func assertAzureBuildContext(t *testing.T, directory string) {
 	t.Helper()
 	for file, required := range map[string][]string{
 		"Containerfile":      {"ARG BASE_IMAGE\nFROM ${BASE_IMAGE}", "COPY azure/install.sh /tmp/install-azure.sh", "sh /tmp/install-azure.sh", "sh /tmp/record-versions.sh"},
-		"azure/install.sh":   {"https://packages.microsoft.com/keys/microsoft.asc", "signed-by=/etc/apt/keyrings/microsoft.gpg", "https://packages.microsoft.com/repos/azure-cli/ bookworm main", "apt-get install -y --no-install-recommends azure-cli", "az extension add --system --name azure-devops", "chmod -R a+rX"},
+		"azure/install.sh":   {"https://packages.microsoft.com/keys/microsoft.asc", "signed-by=/etc/apt/keyrings/microsoft.gpg", "https://packages.microsoft.com/repos/azure-cli/ bookworm main", "apt-get install -y --no-install-recommends azure-cli", "az extension add --system --name azure-devops", "/opt/az/bin/python3 -m pip install --no-cache-dir keyring==25.7.0", "chmod -R a+rX"},
 		"azure/record.sh":    {"az version", ".extensions.\"azure-devops\"", "printf 'azure-devops\\t%s\\n'"},
 		"record-versions.sh": {"/usr/local/share/sandboxed-agents/versions.tsv", "dpkg-query -W", "versions.d/*.sh", "sh \"$recorder\""},
 	} {

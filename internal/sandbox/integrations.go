@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -45,7 +46,7 @@ func (integration *IntegrationWorkflow) CheckPreconditions(ctx context.Context) 
 	if _, err := RunningSessions(ctx, integration.container, integration.run); err != nil {
 		return fmt.Errorf(managerUnavailableFormat, integration.name)
 	}
-	if integration.request.Integration != "azure" {
+	if integration.request.Integration != "azure" && integration.request.Integration != "azdo" {
 		return nil
 	}
 	var set toolchains.Set
@@ -61,13 +62,26 @@ func (integration *IntegrationWorkflow) CheckPreconditions(ctx context.Context) 
 		if err != nil {
 			return err
 		}
-		return fmt.Errorf(integrations.AzureToolchainRequired, integration.name, selected.String())
+		message := integrations.AzureToolchainRequired
+		if integration.request.Integration == "azdo" {
+			message = integrations.AzdoToolchainRequired
+		}
+		return fmt.Errorf(message, integration.name, selected.String())
 	}
 	return nil
 }
 
 func (integration *IntegrationWorkflow) Apply(ctx context.Context) error {
+	streams := integration.streams
 	args := []string{"exec", "--user=1000:1000", "--env", "HOME=/home/agent"}
+	if integration.request.Integration == "azdo" {
+		token, err := integrations.ReadToken(streams)
+		if err != nil {
+			return err
+		}
+		args = append(args, "-i")
+		streams = process.Streams{Stdin: strings.NewReader(token + "\n"), Stdout: io.Discard, Stderr: io.Discard}
+	}
 	if integration.request.NeedsTerminal() {
 		args = append(args, "-it")
 	}
@@ -78,8 +92,11 @@ func (integration *IntegrationWorkflow) Apply(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	status, err := integration.run(ctx, process.Request{Name: "podman", Args: args, Streams: integration.streams})
+	status, err := integration.run(ctx, process.Request{Name: "podman", Args: args, Streams: streams})
 	if err != nil {
+		if integration.request.Integration == "azdo" {
+			return fmt.Errorf("%s", integrations.AzdoRunFailure)
+		}
 		return fmt.Errorf(integrations.IntegrationRunFailure, err)
 	}
 	if status != 0 {

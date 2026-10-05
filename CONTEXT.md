@@ -46,7 +46,7 @@ _Avoid_: Tool, built-in workflow target, plugin
 A named login or config operation that an agent or integration exposes. A login workflow authenticates or links an account; a config workflow changes a setting that is not authentication.
 
 **Toolchain**:
-An optional set of SDKs or system packages built into a sandbox's image, such as .NET, Playwright with browsers, Azure CLI, or native build tools. Toolchains are chosen per sandbox when it is created.
+An optional set of SDKs or system packages built into a sandbox's image, such as .NET, Playwright with browsers, Azure CLI, or native build tools. Each sandbox's toolchain set is chosen when it is created; `update NAME --with SET` replaces it with another set and keeps the sandbox's volumes.
 _Avoid_: Tool, image option, capability
 
 **Tool**:

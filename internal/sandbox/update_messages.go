@@ -9,7 +9,7 @@ const (
 	updateInvalidMountsFormat        = "container %s does not mount the sandbox's volumes as up creates them, so update cannot recreate it; inspect it with Podman"
 	updateInvalidConfigurationFormat = "container %s records no valid %s, so update cannot recreate it with the same configuration; inspect it with Podman"
 	updateInterruptedFormat          = "backup container %[1]s remains from an interrupted update of sandbox %[2]s; recovering an interrupted update is not available in this version, so update changes nothing; inspect %[1]s with Podman"
-	updateImageChangedFormat         = "image %[1]s changed while update prepared it, and sandbox %[2]s was not changed; retry sandboxed-agents update %[2]s"
+	updateImageChangedFormat         = "image %[1]s changed while update prepared it, and sandbox %[2]s was not changed; retry sandboxed-agents update %[2]s%[3]s"
 	updateStepFailureFormat          = "update of sandbox %s failed at step %q: %w"
 	updateRestoredFormat             = "Sandbox %s was restored: its original container is back under its name and running or stopped as before the update. Processes that ended during the update were not restarted."
 	updateRollbackFailureFormat      = "rollback of sandbox %s is incomplete: step %q failed: %w; the sandbox was not restored, and update stopped so that two containers never run on the same volumes; the original container is kept, under the backup name unless it was already renamed back; inspect the sandbox's containers with Podman"

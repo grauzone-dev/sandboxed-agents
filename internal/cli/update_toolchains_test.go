@@ -14,18 +14,18 @@ func TestUpdateReplacesTheToolchainSetAndKeepsSandboxConfiguration(t *testing.T)
 	for _, host := range resourceLimitHosts {
 		for _, workspace := range []string{"", "/host/team-project"} {
 			for _, selection := range []struct {
-				given, recorded, image string
-				options                []string
+				given, selected, image, tag string
+				options                     []string
 			}{
-				{"dotnet", "dotnet", "current-dotnet", []string{"--with", "dotnet"}},
-				{"none", "", "current-base", []string{"--with=none"}},
-				{"native,dotnet,native", "dotnet,native", "current-dotnet-native", []string{"--with=native,dotnet,native"}},
+				{"dotnet", "dotnet", "current-dotnet", "localhost/sandboxed-agents:toolchains-dotnet-fixture-assets", []string{"--with", "dotnet"}},
+				{"none", "", "current-base", "localhost/sandboxed-agents:base-fixture-assets", []string{"--with=none"}},
+				{"native,dotnet,native", "dotnet,native", "current-dotnet-native", "localhost/sandboxed-agents:toolchains-dotnet-native-fixture-assets", []string{"--with=native,dotnet,native"}},
 			} {
 				t.Run(host.name+"/"+workspace+"/"+selection.given, func(t *testing.T) {
 					fakes, fixture := resourceLimitHost(t, host.windows)
 					responses := updateObjectResponses(t, true, "current-native", "native", workspace)
 					responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"current-base"}]`})
-					if selection.recorded != "" {
+					if selection.selected != "" {
 						responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"` + selection.image + `","Labels":{"io.github.sandboxed-agents.base-image":"current-base"}}]`})
 					}
 					responses = append(responses, successfulRunningUpdateResponses()...)
@@ -37,7 +37,7 @@ func TestUpdateReplacesTheToolchainSetAndKeepsSandboxConfiguration(t *testing.T)
 					}
 					create := assertUpdateCreatedFromImage(t, fakes, selection.image)
 					for _, option := range []string{
-						"io.github.sandboxed-agents.toolchains=" + selection.recorded, "io.github.sandboxed-agents.owner=default",
+						"io.github.sandboxed-agents.toolchains=" + selection.selected, "io.github.sandboxed-agents.owner=default",
 						"io.github.sandboxed-agents.update-was-running=true",
 						"--memory=12884901888", "--cpus=2.5", "--pids-limit=512", "--shm-size=268435456",
 						"io.github.sandboxed-agents.memory=12884901888", "io.github.sandboxed-agents.cpus=2.5",
@@ -58,14 +58,21 @@ func TestUpdateReplacesTheToolchainSetAndKeepsSandboxConfiguration(t *testing.T)
 					}
 					assertSSHPublication(t, create, 2300)
 					assertUpdateChangesPreserveData(t, fakes)
+					inspectedSelectedImage := false
 					for _, call := range fakes.Calls("podman") {
-						args := podmanUpdateArgs(call.Args)
-						if args[0] == "build" {
-							t.Fatalf("rebuilt an existing current image: %v", args)
+						podmanArgs := podmanUpdateArgs(call.Args)
+						if slices.Equal(podmanArgs, []string{"image", "inspect", selection.tag}) {
+							inspectedSelectedImage = true
 						}
-						if args[0] == "image" && strings.Contains(strings.Join(args, " "), "toolchains-native-") {
-							t.Fatalf("selected the recorded set instead of the requested set: %v", args)
+						if podmanArgs[0] == "build" {
+							t.Fatalf("rebuilt an existing current image: %v", podmanArgs)
 						}
+						if podmanArgs[0] == "image" && strings.Contains(strings.Join(podmanArgs, " "), "toolchains-native-") {
+							t.Fatalf("selected the recorded set instead of the requested set: %v", podmanArgs)
+						}
+					}
+					if !inspectedSelectedImage {
+						t.Fatalf("did not inspect selected image %q", selection.tag)
 					}
 				})
 			}
@@ -76,18 +83,19 @@ func TestUpdateReplacesTheToolchainSetAndKeepsSandboxConfiguration(t *testing.T)
 func TestUpdateRejectsInvalidToolchainOptionsBeforeHostQueries(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		for _, example := range []struct {
-			options []string
-			message string
+			options          []string
+			message          string
+			listsValidValues bool
 		}{
-			{[]string{"agent01", "--with", "nosuch"}, `invalid toolchain "nosuch"`},
-			{[]string{"missing", "--with=nosuch"}, `invalid toolchain "nosuch"`},
-			{[]string{"agent01", "--with", "none,dotnet"}, "none must stand alone"},
-			{[]string{"agent01", "--with="}, "invalid toolchain"},
-			{[]string{"agent01", "--with"}, "missing value"},
-			{[]string{"agent01", "--with=native", "--with", "dotnet"}, "duplicate option"},
-			{[]string{"--all", "--with", "native"}, "does not take --with"},
-			{[]string{"--all", "--with=none"}, "does not take --with"},
-			{[]string{"agent01", "--with=native", "--all"}, "exactly one target"},
+			{[]string{"agent01", "--with", "nosuch"}, `invalid toolchain "nosuch"`, true},
+			{[]string{"missing", "--with=nosuch"}, `invalid toolchain "nosuch"`, true},
+			{[]string{"agent01", "--with", "none,dotnet"}, "none must stand alone", true},
+			{[]string{"agent01", "--with="}, "invalid toolchain", true},
+			{[]string{"agent01", "--with"}, "missing value", true},
+			{[]string{"agent01", "--with=native", "--with", "dotnet"}, "duplicate option", false},
+			{[]string{"--all", "--with", "native"}, "does not take --with", false},
+			{[]string{"--all", "--with=none"}, "does not take --with", false},
+			{[]string{"agent01", "--with=native", "--all"}, "exactly one target", false},
 		} {
 			t.Run(host.name+"/"+strings.Join(example.options, " "), func(t *testing.T) {
 				fakes, fixture := resourceLimitHost(t, host.windows)
@@ -96,7 +104,7 @@ func TestUpdateRejectsInvalidToolchainOptionsBeforeHostQueries(t *testing.T) {
 				if status == 0 || stdout != "" || !strings.Contains(stderr, example.message) || !strings.Contains(stderr, "Usage:") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
-				if strings.Contains(example.message, "toolchain") || strings.Contains(example.message, "stand alone") {
+				if example.listsValidValues {
 					for _, name := range []string{"none", "dotnet", "azure", "native"} {
 						if !strings.Contains(stderr, name) {
 							t.Errorf("diagnostic omits valid value %q: %q", name, stderr)
@@ -171,14 +179,14 @@ func TestUpdateBuildsTheReplacementToolchainImageBeforeChangingTheSandbox(t *tes
 	}{
 		{
 			name:    "missing-toolchain",
-			initial: []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {ExitCode: 1}},
-			ensure:  []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {ExitCode: 1}, {}, {Stdout: `[{"Id":"current-native","Labels":{"io.github.sandboxed-agents.base-image":"current-base"}}]`}},
+			initial: updateMissingNativeImageResponses(),
+			ensure:  append(updateMissingNativeImageResponses(), testutil.Response{}, updateCurrentNativeImageResponses()[3]),
 			builds:  []string{"native"},
 		},
 		{
 			name:    "stale-toolchain",
-			initial: []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {}, {Stdout: `[{"Id":"stale-native","Labels":{"io.github.sandboxed-agents.base-image":"old-base"}}]`}},
-			ensure:  []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {}, {Stdout: `[{"Id":"stale-native","Labels":{"io.github.sandboxed-agents.base-image":"old-base"}}]`}, {}, {Stdout: `[{"Id":"current-native","Labels":{"io.github.sandboxed-agents.base-image":"current-base"}}]`}},
+			initial: updateStaleNativeImageResponses(),
+			ensure:  append(updateStaleNativeImageResponses(), testutil.Response{}, updateCurrentNativeImageResponses()[3]),
 			builds:  []string{"native"},
 		},
 		{
@@ -218,9 +226,9 @@ func TestUpdateToolchainBuildFailureKeepsTheOriginalSandbox(t *testing.T) {
 				checkSSH := installUpdateSSHFixture(t, sshDir, state)
 				defer checkSSH()
 				hash := imageBuildAssetHash(t)
-				missing := []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {ExitCode: 1}}
+				missing := updateMissingNativeImageResponses()
 				if stale {
-					missing = []testutil.Response{{}, {Stdout: `[{"Id":"current-base"}]`}, {}, {Stdout: `[{"Id":"stale-native","Labels":{"io.github.sandboxed-agents.base-image":"old-base"}}]`}}
+					missing = updateStaleNativeImageResponses()
 				}
 				responses := updateObjectResponses(t, running, "current-dotnet", "dotnet", "")
 				responses = append(responses, missing...)
@@ -258,7 +266,10 @@ func TestUpdateToolchainBuildFailureKeepsTheOriginalSandbox(t *testing.T) {
 func TestUpdateToolchainFailureRestoresTheOriginalContainerAndRunningState(t *testing.T) {
 	for _, host := range resourceLimitHosts {
 		for _, running := range []bool{true, false} {
-			for _, failure := range []string{"create", "start"} {
+			for _, failure := range []string{"create", "stop", "start"} {
+				if failure == "stop" && !running {
+					continue
+				}
 				t.Run(fmt.Sprintf("%s/running-%t/%s", host.name, running, failure), func(t *testing.T) {
 					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
 					checkSSH := installUpdateSSHFixture(t, sshDir, state)
@@ -267,17 +278,21 @@ func TestUpdateToolchainFailureRestoresTheOriginalContainerAndRunningState(t *te
 					responses = append(responses, updateCurrentNativeImageResponses()...)
 					responses = append(responses, testutil.Response{})
 					want := [][]string{{"rename", "sandboxed-agents.default.agent01", "sandboxed-agents-backup.default.agent01"}, {"create"}}
-					if failure == "start" {
+					if failure != "create" {
 						responses = append(responses, testutil.Response{})
 						if running {
-							responses = append(responses, testutil.Response{})
+							if failure != "stop" {
+								responses = append(responses, testutil.Response{})
+							}
 							want = append(want, []string{"stop", "sandboxed-agents-backup.default.agent01"})
 						}
-						want = append(want, []string{"start", "sandboxed-agents.default.agent01"})
+						if failure == "start" {
+							want = append(want, []string{"start", "sandboxed-agents.default.agent01"})
+						}
 					}
 					responses = append(responses, testutil.Response{ExitCode: 42}, testutil.Response{}, testutil.Response{})
 					want = append(want, []string{"rm", "--force", "--ignore", "sandboxed-agents.default.agent01"}, []string{"rename", "sandboxed-agents-backup.default.agent01", "sandboxed-agents.default.agent01"})
-					if failure == "start" && running {
+					if failure != "create" && running {
 						responses = append(responses, testutil.Response{})
 						want = append(want, []string{"start", "sandboxed-agents.default.agent01"})
 					}
@@ -295,5 +310,31 @@ func TestUpdateToolchainFailureRestoresTheOriginalContainerAndRunningState(t *te
 				})
 			}
 		}
+	}
+}
+
+func TestUpdateRetryKeepsTheRequestedToolchainSetWhenTheImageChanges(t *testing.T) {
+	for _, selection := range []string{"native", "none"} {
+		t.Run(selection, func(t *testing.T) {
+			fakes := linuxHost(t)
+			responses := updateObjectResponses(t, true, "old-dotnet", "dotnet", "")
+			if selection == "native" {
+				missing := updateMissingNativeImageResponses()
+				responses = append(responses, missing...)
+				responses = append(responses, missing...)
+				responses = append(responses, testutil.Response{}, updateCurrentNativeImageResponses()[3])
+				responses = append(responses, testutil.Response{}, testutil.Response{Stdout: `[{"Id":"changed-base"}]`}, testutil.Response{}, updateCurrentNativeImageResponses()[3])
+			} else {
+				responses = append(responses, testutil.Response{ExitCode: 1}, testutil.Response{ExitCode: 1}, testutil.Response{}, testutil.Response{ExitCode: 1})
+			}
+			scriptUpdate(t, fakes, false, responses)
+			stdout, stderr, status := runCLI(t, "linux-build", "update", "agent01", "--with", selection)
+			if status == 0 || !strings.Contains(stderr, "was not changed") || !strings.Contains(stderr, "retry sandboxed-agents update agent01 --with "+selection) || strings.Contains(stdout, "updated") {
+				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+			}
+			if changes := assertUpdateChangesPreserveData(t, fakes); len(changes) != 0 {
+				t.Fatalf("image change mutated sandbox: %v", changes)
+			}
+		})
 	}
 }

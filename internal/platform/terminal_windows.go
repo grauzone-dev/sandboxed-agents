@@ -25,12 +25,17 @@ func IsTerminal(input io.Reader) bool {
 }
 
 func ReadPassword(file *os.File) (value string, err error) {
+	const (
+		enableProcessedInput uint32 = 0x0001
+		enableLineInput      uint32 = 0x0002
+		enableEchoInput      uint32 = 0x0004
+	)
 	var original uint32
 	result, _, callErr := getConsoleMode.Call(file.Fd(), uintptr(unsafe.Pointer(&original)))
 	if result == 0 {
 		return "", callErr
 	}
-	hidden := original &^ uint32(0x0001|0x0002|0x0004)
+	hidden := original &^ (enableProcessedInput | enableLineInput | enableEchoInput)
 	result, _, callErr = setConsoleMode.Call(file.Fd(), uintptr(hidden))
 	if result == 0 {
 		return "", callErr

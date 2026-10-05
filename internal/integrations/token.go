@@ -27,7 +27,7 @@ func ReadToken(streams process.Streams) (string, error) {
 			err = newlineErr
 		}
 	} else {
-		token, err = bufio.NewReader(io.LimitReader(streams.Stdin, 65537)).ReadString('\n')
+		token, err = bufio.NewReader(io.LimitReader(streams.Stdin, platform.MaxPasswordBytes+1)).ReadString('\n')
 		if err == io.EOF {
 			err = nil
 		}
@@ -39,7 +39,7 @@ func ReadToken(streams process.Streams) (string, error) {
 	if token == "" {
 		return "", errors.New(AzdoTokenRequired)
 	}
-	if len(token) > 65536 || strings.ContainsRune(token, 0) || strings.ContainsFunc(token, unicode.IsSpace) {
+	if len(token) > platform.MaxPasswordBytes || strings.ContainsRune(token, 0) || strings.ContainsFunc(token, unicode.IsSpace) {
 		return "", errors.New(AzdoInvalidToken)
 	}
 	return token, nil

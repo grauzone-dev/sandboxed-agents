@@ -27,6 +27,8 @@ func Parse(kind string, args []string) (Request, error) {
 	}
 	workflow, err := Resolve(Catalog(), kind, request.Integration, request.Workflow)
 	if err != nil {
+		// The azdo workflow word may be a mistyped token, and the generic error quotes it.
+		// Return the fixed message so no typed value is ever echoed.
 		if kind == "login" && request.Integration == "azdo" {
 			return request, errors.New(AzdoUnknownWorkflow)
 		}
@@ -34,6 +36,7 @@ func Parse(kind string, args []string) (Request, error) {
 	}
 	request.Workflow = workflow
 	for len(args) > 0 {
+		// Never quote an extra azdo argument: it may be a token passed by mistake.
 		if kind == "login" && request.Integration == "azdo" {
 			return request, errors.New(AzdoUnexpectedArgument)
 		}

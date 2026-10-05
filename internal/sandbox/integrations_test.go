@@ -38,23 +38,34 @@ func TestNoninteractiveIntegrationExecHasABoundedContext(t *testing.T) {
 	}
 }
 
-func TestPromptingIntegrationExecKeepsTheCallerContext(t *testing.T) {
-	request, err := integrations.Parse("config", []string{"git", "identity", "--email=E"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	workflow := sandbox.NewIntegrationWorkflow("agent01", "default", request, func(execution context.Context, _ process.Request) (int, error) {
-		if execution != ctx {
-			t.Error("prompting exec replaced the caller context")
-		}
-		return 0, nil
-	}, process.Streams{})
-	if err := workflow.Apply(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := ctx.Err(); err != nil {
-		t.Fatalf("prompting exec canceled the caller context: %v", err)
+func TestInteractiveIntegrationExecKeepsTheCallerContext(t *testing.T) {
+	for _, test := range []struct {
+		kind string
+		args []string
+	}{
+		{"config", []string{"git", "identity", "--email=E"}},
+		{"login", []string{"github"}},
+		{"login", []string{"azure"}},
+	} {
+		t.Run(test.args[0], func(t *testing.T) {
+			request, err := integrations.Parse(test.kind, test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			workflow := sandbox.NewIntegrationWorkflow("agent01", "default", request, func(execution context.Context, _ process.Request) (int, error) {
+				if execution != ctx {
+					t.Error("interactive exec replaced the caller context")
+				}
+				return 0, nil
+			}, process.Streams{})
+			if err := workflow.Apply(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := ctx.Err(); err != nil {
+				t.Fatalf("interactive exec canceled the caller context: %v", err)
+			}
+		})
 	}
 }

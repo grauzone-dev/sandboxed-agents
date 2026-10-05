@@ -35,7 +35,7 @@ func integrationCommand(kind string, group *string, run process.Runner) Command 
 		Owner:             func(*Invocation) error { return state.CheckOwner(ctx) },
 		InterruptedUpdate: func(*Invocation) error { return state.CheckInterruptedUpdate() },
 		Running:           func(*Invocation) error { return state.CheckRunning() },
-		Preconditions:     func(*Invocation) error { return state.CheckManager(ctx) },
+		Preconditions:     func(*Invocation) error { return state.CheckPreconditions(ctx) },
 		Terminal: func(invocation *Invocation) error {
 			if request.NeedsTerminal() && (!platform.IsTerminal(invocation.Stdin) || !platform.IsTerminal(os.Stdout)) {
 				if request.Kind == "login" {

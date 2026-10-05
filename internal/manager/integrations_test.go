@@ -84,7 +84,7 @@ func TestGitIdentityNormalizesProcessFailuresAndStopsWriting(t *testing.T) {
 func TestManagerRejectsUndeliveredIntegrationWorkflowsWithoutProcesses(t *testing.T) {
 	for _, args := range [][]string{
 		{"config", "git", "identity", "--name=", "--email=E"},
-		{}, {"config"}, {"login", "github", "nosuch"}, {"login", "azure"}, {"login", "azdo"}, {"login", "git"}, {"config", "github"}, {"config", "git"}, {"config", "git", "identity", "--unknown"}, {"config", "git", "identity", "--name=N\x00", "--email=E"},
+		{}, {"config"}, {"login", "github", "nosuch"}, {"login", "azure", "nosuch"}, {"login", "azdo"}, {"login", "git"}, {"config", "github"}, {"config", "git"}, {"config", "git", "identity", "--unknown"}, {"config", "git", "identity", "--name=N\x00", "--email=E"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			run := func(context.Context, process.Request) (int, error) {

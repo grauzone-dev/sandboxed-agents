@@ -12,7 +12,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-func runIntegrationWorkflow(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
+func (m *Manager) runIntegrationWorkflow(ctx context.Context, args []string, streams process.Streams, run process.Runner) error {
 	if len(args) == 0 {
 		return fmt.Errorf(integrations.UnknownKind, "")
 	}
@@ -25,6 +25,8 @@ func runIntegrationWorkflow(ctx context.Context, args []string, streams process.
 		return setGitIdentity(ctx, request, streams, run)
 	case "git/credentials":
 		return configureGit(ctx, "credential.helper", "store --file=/home/agent/.git-credentials", streams, run)
+	case "github/device":
+		return m.loginGitHub(ctx, streams, run)
 	default:
 		return fmt.Errorf(integrations.UnknownKind, request.Kind+" "+request.Integration+" "+request.Workflow)
 	}

@@ -65,7 +65,8 @@ func Parse(kind string, args []string) (Request, error) {
 }
 
 func (request Request) NeedsTerminal() bool {
-	return request.Workflow == "identity" && (request.CommitName == nil || request.CommitEmail == nil)
+	return request.Kind == "login" && request.Integration != "azdo" ||
+		request.Workflow == "identity" && (request.CommitName == nil || request.CommitEmail == nil)
 }
 
 func (request Request) Args() []string {

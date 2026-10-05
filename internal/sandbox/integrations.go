@@ -28,7 +28,7 @@ func NewIntegrationWorkflow(name, group string, workflow integrations.Request, r
 			for _, entry := range environment {
 				key, _, _ := strings.Cut(entry, "=")
 				key = strings.ToUpper(key)
-				if !strings.HasPrefix(key, "GIT_") && key != "EMAIL" {
+				if !strings.HasPrefix(key, "GIT_") && !strings.HasPrefix(key, "GH_") && !strings.HasPrefix(key, "GITHUB_") && key != "EMAIL" {
 					request.Env = append(request.Env, entry)
 				}
 			}

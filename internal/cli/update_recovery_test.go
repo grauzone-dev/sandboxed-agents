@@ -32,7 +32,8 @@ func TestUpdateCompletesAnInterruptedUpdateWithoutBuildingOrReplacingTheSandbox(
 		for _, running := range []bool{true, false} {
 			for _, wasRunning := range []string{"true", "false"} {
 				t.Run(fmt.Sprintf("%s/running-%t/previous-%s", host.name, running, wasRunning), func(t *testing.T) {
-					fakes, fixture := resourceLimitHost(t, host.windows)
+					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+					checkSSH := installUpdateSSHFixture(t, sshDir, state)
 					responses := recoveryObjectResponses(t, true, running, false, wasRunning)
 					var want [][]string
 					if !running {
@@ -57,6 +58,7 @@ func TestUpdateCompletesAnInterruptedUpdateWithoutBuildingOrReplacingTheSandbox(
 					if len(fakes.Calls("ssh-keyscan")) != 1 {
 						t.Fatal("recovery did not check sshd readiness")
 					}
+					checkSSH()
 				})
 			}
 		}
@@ -88,7 +90,8 @@ func TestUpdateRestoresABackupWithoutStartingTwoContainersOnItsVolumes(t *testin
 			{name: "replacement start failed previously stopped", container: true, wasRunning: "false"},
 		} {
 			t.Run(host.name+"/"+state.name, func(t *testing.T) {
-				fakes, fixture := resourceLimitHost(t, host.windows)
+				fakes, fixture, sshDir, hostState := sshSetupHost(t, host.windows)
+				checkSSH := installUpdateSSHFixture(t, sshDir, hostState)
 				responses := recoveryObjectResponses(t, state.container, state.running, state.backupRunning, state.wasRunning)
 				var want [][]string
 				if state.container && !state.backupRunning {
@@ -122,6 +125,7 @@ func TestUpdateRestoresABackupWithoutStartingTwoContainersOnItsVolumes(t *testin
 				if len(fakes.Calls("ssh-keyscan")) != 0 {
 					t.Fatal("recovery probed a replacement that must be removed")
 				}
+				checkSSH()
 			})
 		}
 	}

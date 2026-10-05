@@ -342,3 +342,119 @@ func TestSSHRemovalRecoversMissingManagedEntryAsInstallationRecommends(t *testin
 		}
 	}
 }
+
+func TestSSHRemovalRecoversMissingEntryFileAndPreservesOtherSetup(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, command := range []string{"ssh-config", "remove", "volumes only"} {
+			for _, blockPresent := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s/%s/block=%t", host.name, command, blockPresent), func(t *testing.T) {
+					fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+					installSSHForRemoval(t, fakes, fixture, host.windows, "agent01", "default")
+					installSSHForRemoval(t, fakes, fixture, host.windows, "agent02", "default")
+					keyDir := filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743031")
+					otherDir := filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743032")
+					otherBefore := managedSSHFiles(t, otherDir)
+					userBefore := sshDirectoryContents(t, sshDir)
+					otherEntry, err := os.ReadFile(filepath.Join(otherDir, "entry"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Remove(filepath.Join(keyDir, "entry")); err != nil {
+						t.Fatal(err)
+					}
+					if !blockPresent {
+						configPath := filepath.Join(state, "group-default", "ssh", "config")
+						if err := os.WriteFile(configPath, append(otherEntry, []byte("Host *\n")...), 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					beforeCalls := len(fakes.Calls("podman"))
+					args := []string{"ssh-config", "agent01", "--remove"}
+					if command == "ssh-config" {
+						scriptSSHInstall(t, fakes, host.windows, "agent01", "default", true, testutil.Response{Stdout: "sandboxed-agents-manager v1\n"}, testutil.Response{})
+					} else {
+						owned := "default"
+						var owner *string
+						if command == "remove" {
+							owner = &owned
+						}
+						responses := sandboxObjectResponses(owner, false, map[string]string{"workspace": owned, "home": owned, "ssh": owned}, nil)
+						if owner != nil {
+							responses = append(responses, testutil.Response{})
+						}
+						if host.windows {
+							responses = append(healthyWindowsPodman()[1:3], responses...)
+						}
+						fakes.Script("podman", responses...)
+						if command == "remove" {
+							args = []string{"remove", "agent01"}
+						}
+					}
+					stdout, stderr, status := runCLI(t, fixture, args...)
+					if status != 0 || stderr != "" {
+						t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+					}
+					if _, err := os.Stat(keyDir); !os.IsNotExist(err) {
+						t.Fatalf("partial state remains: %v", err)
+					}
+					config, err := os.ReadFile(filepath.Join(state, "group-default", "ssh", "config"))
+					if err != nil || string(config) != string(otherEntry)+"Host *\n" {
+						t.Fatalf("config=%q err=%v", config, err)
+					}
+					if !reflect.DeepEqual(otherBefore, managedSSHFiles(t, otherDir)) || !reflect.DeepEqual(userBefore, sshDirectoryContents(t, sshDir)) {
+						t.Fatal("other setup changed")
+					}
+					var deauthorize int
+					for _, call := range fakes.Calls("podman")[beforeCalls:] {
+						if slices.Contains(call.Args, "deauthorize") {
+							deauthorize++
+						}
+					}
+					want := 0
+					if command == "ssh-config" {
+						want = 1
+					}
+					if deauthorize != want {
+						t.Fatalf("deauthorize=%d want=%d", deauthorize, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSSHRemovalRecoversLastPartialSetup(t *testing.T) {
+	for _, host := range resourceLimitHosts {
+		for _, partial := range []string{"missing entry", "empty entry", "missing directory"} {
+			t.Run(host.name+"/"+partial, func(t *testing.T) {
+				fakes, fixture, sshDir, state := sshSetupHost(t, host.windows)
+				installSSHForRemoval(t, fakes, fixture, host.windows, "agent01", "default")
+				keyDir := filepath.Join(state, "group-default", "ssh", "sandbox-6167656e743031")
+				var err error
+				switch partial {
+				case "missing entry":
+					err = os.Remove(filepath.Join(keyDir, "entry"))
+				case "empty entry":
+					err = os.WriteFile(filepath.Join(keyDir, "entry"), nil, 0600)
+				case "missing directory":
+					err = os.RemoveAll(keyDir)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				scriptSSHInstall(t, fakes, host.windows, "agent01", "default", false)
+				stdout, stderr, status := runCLI(t, fixture, "ssh-config", "agent01", "--remove")
+				if status != 0 || stderr != "" {
+					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+				}
+				if managedSSHFiles(t, state) != nil {
+					t.Fatalf("partial setup remains: %v", managedSSHFiles(t, state))
+				}
+				user, err := os.ReadFile(filepath.Join(sshDir, "config"))
+				if err != nil || len(user) != 0 {
+					t.Fatalf("Include remains: %q err=%v", user, err)
+				}
+			})
+		}
+	}
+}

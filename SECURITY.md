@@ -6,7 +6,7 @@
 
 A sandbox is built against an agent that does something wrong: it deletes the wrong directory, installs a bad package, or reads credentials it should not have. Such a mistake stays inside one sandbox, which means inside its workspace, its home data, and the credentials stored there.
 
-A sandbox is not built against code that actively tries to escape from it. A sandbox shares the host's kernel, and a flaw in the kernel, in Podman, or in the container runtime can let such code out. If you run code that you expect to attack its isolation, use a dedicated virtual machine.
+A sandbox is not built against code that actively tries to escape from it. A sandbox shares its kernel with the host (on Windows, the Linux kernel of the WSL2 Podman machine), and a flaw in the kernel, in Podman, or in the container runtime can let such code out. If you run code that you expect to attack its isolation, use a dedicated virtual machine.
 
 A sandbox also does not defend against programs that already run as your user on the host. Such a program can use your Podman directly, so it can change, inspect, or replace any sandbox.
 
@@ -23,12 +23,12 @@ A sandbox has three named volumes: the workspace, the home data, and the SSH ser
 
 ### Default Podman options
 
-`up` creates every sandbox container with these options, spelled exactly as the executable passes them to Podman:
+`up` creates every new sandbox container with these options, spelled exactly as the executable passes them to Podman:
 
-- `--userns=keep-id:uid=1000,gid=1000`: your host user maps to the user `agent`, UID and GID 1000, in the container.
+- `--userns=keep-id:uid=1000,gid=1000`: the host user that runs Podman maps to the user `agent`, UID and GID 1000, in the container (see [Execution identities](#execution-identities)).
 - `--user=0:0`: the container starts as container root, which is not root on the host (see [Execution identities](#execution-identities)).
 - `--security-opt=no-new-privileges`: no process in the container can gain privileges, for example through a setuid or setgid program or file capabilities.
-- `--network=pasta:--no-map-gw`: the container gets its own network through pasta, and the gateway address is not mapped to the host, so the container cannot reach the host through it ([Why Podman 4.4.0](docs/host-prerequisites.md#why-podman-440)).
+- `--network=pasta:--no-map-gw`: the container gets its own network through pasta, and the gateway address is not mapped to the host, so the container cannot reach the host through that address. This removes one route to the host; it is not a firewall against other host addresses the container can route to ([Why Podman 4.4.0](docs/host-prerequisites.md#why-podman-440)).
 - `--memory=8589934592`: at most 8 GiB of memory (`8g`).
 - `--cpus=4`: at most 4 CPUs.
 - `--pids-limit=2048`: at most 2048 processes.
@@ -40,27 +40,31 @@ A sandbox has three named volumes: the workspace, the home data, and the SSH ser
 
 In these options, `GROUP` is the controller group (`default` unless `SANDBOXED_AGENTS_GROUP` selects another) and `NAME` is the sandbox name. `PORT` is the SSH port on `127.0.0.1`: `up` picks a free one when it creates the sandbox, or uses the one given with `--port`, and records it on the container ([Port](docs/sandboxes.md#port)). The four resource limits show their defaults in bytes, CPUs, and processes, as the executable passes them; `up --memory SIZE`, `--cpus N`, `--pids-limit N`, and `--shm-size SIZE` replace them when the sandbox is created.
 
+`update NAME` replaces a sandbox's container with one created with the same user namespace, start user, `no-new-privileges`, and network options. It does not apply the defaults again: it takes the resource limits, the SSH port it publishes on `127.0.0.1`, and the workspace mount from the configuration recorded on the old container, and it keeps the sandbox's volumes ([Recorded configuration](docs/updates.md#recorded-configuration)).
+
 With `up NAME WORKSPACE`, the workspace volume mount is replaced by exactly one bind of the resolved host directory, `--mount type=bind,source=WORKSPACE,target=/workspace`, and no workspace volume is created. On Windows the source is the directory's path in the Podman machine, such as `/mnt/c/Users/me/project` for `C:\Users\me\project` ([Windows paths](docs/sandboxes.md#windows-paths)). The home and SSH server state volumes stay as listed.
 
 The create call also carries `--name` and `--label` options. They name the container and record its owner and configuration; they do not change its isolation ([Podman names and labels](docs/sandboxes.md#podman-names-and-labels)).
 
-The resource limits keep a runaway agent from exhausting the host's memory, CPUs, or process table. Rootless Podman can apply them only when cgroup v2 delegates the `memory`, `cpu`, and `pids` controllers to your user, which the preflight checks ([Host prerequisites](docs/host-prerequisites.md)).
+The resource limits bound how much memory, CPU, processes, and shared memory one sandbox can use. They do not reserve these resources for the sandbox and do not keep the host from running out of them: a limit above what the host has free, or several sandboxes together, can still use up the host's resources. Rootless Podman can apply them only when cgroup v2 delegates the `memory`, `cpu`, and `pids` controllers to your user, which the preflight checks ([Host prerequisites](docs/host-prerequisites.md)).
 
 ### Execution identities
 
 Two identities run in a sandbox ([ADR-0006](docs/adr/0006-podman-target-and-execution-identity.md)).
 
-**Container root** is UID 0 in the container. Under the user namespace mapping it is an ID from your subordinate ID range, not root on the host and not your host user. Container root runs administrative work only:
+**Container root** is UID 0 in the container. Under the user namespace mapping it is an ID from the subordinate ID range of the user that runs Podman, not root on the host and not that user. Container root runs administrative work only:
 
 - the entrypoint, which prepares the container, has the in-container manager start the SSH server (sshd), and then starts the container's long-running process as `agent`;
 - sshd itself;
 - the in-container manager for administrative operations. The executable makes each administrative call to the manager with `podman exec --user=0:0`, so it runs as container root whatever user the container started with. Examples are the session query, the version check that the manager answers, and the authorization and removal of the SSH setup's key;
 - `fingerprint NAME`, which reads the public host keys with `podman exec --user=0:0` and `cat`.
 
-**`agent`**, UID and GID 1000, is the host user under the user namespace mapping. On Windows it is the user of the Podman machine, not your Windows account. Shells, toolchains, agents, and agent sessions run as `agent`:
+**`agent`**, UID and GID 1000, is the host user that runs rootless Podman, under the user namespace mapping. On Linux that is your user. On Windows, rootless Podman runs inside the selected WSL2 Podman machine ([Windows](docs/host-prerequisites.md#windows)), so `agent` maps to the machine's non-root user that runs Podman there, not to your Windows account. Shells, toolchains, agents, and agent sessions run as `agent`:
 
 - `shell NAME` opens its shell with `podman exec --user=1000:1000`, and an SSH session signs in as `agent`.
-- `agents run`, `agents session`, `agents login`, and the `integrations` workflows start the manager directly as `agent` with `podman exec --user=1000:1000`. The manager refuses these requests under any other identity and starts the agent, the agent session, or the login program with an explicit request for UID and GID 1000.
+- `agents run`, `agents session`, `agents login`, and every `integrations` workflow start the manager directly as `agent` with `podman exec --user=1000:1000` and `HOME=/home/agent`.
+- For `agents run`, `agents session`, `agents login`, and the GitHub, Azure, and Azure DevOps logins of `integrations login`, the manager also refuses the request under any other identity and starts the agent, the tmux server of the agent session, or the login program with an explicit request for UID and GID 1000.
+- For the Git identity and Git credentials workflows of `integrations config`, the manager does not check its identity and runs Git without a separate identity request. Git inherits `agent` from the `podman exec` call that started the manager.
 - For agent installation, removal, and status (`agents enable`, `up --agents`, `agents disable`, `agents status`, and the agent query of `list`) and for the session query, the manager is called as container root and starts itself again as a worker with UID and GID 1000. Only that worker reads the home volume, runs npm, runs an agent's status probe, or reads the agent sessions.
 
 The two kinds of call stay apart. A `podman exec` that addresses the manager for an administrative operation runs as container root and starts no agent. A `podman exec` that starts a shell, a workflow, or an agent runs as `agent`. No agent process runs as container root.
@@ -73,9 +77,9 @@ The SSH server is reachable only from your own machine, on `127.0.0.1:PORT`. It 
 
 These limits hold for every sandbox. Weigh them before you give a sandbox access to a workspace or an account.
 
-- **Outbound networking is open.** A sandbox can reach the internet and any network the host can reach. There is no egress control and no allowlist. An agent can send the files of its workspace and the credentials stored in its sandbox to any server.
+- **Outbound networking is open.** A sandbox can reach the internet, any network the host can reach, and services on host addresses it can route to. `--no-map-gw` removes only the gateway route to the host and is not a host firewall. There is no egress control and no allowlist. An agent can send the files of its workspace and the credentials stored in its sandbox to any server.
 - **Agents in one sandbox share everything in it.** All agents in a sandbox run as the same user, `agent`, with the same home, the same credentials, and the same workspace. One agent can read and change another agent's login, configuration, and files. To separate agents or accounts from each other, use separate sandboxes.
-- **The kernel is shared with the host.** A sandbox is a container, not a virtual machine. Code that exploits a flaw in the kernel or the container runtime can escape it.
+- **The kernel is shared with the host.** A sandbox is a container, not a virtual machine. On Linux it shares the host's kernel. On Windows it shares the Linux kernel of the WSL2 Podman machine with everything that runs in that machine. Code that exploits a flaw in the kernel or the container runtime can escape it.
 
 The current version also has these limits:
 

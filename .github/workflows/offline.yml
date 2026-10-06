@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   offline:
+    name: offline (${{ matrix.os }}, ${{ matrix.output }}, ${{ matrix.artifact }})
     strategy:
       fail-fast: false
       matrix:

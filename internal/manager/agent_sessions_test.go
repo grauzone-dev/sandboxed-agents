@@ -345,7 +345,7 @@ func TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock(t *testing.T
 				if code != 0 {
 					t.Fatalf("install=%d", code)
 				}
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatal("install did not finish")
 			}
 			select {

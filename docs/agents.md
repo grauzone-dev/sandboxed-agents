@@ -1,8 +1,8 @@
 # Agents
 
-An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there, and `sandboxed-agents agents login NAME AGENT [WORKFLOW]` runs one of its login workflows there. `sandboxed-agents agents disable NAME AGENT` removes the agent's command and its record and keeps its credentials and cached data. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
+An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there, `--version X` installs exactly version `X` and pins the agent to it, and `sandboxed-agents agents login NAME AGENT [WORKFLOW]` runs one of its login workflows there. `sandboxed-agents agents update NAME AGENT` reinstalls the pinned version or moves an agent without a pin to the newest version. `sandboxed-agents agents disable NAME AGENT` removes the agent's command and its record, pin included, and keeps its credentials and cached data. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT`, `agents disable NAME AGENT`, and `agents status NAME AGENT`, which take no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, `agents run NAME AGENT [ARG...]`, which runs an enabled agent once, and `agents session NAME AGENT [--stop]`, which keeps an enabled agent running in a persistent agent session.
+This page covers `agents enable NAME AGENT [--version X]`, `agents update NAME AGENT [--unpin]`, `agents disable NAME AGENT`, and `agents status NAME AGENT`, of which `agents disable` and `agents status` take no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, `agents run NAME AGENT [ARG...]`, which runs an enabled agent once, and `agents session NAME AGENT [--stop]`, which keeps an enabled agent running in a persistent agent session.
 
 ## Agent catalog
 
@@ -32,11 +32,12 @@ Only Claude Code declares a status probe: `claude auth status` prints JSON whose
 
 ```sh
 sandboxed-agents agents enable NAME AGENT
+sandboxed-agents agents enable NAME AGENT --version X
 ```
 
-`NAME` is the sandbox and `AGENT` is a name from the [agent catalog](#agent-catalog). The sandbox must be running.
+`NAME` is the sandbox and `AGENT` is a name from the [agent catalog](#agent-catalog). The sandbox must be running. [`--version X`](#install-and-pin-a-version) installs an exact version and pins the agent to it.
 
-When the agent is not enabled yet, the manager installs the version of the agent's npm package that is `latest` at that moment:
+When the agent is not enabled yet and no `--version` is given, the manager installs the version of the agent's npm package that is `latest` at that moment:
 
 ```sh
 npm install --global --prefix /home/agent/.local --cache /home/agent/.local/cache/sandboxed-agents/npm PACKAGE@latest
@@ -44,13 +45,61 @@ npm install --global --prefix /home/agent/.local --cache /home/agent/.local/cach
 
 `--cache` moves npm's cache from its default `~/.npm` to a directory of its own under `/home/agent/.local`. Options on the command line take priority over npm's environment variables and `.npmrc` files ([npm config, `cache`](https://docs.npmjs.com/cli/v11/using-npm/config/#cache)).
 
-It reads the installed version from the package's `package.json` under `/home/agent/.local/lib/node_modules`, records the agent in the agent selection, `/home/agent/.local/state/sandboxed-agents/selection.json`, prints `Agent AGENT is enabled (version VERSION).`, and exits with status 0.
+It reads the installed version from the package's `package.json` under `/home/agent/.local/lib/node_modules`, records the agent without a pin in the agent selection, `/home/agent/.local/state/sandboxed-agents/selection.json`, prints `Agent AGENT is enabled (version VERSION).` followed by `Pin: none.`, and exits with status 0.
 
-The installation, the npm cache, and the manager's own state in `/home/agent/.local/state/sandboxed-agents` all lie below `/home/agent/.local`. `agents enable` removes no existing file of the home volume, credentials included. npm and the package's install scripts run as `agent`, UID and GID 1000, like any other work of that user, so they can still write elsewhere in the home volume; what they create belongs to `agent`.
+The installation, the npm cache, and the manager's own state in `/home/agent/.local/state/sandboxed-agents` all lie below `/home/agent/.local`. Apart from that state, the manager itself changes no file of the home volume for `agents enable` or [`agents update`](#update-an-agent); in particular, it removes no credentials and no cached data. npm and the package's install scripts are not bound by this. They run as `agent`, UID and GID 1000, like any other work of that user. Installing over an existing version, as `--version` with another version and `agents update` do, lets npm replace or remove files of the agent's package under `/home/agent/.local/lib/node_modules` and its command under `/home/agent/.local/bin`, and the install scripts can create, change, or remove files elsewhere in the home volume. What they create belongs to `agent`.
 
-When the agent is already enabled, `agents enable` runs no installation and leaves the selection as it is. It prints the same line with the installed version and exits with status 0. It does not move the agent to a newer version.
+When the agent is already enabled, `agents enable` without `--version` runs no installation and leaves the selection as it is, pin included. It prints the same line with the installed version, then `Pin: PIN.` with the agent's pin, or `Pin: none.` when it has none, and exits with status 0. It does not move the agent to a newer version; [`agents update`](#update-an-agent) does.
 
-The installed agent and the selection live in the home volume, so they survive `stop`, `start`, and `restart`. They also survive `remove NAME` without `--volumes`, and the next `up NAME` adopts the volume ([Kept volumes](sandboxes.md#kept-volumes)).
+The installed agent and the selection, pins included, live in the home volume, so they survive `stop`, `start`, and `restart`. They also survive `remove NAME` without `--volumes`, and the next `up NAME` adopts the volume ([Kept volumes](sandboxes.md#kept-volumes)). Keeping pins across `update` of the sandbox is not covered in this version (#52).
+
+### Install and pin a version
+
+`agents enable NAME AGENT --version X` installs exactly version `X` of the agent's npm package and pins the agent to it. A pin is the version recorded with the agent's entry in the agent selection, in its field `pin`; [`agents update`](#update-an-agent) keeps a pinned agent at that version.
+
+`X` is an exact version such as `1.2.3`, also with a prerelease or build metadata, such as `1.2.3-beta.1` or `1.2.3+build.5`. A dist-tag such as `latest` or `next` and a range such as `^1.2`, `~1.2.3`, or `1.x` are refused with `invalid agent version "X"; use an exact version such as 1.2.3`, and nothing is installed. `--version` is given as `--version X` or `--version=X`, at most once; without a value it is refused with `option --version needs a version`, and given twice with `option --version is given more than once`.
+
+The manager installs the version with the same npm call as above, with `PACKAGE@X` in place of `PACKAGE@latest`. It then reads the installed version from the package's `package.json`. When that is not `X`, the command fails with `installed version VERSION does not match requested version X` and records no pin.
+
+Writing the pin changes only the agent's own entry: its other fields, also fields this version does not use, and the entries of other agents keep their values, as with `agents disable`.
+
+What `--version X` does depends on the agent's state:
+
+| State of the agent | Effect |
+| --- | --- |
+| Not enabled | Installs `X`, records the agent with the pin `X`. |
+| Enabled, another version installed, pinned or not | Installs `X` in place of the installed version and sets the pin to `X`, replacing an earlier pin. |
+| Enabled, `X` installed | Runs no installation. Sets the pin to `X` when the agent has no pin or another one, and otherwise changes nothing. |
+
+In each case the command prints `Agent AGENT is enabled (version X).` followed by `Pin: X.` and exits with status 0.
+
+`agents enable --version` on an enabled agent does not check for a running [agent session](#keep-an-agent-running-in-a-session) of the agent, and replacing the installed version does not end that session. Refusing while a session runs, and `--force`, come with #46.
+
+## Update an agent
+
+```sh
+sandboxed-agents agents update NAME AGENT
+sandboxed-agents agents update NAME AGENT --unpin
+```
+
+`NAME` is the sandbox and `AGENT` an agent enabled in it. The sandbox must be running.
+
+`agents update` installs the agent again with the npm call of [`agents enable`](#enable-an-agent):
+
+- With a pin, it reinstalls the pinned version, `PACKAGE@PIN`. The installed version and the pin are the same afterwards.
+- Without a pin, it installs `PACKAGE@latest`, the newest version at that moment, and the agent stays without a pin.
+
+It reads the installed version as `agents enable` does, prints `Agent AGENT is updated (version VERSION).` followed by `Pin: PIN.` or `Pin: none.`, and exits with status 0. For a pinned agent, an installed version other than the pin fails as for `agents enable --version`.
+
+`--unpin` removes the agent's pin and installs `PACKAGE@latest`; the second line is then `Pin: none.`. On an agent without a pin, `agents update --unpin` does the same as `agents update` and exits with status 0. `--unpin` takes no value and may be given at most once; given twice, it is refused with `option --unpin is given more than once`. `agents enable --help` and `agents update --help` describe these options.
+
+On an agent that is not enabled, `agents update` installs nothing, exits with status 1, and names `sandboxed-agents agents enable NAME AGENT`. The manager reads the selection for this check while it holds the [manager lock](#manager-lock), so an `agents disable` that finishes first is seen. On a home volume where no agent was ever enabled, it refuses without taking the lock and creates no file. Otherwise `agents update` refuses in the same cases and order as `agents enable` ([Refusals](#refusals)).
+
+`agents update` does not check for a running [agent session](#keep-an-agent-running-in-a-session) of the agent, and reinstalling does not end that session. Refusing while a session runs, and `--force`, come with #46.
+
+### When an installation fails
+
+When npm or a later step of `agents enable` or `agents update` fails, including a `package.json` whose version cannot be read and an installed version that does not match, the command reports the failure and exits with status 1. A pin in the selection that is not an exact version makes `agents update` without `--unpin` fail with the message for an invalid version before it runs npm. The agent selection keeps its state from before the command: an agent that was not enabled stays not enabled, and an enabled agent keeps its entry and its earlier pin, or its lack of one; `--unpin` removes no pin then. The installed files are not restored: npm may already have replaced or removed the agent's package before it failed, so the installed version can differ from the one before the command, and `agents status` reports the version it finds. Run the command again, or `agents enable NAME AGENT --version X` with the version you want.
 
 ## Disable an agent
 
@@ -60,7 +109,7 @@ sandboxed-agents agents disable NAME AGENT
 
 `NAME` is the sandbox and `AGENT` is a name from the [agent catalog](#agent-catalog). The sandbox must be running.
 
-When the agent is enabled, the manager removes its managed command, `/home/agent/.local/bin/COMMAND`, where `COMMAND` is the agent's command from the catalog. It also removes the agent's whole entry from the agent selection, including a pin. The other entries keep their fields and values, also fields this version does not use; only the file's whitespace may change when the manager writes it. It prints `Agent AGENT is disabled.` and exits with status 0. When the entry recorded a pin, the line names it instead: `Agent AGENT is disabled (removed pin PIN).` This version sets no pins; setting a pin comes with #43.
+When the agent is enabled, the manager removes its managed command, `/home/agent/.local/bin/COMMAND`, where `COMMAND` is the agent's command from the catalog. It also removes the agent's whole entry from the agent selection, including a pin. The other entries keep their fields and values, also fields this version does not use; only the file's whitespace may change when the manager writes it. It prints `Agent AGENT is disabled.` and exits with status 0. When the entry recorded a pin, the line names it instead: `Agent AGENT is disabled (removed pin PIN).` [`agents enable --version`](#install-and-pin-a-version) sets pins.
 
 After `agents disable`, the agent no longer appears in the `AGENTS` column of `list`, `agents status` reports it as not enabled, and `agents login` and `agents run` refuse it and name `sandboxed-agents agents enable NAME AGENT`. Other agents in the sandbox are not affected.
 
@@ -83,15 +132,16 @@ podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agen
 The manager answers when this call exits with status 0 within 30 seconds and prints one line `sandboxed-agents-manager VERSION`. The executable then passes the request on with the call for its command:
 
 ```sh
-podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents enable AGENT
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents enable AGENT [--version X]
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents update NAME AGENT [--unpin]
 podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents disable AGENT
 ```
 
-The manager's output and the output of npm pass through to your terminal.
+The manager's output and the output of npm pass through to your terminal. `NAME` reaches the manager with `agents update` only for the recovery command in its not-enabled message, as with `agents run`.
 
 On Windows, the version check and the request also name the [selected Podman machine](sandboxes.md#target-on-windows) with `--connection`.
 
-The manager does not install or remove an agent as root. It starts its own trusted worker, the same manager program from the image, with the identity of the user `agent`: UID 1000, GID 1000, and no supplementary groups. The worker gets a fixed environment (`HOME`, `USER`, `LOGNAME`, `SHELL`, and a `PATH` that starts with `/home/agent/.local/bin`) and inherits none of root's. The one addition is `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers`, present only when the manager's own environment holds exactly that value, as in an image with the `playwright` toolchain ([Images](images.md#toolchain-image-contents)); no other value is passed on. Every process the manager starts for an agent, from npm to the agent itself in a run or a session, starts from this environment. It reads the home volume only after this change of identity. It takes the [manager lock](#manager-lock) and reads the selection. For `agents enable`, it then runs npm and every other command of the installation and writes the selection; for `agents disable`, it removes the managed command and writes the selection. All of this runs as `agent`, so every file the installation creates in the home volume belongs to `agent`.
+The manager does not install or remove an agent as root. It starts its own trusted worker, the same manager program from the image, with the identity of the user `agent`: UID 1000, GID 1000, and no supplementary groups. The worker gets a fixed environment (`HOME`, `USER`, `LOGNAME`, `SHELL`, and a `PATH` that starts with `/home/agent/.local/bin`) and inherits none of root's. The one addition is `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers`, present only when the manager's own environment holds exactly that value, as in an image with the `playwright` toolchain ([Images](images.md#toolchain-image-contents)); no other value is passed on. Every process the manager starts for an agent, from npm to the agent itself in a run or a session, starts from this environment. It reads the home volume only after this change of identity. The worker receives the request's arguments unchanged, `NAME`, `--version X`, and `--unpin` included. It takes the [manager lock](#manager-lock) and reads the selection. For `agents enable` and `agents update`, it then runs npm and every other command of the installation and writes the selection; for `agents disable`, it removes the managed command and writes the selection. All of this runs as `agent`, so every file the installation creates in the home volume belongs to `agent`.
 
 While the manager runs as root, it starts no program and no script from the home volume or the workspace, and it takes no command or argument from data stored there. A selection file or an npm configuration in the home volume that names a command can only make that command run as UID and GID 1000.
 
@@ -107,7 +157,7 @@ On Windows, both calls also name the selected Podman machine with `--connection`
 
 The manager serializes changes to the agent installations with one lock, the file `/home/agent/.local/state/sandboxed-agents/manager.lock` in the home volume. It is an advisory lock held through the operating system, so the operating system releases it when the process that holds it ends, also after a crash.
 
-`agents enable` and `agents disable` hold the lock from before they read the selection until their change is complete. One exception keeps `agents disable` from creating files: when the lock file does not exist yet, it first reads the selection without the lock, and if the agent is not listed there, it reports that nothing was to do and stops. A second `agents enable` or `agents disable` that takes the lock on the same sandbox, for the same or another agent, waits until the first has released it. Two concurrent `agents enable` calls for different agents therefore leave both agents in the selection.
+`agents enable`, `agents update`, and `agents disable` hold the lock from before they read the selection until their change is complete, also when the change only sets or removes a pin. One exception keeps `agents disable` from creating files: when the lock file does not exist yet, it first reads the selection without the lock, and if the agent is not listed there, it reports that nothing was to do and stops. A second `agents enable`, `agents update`, or `agents disable` that takes the lock on the same sandbox, for the same or another agent, waits until the first has released it. Two concurrent `agents enable` calls for different agents therefore leave both agents in the selection.
 
 Starting an [agent session](#keep-an-agent-running-in-a-session) and ending one with `agents session NAME AGENT --stop` take the same lock. A session start or `--stop` issued while an installation change holds it does not run until the lock is released. Attaching to a running session takes no lock.
 
@@ -149,15 +199,18 @@ sandboxed-agents agents status NAME AGENT
 
 `NAME` is the sandbox and `AGENT` is a name from the [agent catalog](#agent-catalog). The sandbox must be running. The request reaches the manager as for `agents enable`, with `agents status AGENT` in place of `agents enable AGENT`.
 
-For an enabled agent, it prints the installed version, the sign-in state, and whether an [agent session](#keep-an-agent-running-in-a-session) of the agent is running:
+For an enabled agent, it prints the installed version, the sign-in state, whether an [agent session](#keep-an-agent-running-in-a-session) of the agent is running, and the agent's [pin](#install-and-pin-a-version):
 
 ```text
 Agent claude is enabled (version 1.2.3).
 Sign-in state: signed in.
 Agent session: running.
+Pin: 1.2.3.
 ```
 
-The sign-in state is `signed in`, `not signed in`, or `unknown`. The session field is `running` while the agent runs in its session and `not running` otherwise; the manager reads it from the tmux server of `agent`, as for the [session query](#session-query). For an agent that is not enabled, it prints only these two lines and runs nothing of the agent:
+The last line reads `Pin: none.` for an agent without a pin.
+
+The sign-in state is `signed in`, `not signed in`, or `unknown`. The session field is `running` while the agent runs in its session and `not running` otherwise; the manager reads it from the tmux server of `agent`, as for the [session query](#session-query). For an agent that is not enabled, it prints only these two lines, without a pin, and runs nothing of the agent:
 
 ```text
 Agent claude is not enabled.
@@ -177,7 +230,7 @@ The probe runs in a process group of its own. When the 30 seconds run out, the m
 
 `unknown` means only that the manager could not tell; it says nothing about whether the agent is signed in. The report shows what the agent's own command answered at the moment of the call.
 
-`agents status` exits with status 0 whenever it can report, whatever it reports: also for an agent that is not enabled, not signed in, or in the `unknown` state. It changes neither the installation nor the agent selection, and for an agent that is not enabled it writes nothing to the home volume. The report contains no pin.
+`agents status` exits with status 0 whenever it can report, whatever it reports: also for an agent that is not enabled, not signed in, or in the `unknown` state. It changes neither the installation nor the agent selection, and for an agent that is not enabled it writes nothing to the home volume.
 
 `agents status` refuses in the same cases and in the same order as `agents enable` ([Refusals](#refusals)), and reports no state of the agent then.
 
@@ -228,21 +281,21 @@ The agent's command decides where it stores what you sign in with. Because its h
 
 ## Refusals
 
-`agents enable`, `agents disable`, `agents status`, and `agents login` share these refusals. In each case the command exits with status 1: `agents enable` installs nothing, `agents disable` removes nothing, `agents status` reports no state of the agent, and `agents login` starts no workflow and prints no login message. When several apply, the command reports the first in the [order of checks](development.md#order-of-checks):
+`agents enable`, `agents update`, `agents disable`, `agents status`, and `agents login` share these refusals. In each case the command exits with status 1: `agents enable` and `agents update` install nothing and change no pin, `agents disable` removes nothing, `agents status` reports no state of the agent, and `agents login` starts no workflow and prints no login message. When several apply, the command reports the first in the [order of checks](development.md#order-of-checks):
 
 | Step | Refusal |
 | --- | --- |
-| 1. Usage and names | An invalid controller group, a usage error, or an invalid sandbox name. An unknown agent name lists the valid agent names. A catalog name whose agent is not delivered yet counts as unknown and is not listed; in this version all four agents are delivered. For `agents login`, a missing workflow name for an agent with more than one login workflow and an unknown workflow name list the agent's workflow names. None of these calls Podman. |
+| 1. Usage and names | An invalid controller group, a usage error, or an invalid sandbox name. Usage errors include `--version` without a value or given twice, a version that is not exact, which is refused with `invalid agent version "X"; use an exact version such as 1.2.3`, and `--unpin` given twice. An unknown agent name lists the valid agent names. A catalog name whose agent is not delivered yet counts as unknown and is not listed; in this version all four agents are delivered. For `agents login`, a missing workflow name for an agent with more than one login workflow and an unknown workflow name list the agent's workflow names. None of these calls Podman. |
 | 3. Sandbox existence | An unknown sandbox, also one of another controller group. A sandbox of which only volumes remain is refused with a message naming `sandboxed-agents up NAME`, which adopts the volumes. |
 | 4. Owner | The container, one of the volumes, or the backup container has a missing or different owner label. The message names each such Podman object and points to Podman, also when the container carries the current owner and only a volume does not ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)). |
 | 5. Interrupted update | A backup container with the current owner exists. The message names `sandboxed-agents update NAME`. |
 | 6. Running state | The sandbox is stopped. The message names `sandboxed-agents start NAME`, and nothing starts on its own. |
-| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. For `agents login`, the agent is not enabled in the sandbox; the message names `sandboxed-agents agents enable NAME AGENT`. |
+| 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. For `agents login` and `agents update`, the agent is not enabled in the sandbox; the message names `sandboxed-agents agents enable NAME AGENT`. `agents login` asks the manager for this before its workflow call; `agents update` makes no such query, and the manager checks it in the update call itself. |
 | 8. Terminal | `agents login` without an interactive terminal. This is reported only when the manager answers and the agent is enabled. |
 
 `sandboxed-agents check NAME` reports whether the manager answers, together with the rest of the sandbox's state ([Check a sandbox](check.md)). `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
 
-An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. Whether the agent is enabled is known only to the manager, so `agents disable` reports these refusals also for an agent that is not enabled. If npm or another step of the installation fails, `agents enable` reports the failure, leaves the selection unchanged, and exits with status 1. If the manager cannot read the agent selection or, for an enabled agent, the installed version, `agents status` reports the failure, prints no report, and exits with status 1; it runs no status probe then.
+An owner conflict on a stopped sandbox is therefore reported as the owner conflict, not as the stopped sandbox. Whether the agent is enabled is known only to the manager, so `agents disable` reports these refusals also for an agent that is not enabled. If npm or another step of the installation fails, `agents enable` or `agents update` reports the failure, leaves the selection and its pins unchanged, and exits with status 1 ([When an installation fails](#when-an-installation-fails)). If the manager cannot read the agent selection or, for an enabled agent, the installed version, `agents status` reports the failure, prints no report, and exits with status 1; it runs no status probe then.
 
 ## Run an agent
 
@@ -378,7 +431,7 @@ A further install method is a new `kind`. Adding one takes a Go type for the fie
 Offline tests cover the behavior on this page as follows ([Test seams](development.md#test-seams)):
 
 - `agents run` at the CLI boundary and in the manager ([Agent runs](development.md#test-seams));
-- `agents enable` and `agents disable` at the CLI boundary against a fake `podman`, for each of the four agents, on the Linux and the Windows target: usage errors and unknown or undelivered agent names before any Podman call, the order of checks, a manager that does not answer, and a failed manager request. On Windows, with the controller group `team-a`, both manager calls of `agents enable`, `agents disable`, and `agents status` stay on the selected machine without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY`, and an unavailable machine is refused. `agents enable` is also tested with a fifth catalog entry;
+- `agents enable`, `agents update`, and `agents disable` at the CLI boundary against a fake `podman`, for each of the four agents, on the Linux and the Windows target: usage errors and unknown or undelivered agent names before any Podman call, the order of checks, a manager that does not answer, and a failed manager request. On Windows, with the controller group `team-a`, both manager calls of `agents enable`, `agents update`, `agents disable`, and `agents status` stay on the selected machine without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, or `CONTAINER_SSHKEY`, and an unavailable machine is refused. `agents enable` is also tested with a fifth catalog entry;
 - `agents status` at the CLI boundary against a fake `podman`: the manager calls for each of the four agents, exit status 0 for each kind of report, a failure of the manager passed on with a non-zero status, and the same refusals and order of checks as `agents enable`, on the Linux and the Windows target;
 - the manager's catalog reading, installation, selection handling, and lock with injected process functions. These tests check the identity and arguments each process is requested with, including two concurrent calls and a failed installation;
 - the manager's `agents disable` with injected process functions:
@@ -390,7 +443,7 @@ Offline tests cover the behavior on this page as follows ([Test seams](developme
   - a removal waits while an installation holds the lock, and a removal canceled while it waits leaves the home directory unchanged;
   - an invalid selection, a directory in place of the selection, the lock file, or the command, a failed worker, and an unexpected identity each exit with status 1 and leave the home directory unchanged;
 - the manager's `agents status` with injected process functions: the version of each of the four agents read after `agents enable`, a not-enabled agent without any process or write to the home directory, and the root manager starting only its worker. For a fifth catalog entry, they check the probe's command, arguments, identity, environment, process group cleanup, and 30-second deadline, and how each probe answer maps to a sign-in state, including non-zero exit statuses, invalid or non-object JSON, missing or non-boolean fields, a failed start, and a timeout. Two cases close the output after the one-second wait that follows the probe's own exit, once with a `true` field, which still gives `signed in`, and once with a `null` field, which gives `unknown`. An unreadable selection or installed version fails without a probe;
-- a selection in a temporary home directory that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` runs no installation. The test does not stop or start a real container;
+- a selection in a temporary home directory, written by `agents enable --version 1.2.3` with the pin `1.2.3`, that stays byte for byte unchanged across `stop` and `start` against a fake `podman`, after which a repeated `agents enable` without `--version` runs no installation and reports the pin. The test does not stop or start a real container;
 - `up NAME --agents` at the CLI boundary against a fake `podman`, on the Linux and the Windows target: a new sandbox; a stopped and a running existing sandbox, routed to a real manager with injected process functions, where an enabled agent is not reinstalled; invalid selections and undelivered names without a Podman call; failed installations with retry commands; a manager that does not answer before the first or after a failed installation; and the 15-minute bound of each installation with a fresh manager check afterwards;
 - the `AGENTS` column of `list` against a fake `podman`: names, `none`, a stopped sandbox, unusable or failed answers, the 5-second bound, the Windows target, and `agents enable` followed by `list` with a fifth catalog entry;
 - the manager's `agents list` query: a missing and a written selection, the worker started as UID and GID 1000, a refused identity, and invalid selection files left unchanged;
@@ -400,10 +453,27 @@ Offline tests cover the behavior on this page as follows ([Test seams](developme
 - the manager's `agents session` with injected process functions: a start, a second call that attaches to the running session and starts no second one, a fresh session after the agent exits, `--stop` without a terminal, repeated, and on an agent that is not enabled, a `--stop` on an agent that was disabled while its session runs, which reports that the agent is not enabled, does not claim that no session runs, and leaves the session running, so that `agents status` still reports it as `running`, a `--stop` that reports nothing to do when the agent exits between the session query and the end of the session, a failed or unlaunchable tmux start, attach, or stop reported with exit status 1, refusals of root and of other identities, of an agent that is not enabled, and of a missing terminal, none of which starts tmux, and a session start and a `--stop` that wait while an installation holds the manager lock;
 - the manager process in the session's first window with injected process functions: it refuses container root and a GID other than 1000 without starting tmux. Otherwise it starts the agent's command as UID and GID 1000 in `/workspace`, without arguments, and keeps the `TERM` that the manager process receives, and after the agent exits with status 0, exits with another status, cannot start, or is canceled, it asks tmux exactly once to kill the session `=sandboxed-agents-AGENT` by its exact name. That cleanup runs under a context of its own, bounded to 5 seconds, which a canceled request does not cancel. The tests check this request to tmux; that tmux then ends every window of the session is tmux's own behavior and is not tested;
 - the manager's session query with injected process functions: called as root, it starts only its worker as UID and GID 1000, which queries the tmux server of `agent`, and a test fails when the query addresses another user; no tmux server counts as no session, while a refused connection, a failed or timed-out query, an unknown agent, and a duplicate session make the query fail;
-- the session field of `agents status` in the manager with injected process functions: `running` while a session runs, `not running` after its agent exits, `not running` for an agent that is not enabled, and `running` for an agent that was disabled while its session still runs, without starting the agent's command.
+- the session field of `agents status` in the manager with injected process functions: `running` while a session runs, `not running` after its agent exits, `not running` for an agent that is not enabled, and `running` for an agent that was disabled while its session still runs, without starting the agent's command;
+- the exact-version check shared by host and manager: plain versions, prereleases, and build metadata accepted; dist-tags, ranges, partial versions, a `v` prefix, leading zeros, empty identifiers, surrounding whitespace, and `file:` and `npm:` specifiers refused;
+- `agents enable --version` and `agents update [--unpin]` at the CLI boundary against a fake `podman`:
+  - `--version X`, `--version=X`, and a version with a prerelease and build metadata forwarded to the manager as `--version X`, and `agents update` forwarded with the sandbox name and `--unpin`;
+  - on the Linux and the Windows target, `--version` without a value, empty, or given twice, `--unpin` given twice or with a value, an option of the other command, `--force`, an extra argument, and a version that is not exact, each refused before any Podman call;
+  - the pin line of `agents enable`, `agents update`, and `agents status` and the removed pin named by `agents disable` passed through unchanged, and an `agents update` of an agent that is not enabled exiting non-zero with the manager's message naming `agents enable NAME AGENT`;
+  - the help of both commands;
+- the manager's pin handling with injected process functions:
+  - `agents enable --version` on an agent that is not enabled, followed by `agents status` reporting the version and the pin without a process;
+  - `--version` on an enabled agent, with and without a pin, installing `PACKAGE@X` only when another version is installed, and setting the pin while keeping the agent's other fields and the other agents' entries;
+  - `agents update` reinstalling `PACKAGE@PIN` and keeping the pin, installing `PACKAGE@latest` without a pin, and `--unpin` on a pinned and an unpinned agent, with the other fields and entries kept;
+  - for each of the four agents, `agents disable` of a pinned agent naming the removed pin, and a following `agents enable` installing `latest` without a pin;
+  - `agents update` of an agent that is not enabled, on an empty home directory and beside another enabled agent, starting no process and naming `agents enable NAME AGENT`;
+  - on a pinned agent, `agents enable --version`, `agents update`, and `agents update --unpin` with a failed npm exit status, an npm that cannot start, a missing or invalid installed `package.json`, and, except for `--unpin`, a mismatched installed version, each exiting non-zero without a pin line and leaving the selection byte for byte unchanged;
+  - a pin-only `agents enable`, a replacing `agents enable --version`, `agents update`, and `agents update --unpin` that wait while an installation holds the manager lock, and a pin-only `agents enable`, a replacing `agents enable --version`, and `agents update --unpin` canceled while they wait, which leave the home directory unchanged;
+  - option errors and versions that are not exact, as root and as `agent`, starting no process and writing nothing to the home directory;
+  - called as root, the manager starting only its worker as UID and GID 1000 with the arguments unchanged, and refusing another identity;
+  - a stored pin that is not an exact version, which `agents update` refuses without a process and with the selection unchanged, and which `agents update --unpin` replaces by installing `latest`.
 
-No test covers the line that names a removed pin, which comes with pins in #43, or a failure while writing the selection after the command was removed.
+No test covers a failure while writing the selection after the command was removed.
 
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
-The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, starts a real container, runs a real agent's status probe, removes an agent from a real sandbox, signs in to an agent, or starts a real tmux session. Nothing on this page has been confirmed on a live host. One real login per agent is a manual check that comes with #64. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.
+The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, installs a real pinned version, starts a real container, runs a real agent's status probe, removes an agent from a real sandbox, signs in to an agent, or starts a real tmux session. Nothing on this page has been confirmed on a live host. One real login per agent is a manual check that comes with #64. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.

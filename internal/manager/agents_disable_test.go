@@ -412,9 +412,9 @@ func agentOptions(home string) manager.Options {
 	return manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }}
 }
 
-func runAgentCommand(app *manager.Manager, action, name string) (int, string, string) {
+func runAgentCommand(app *manager.Manager, action, name string, options ...string) (int, string, string) {
 	var out, diagnostic bytes.Buffer
-	status := app.Run(context.Background(), []string{"agents", action, name}, process.Streams{Stdout: &out, Stderr: &diagnostic})
+	status := app.Run(context.Background(), append([]string{"agents", action, name}, options...), process.Streams{Stdout: &out, Stderr: &diagnostic})
 	return status, out.String(), diagnostic.String()
 }
 

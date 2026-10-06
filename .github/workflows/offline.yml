@@ -29,7 +29,7 @@ jobs:
         run: go run ./tools/build -output .scratch/sandboxed-agents.exe
       - name: Repeat native failure paths
         run: |
-          go test -count=100 -timeout=10m -json -run '^(TestVersionPrintsVersionAndAssetHash|TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock|TestCurrentHostIdentifiesNativeWindowsHost)$' ./internal/cli ./internal/manager ./internal/platform | tee .scratch/focused-tests.jsonl
+          go test -count=100 -timeout=10m -json -run '^(TestAgentLoginReportsDisabledBeforeMissingTerminal|TestVersionPrintsVersionAndAssetHash|TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock|TestCurrentHostIdentifiesNativeWindowsHost)$' ./... | tee .scratch/focused-tests.jsonl
       - name: Preserve diagnostic results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

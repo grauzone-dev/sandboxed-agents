@@ -159,7 +159,7 @@ func TestListLeavesCurrentToolchainImageUnmarked(t *testing.T) {
 }
 
 func TestListKeepsSandboxesWithUnrecognizedToolchainsVisibleAndOutdated(t *testing.T) {
-	for _, set := range []string{"unknown", "playwright", "none,native"} {
+	for _, set := range []string{"unknown", "none,native"} {
 		t.Run(set, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			unknown := listImageSandbox("sandboxed-agents.default.alpha", set, "old-image", "", true)

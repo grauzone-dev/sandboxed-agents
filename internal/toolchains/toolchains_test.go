@@ -40,14 +40,14 @@ func TestSelectDeliveredToolchainsAsASet(t *testing.T) {
 	}
 }
 
-func TestRejectUndeliveredAndInvalidSelections(t *testing.T) {
-	for _, value := range []string{"", "native,", "none,native", "none,none", "playwright", "nosuch"} {
+func TestRejectInvalidSelections(t *testing.T) {
+	for _, value := range []string{"", "native,", "none,native", "none,playwright", "playwright,none", "none,none", "nosuch"} {
 		_, err := toolchains.Parse(value)
 		if err == nil {
 			t.Errorf("accepted %q", value)
 			continue
 		}
-		if !strings.Contains(err.Error(), "valid values: azure, dotnet, native, none") {
+		if !strings.Contains(err.Error(), "valid values: azure, dotnet, native, none, playwright") {
 			t.Errorf("selection %q error = %v", value, err)
 		}
 	}
@@ -91,4 +91,16 @@ func TestDotnetCarriesItsAgentSmokeCheck(t *testing.T) {
 		}
 	}
 	t.Fatal(".NET toolchain missing from catalog")
+}
+
+func TestPlaywrightCarriesItsAgentBrowserLaunchSmokeCheck(t *testing.T) {
+	for _, definition := range toolchains.Catalog() {
+		if definition.Name == "playwright" {
+			if !definition.Delivered || definition.SmokeCheck != "sh /usr/local/share/sandboxed-agents/smoke/playwright.sh" || definition.SmokeUser != "1000:1000" {
+				t.Fatalf("Playwright smoke check = %+v", definition)
+			}
+			return
+		}
+	}
+	t.Fatal("Playwright toolchain missing from catalog")
 }

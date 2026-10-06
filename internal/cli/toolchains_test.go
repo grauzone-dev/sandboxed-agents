@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,13 +22,13 @@ func toolchainCLIHost(t *testing.T, fixture string) (*testutil.FakePrograms, []t
 	return linuxHost(t), []testutil.Response{{Stdout: "podman version 5.0.0\n"}}
 }
 
-func TestToolchainSelectionRejectsUndeliveredNamesBeforeExternalCalls(t *testing.T) {
-	for _, selection := range []string{"nosuch", "playwright", "none,dotnet", "dotnet,none", "none,native", "none,azure", "azure,none", "native,none", "none,none", "", "native,", ",native", " native", "native ", "native, native"} {
+func TestToolchainSelectionRejectsInvalidNamesBeforeExternalCalls(t *testing.T) {
+	for _, selection := range []string{"nosuch", "none,playwright", "playwright,none", "none,dotnet", "dotnet,none", "none,native", "none,azure", "azure,none", "native,none", "none,none", "", "native,", ",native", " native", "native ", "native, native"} {
 		for _, command := range [][]string{{"build"}, {"up", "agent01"}} {
 			t.Run(strings.Join(command, " ")+"/"+selection, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				stdout, stderr, status := runCLI(t, "unsupported-preflight", append(command, "--with", selection)...)
-				if status == 0 || stdout != "" || !strings.Contains(stderr, "native") || !strings.Contains(stderr, "none") || !strings.Contains(stderr, "Usage:") {
+				if status == 0 || stdout != "" || !strings.Contains(stderr, "valid values: azure, dotnet, native, none, playwright") || !strings.Contains(stderr, "Usage:") {
 					t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 				}
 				if len(fakes.Calls("podman")) != 0 || len(fakes.Calls("ssh")) != 0 {
@@ -313,6 +314,16 @@ func checkToolchainCreation(t *testing.T, fixture string, example toolchainSelec
 	assertImageBuild(t, build, "fixture-assets", "localhost/sandboxed-agents:toolchains-"+example.tagNames+"-fixture-assets", example.set, "sha256:current-base")
 	if len(create) == 0 || create[len(create)-1] != "sha256:toolchain-set" || !strings.Contains(strings.Join(create, " "), "--label io.github.sandboxed-agents.toolchains="+example.set) {
 		t.Fatalf("create=%v", create)
+	}
+	for _, option := range []string{"--userns=keep-id:uid=1000,gid=1000", "--user=0:0", "--security-opt=no-new-privileges", "--network=pasta:--no-map-gw", "--memory=8589934592", "--cpus=4", "--pids-limit=2048", "--shm-size=1073741824"} {
+		if !slices.Contains(create, option) {
+			t.Errorf("container missing default %q: %v", option, create)
+		}
+	}
+	for _, option := range create {
+		if option == "--privileged" || strings.HasPrefix(option, "--cap-add") || strings.HasPrefix(option, "--ipc") || strings.Contains(option, "seccomp=unconfined") {
+			t.Errorf("container relaxes hardening: %v", create)
+		}
 	}
 	assertContext(t, captured)
 }

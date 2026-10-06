@@ -51,7 +51,7 @@ type Definition struct {
 func Catalog() []Definition {
 	return []Definition{
 		{Name: "dotnet", Delivered: true, SmokeCheck: "dotnet --list-sdks", SmokeUser: "1000:1000"},
-		{Name: "playwright"},
+		{Name: "playwright", Delivered: true, SmokeCheck: "sh /usr/local/share/sandboxed-agents/smoke/playwright.sh", SmokeUser: "1000:1000"},
 		{Name: "azure", Delivered: true, SmokeCheck: "az version", SmokeUser: "1000:1000"},
 		{Name: "native", Delivered: true, SmokeCheck: "sh /usr/local/share/sandboxed-agents/smoke/native.sh", SmokeUser: "1000:1000"},
 	}

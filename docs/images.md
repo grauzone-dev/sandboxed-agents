@@ -6,19 +6,20 @@ A sandbox is created from an image: the base contents every sandbox needs plus t
 
 A toolchain is a set of SDKs or system packages built into a sandbox's image. All toolchains are off by default. `build --with SET`, `up NAME --with SET`, and `update NAME --with SET` select a toolchain set: a comma-separated list of toolchain names, such as `--with native`.
 
-This version delivers three toolchains, which can be selected alone or in any combination:
+This version delivers four toolchains, which can be selected alone or in any combination:
 
 | Toolchain | Contents |
 | --- | --- |
 | `azure` | Azure CLI from Microsoft's APT repository, with the Azure DevOps extension |
 | `dotnet` | the .NET SDKs 8.0, 9.0, and 10.0 from Microsoft's APT repository for Debian 12 |
 | `native` | the Debian packages `build-essential`, `cmake`, `pkg-config`, and `ninja-build` |
+| `playwright` | Playwright `1.63.0` with Chromium, Firefox, and WebKit and the Debian packages they need |
 
-`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected. The catalog also plans `playwright`; until it is delivered, its name is rejected like an unknown name.
+`none` selects the base image without toolchains and has the same result as leaving `--with` out. It must stand alone: `--with none,native` is rejected.
 
 The selection is a set. Order and repetition do not matter, so `--with native,azure,native` selects the same set as `--with azure,native`. The executable records a set in its canonical form: the names sorted and deduplicated, separated by commas, and the empty string for the base image.
 
-An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `azure`, `dotnet`, `native`, and `none`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
+An unknown or undelivered name, `none` combined with another name, an empty name, a name with surrounding spaces such as `native, native`, or a missing value is a usage error. The message lists the valid values, which in this version are `azure`, `dotnet`, `native`, `none`, and `playwright`. The command exits with status 1 before the preflight and before any Podman call, so the error is reported even when a prerequisite is missing or the sandbox belongs to another controller group.
 
 ## Build images
 
@@ -95,11 +96,20 @@ The entrypoint runs as root. It creates `/run/sshd` and runs `sandboxed-agents-m
 
 `/usr/local/share/sandboxed-agents/versions.tsv` records what the image contains. It is UTF-8 text with LF line endings and no header. Each line is a component name and its version, separated by one tab. The file lists every installed Debian package as reported by `dpkg-query`, followed by the lines for `node`, `npm`, and `manager`.
 
-A toolchain image records the inventory once more, in its final step after every toolchain of the set has installed, so its `versions.tsv` replaces the base image's file and also lists the toolchains' Debian packages and their dependencies. A toolchain that installs something `dpkg-query` does not see adds a recorder script to `/usr/local/share/sandboxed-agents/versions.d/`; the recording script runs every `*.sh` file there and appends its lines after `manager`. The Azure CLI version is the `azure-cli` line among the `dpkg-query` lines, such as `2.90.0-1~bookworm`. The `azure` recorder adds one line, `azure-devops`, with the extension version that `az version` reports. The `dotnet` toolchain needs no recorder: its SDKs are Debian packages, so their versions are the `dotnet-sdk-8.0`, `dotnet-sdk-9.0`, and `dotnet-sdk-10.0` lines among the `dpkg-query` lines, as package versions that may include a packaging revision.
+A toolchain image records the inventory once more, in its final step after every toolchain of the set has installed, so its `versions.tsv` replaces the base image's file and also lists the toolchains' Debian packages and their dependencies. A toolchain that installs something `dpkg-query` does not see adds a recorder script to `/usr/local/share/sandboxed-agents/versions.d/`; the recording script runs every `*.sh` file there and appends its lines after `manager`. The Azure CLI version is the `azure-cli` line among the `dpkg-query` lines, such as `2.90.0-1~bookworm`. The `azure` recorder adds one line, `azure-devops`, with the extension version that `az version` reports. The `dotnet` toolchain needs no recorder: its SDKs are Debian packages, so their versions are the `dotnet-sdk-8.0`, `dotnet-sdk-9.0`, and `dotnet-sdk-10.0` lines among the `dpkg-query` lines, as package versions that may include a packaging revision. The `playwright` recorder runs `/usr/local/share/sandboxed-agents/record-playwright.cjs` with Node. It reads the version of `@playwright/test` from that package's `package.json` and the version and revision of each browser download from `browsers.json` of the installed `playwright-core`. For each download, it checks that its directory under `/opt/playwright-browsers` holds Playwright's `INSTALLATION_COMPLETE` marker and fails otherwise. It launches no browser: the browser versions come from Playwright's manifest and are not read from the installed binaries. With Playwright `1.63.0` it adds these lines:
+
+| Component | Version |
+| --- | --- |
+| `playwright` | `1.63.0` |
+| `chromium` | `153.0.8010.12 (revision 1243)` |
+| `chromium-headless-shell` | `153.0.8010.12 (revision 1243)` |
+| `firefox` | `155.0 (revision 1543)` |
+| `webkit` | `26.6 (revision 2359)` |
+| `ffmpeg` | `revision 1011` |
 
 ## Toolchain image contents
 
-A toolchain image is layered on the base image, so all toolchain images share the base layers. Each toolchain installs only its own contents: neither the base image nor the `native` or `dotnet` toolchain installs anything from Azure, and neither the base image nor a set without `dotnet` installs a .NET SDK.
+A toolchain image is layered on the base image, so all toolchain images share the base layers. Each toolchain installs only its own contents: neither the base image nor the `native` or `dotnet` toolchain installs anything from Azure, neither the base image nor a set without `dotnet` installs a .NET SDK, and neither the base image nor a set without `playwright` installs Playwright or a browser.
 
 The `native` toolchain adds:
 
@@ -122,6 +132,18 @@ The `dotnet` toolchain adds:
 - **APT repository:** `https://packages.microsoft.com/debian/12/prod` for `bookworm`, component `main`, architecture `amd64`, in `/etc/apt/sources.list.d/dotnet.list`. APT accepts it only when it is signed with Microsoft's key. The recipe downloads that key from `https://packages.microsoft.com/keys/microsoft.asc`, converts it with a temporary GnuPG home directory that it removes afterwards, and stores it with mode `0644` as `/etc/apt/keyrings/microsoft-dotnet.gpg`, which the repository's `signed-by` option names. The source list and the key file are separate from those of `azure`, so the two toolchains can be combined.
 - **SDKs:** the packages `dotnet-sdk-8.0`, `dotnet-sdk-9.0`, and `dotnet-sdk-10.0`, installed with APT without recommended packages and without a pinned version ([.NET SDK versions](#net-sdk-versions)). They are installed system-wide in the image, not in the home or workspace volume, so every sandbox created from the image has them and `agent` can use them.
 - **Smoke check:** the command `dotnet --list-sdks`, run as UID and GID 1000, with no script file of its own. Its output is expected to list every installed SDK; #29 checks that against a real image.
+
+The `playwright` toolchain adds:
+
+- **Playwright:** the npm package `@playwright/test` at version `1.63.0` ([Playwright version](#playwright-version)), installed with `npm install --prefix /opt/playwright --save-exact` into `/opt/playwright/node_modules`, together with the matching `playwright` and `playwright-core` packages it depends on. The recipe removes npm's cache and the APT package lists afterwards.
+- **Browsers:** Chromium, the Chromium headless shell, Firefox, and WebKit, with Playwright's FFmpeg build, installed with `playwright install --with-deps chromium firefox webkit` into `/opt/playwright-browsers`. `--with-deps` also installs the Debian packages the browsers need.
+- **Command:** `/usr/local/bin/playwright`, a wrapper that sets `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers` and runs `node /opt/playwright/node_modules/@playwright/test/cli.js` with its arguments. Because it sets the browser path itself, it finds the browsers also in the fixed environment in which the manager runs an agent ([Agents](agents.md#run-an-agent)), and it does not depend on a browser cache in the home or workspace volume.
+- **Environment:** the image sets `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers`, so a shell that `sandboxed-agents shell` opens finds the browsers too. An agent started by the manager does not inherit it.
+- **Permissions:** the recipe runs `chmod -R a+rX` on `/opt/playwright` and `/opt/playwright-browsers`, so every user can read their files, enter their directories, and run their executables, and `agent` can run Playwright and launch the browsers.
+- **Version recorder:** `/usr/local/share/sandboxed-agents/versions.d/playwright.sh` ([Version inventory](#version-inventory)).
+- **Smoke check:** `/usr/local/share/sandboxed-agents/smoke/playwright.sh`, which checks that it runs as UID and GID 1000, sets `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers`, and runs `/usr/local/share/sandboxed-agents/smoke/playwright.cjs` with Node. That script loads the `playwright` package from `/opt/playwright` and launches Chromium, Firefox, and WebKit one after the other, headless and with no other launch option. For each browser it sets an in-memory HTML page, checks its title, prints the browser's name and version, and closes the browser even when a step fails. The check relaxes no Podman option; it is meant to pass under the default options of a sandbox.
+
+Playwright and its browsers lie under `/opt`, outside the workspace, home, and SSH server state volumes, so every sandbox created from the image has them and no volume hides or keeps them.
 
 `update NAME --with SET` changes the toolchain set of an existing sandbox and keeps its volumes ([Change the toolchain set](updates.md#change-the-toolchain-set)).
 
@@ -148,11 +170,31 @@ Each package name fixes a series, not a release. Like every other package, the S
 
 The package source is Microsoft's production APT repository for Debian 12, which [Install .NET on Debian](https://learn.microsoft.com/en-us/dotnet/core/install/linux-debian) names for these SDKs on x64. On 2026-10-04 its [package index for bookworm, amd64](https://packages.microsoft.com/debian/12/prod/dists/bookworm/main/binary-amd64/Packages.gz) contained all three SDK packages.
 
+### Playwright version
+
+The `playwright` recipe pins `@playwright/test` at `1.63.0`. Each Playwright release works with the browser revisions it was released with and downloads exactly those ([Browsers](https://playwright.dev/docs/browsers)), and a Playwright package that does not match the installed browsers cannot find them ([Docker](https://playwright.dev/docs/docker)). Unlike the Azure CLI and the .NET SDKs, Playwright is therefore not resolved again at each build: the pin keeps the package and the browser revisions matching, and a newer Playwright comes with a change to the recipe. The Debian packages that `--with-deps` installs are resolved again at each build, like every other package.
+
+`1.63.0` is the current stable release, published on 2026-09-04 ([Release v1.63.0](https://github.com/microsoft/playwright/releases/tag/v1.63.0)) and the `latest` version on npm on 2026-10-06. Playwright lists Debian 12 and Node.js 24, which the base image uses, as supported ([Playwright installation](https://playwright.dev/docs/intro)). Chromium, Firefox, and WebKit are the three browser engines Playwright supports, so a sandbox can run cross-browser tests.
+
+Playwright `1.63.0` installs these browser downloads ([`browsers.json` at v1.63.0](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/browsers.json)):
+
+| Download | Browser version | Revision |
+| --- | --- | --- |
+| Chromium | `153.0.8010.12` | `1243` |
+| Chromium headless shell | `153.0.8010.12` | `1243` |
+| Firefox | `155.0` | `1543` |
+| WebKit | `26.6` | `2359`, with no override for Debian 12 |
+| FFmpeg | - | `1011` |
+
+#### Use Playwright in a project
+
+The `playwright` command runs the preinstalled Playwright with the image's browsers, for example `playwright --version` or `playwright show-report`. A project whose tests import `@playwright/test` needs that package in its own dependencies, at the preinstalled version `1.63.0`: nothing makes the package under `/opt/playwright` resolve for a project's imports. With that version, the project's Playwright can use the image's browsers, provided its process has `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers` in its environment. A shell has it from the image; a command that an agent runs does not, so set it there explicitly, for example `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers npx playwright test`. Without it, Playwright looks for browsers in its default cache under the home directory, where the image installs none. Another Playwright version does not match the image's browsers.
+
 ## Toolchain availability on Debian 12
 
 Debian 12 was chosen because every planned toolchain has packages for it. The Azure CLI documentation lists Debian 11 and 12 as tested distributions for its APT packages, but not Debian 13.
 
-This record is based on the upstream documentation listed below. Of these toolchains, native build tools, Azure CLI, and .NET are delivered, as `native`, `azure`, and `dotnet`; Playwright comes with #32. #29 validates the images against real Podman.
+This record is based on the upstream documentation listed below. All four toolchains are delivered, as `native`, `azure`, `dotnet`, and `playwright`. #29 validates the images against real Podman.
 
 | Toolchain | Upstream statement for Debian 12 | Source |
 | --- | --- | --- |

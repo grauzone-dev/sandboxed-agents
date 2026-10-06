@@ -293,7 +293,7 @@ The live suite runs the executable against real Podman and starts only with `go 
     - It gives `login azdo` the console input handle as standard input and waits until the console's echo flag is cleared. It then writes the token and a carriage return as key events. The prompt appears on standard error without the token, and the workflow call receives the token on standard input.
     - A Ctrl+C key event instead makes the command exit with status 1 with no workflow call. In both cases the console mode is restored afterwards.
 
-  Like the other Windows fixture tests, these use a fake Windows host identity, so they do not verify a real Windows host or Podman machine.
+  Every test that uses the `windows` fixture, the Windows prompt test included, takes a fake Windows host identity from that fixture. The Windows prompt test also reads real input from the console of the native Windows host it runs on. All of these tests run against the fake `podman`, so none reaches a real Podman machine.
 
   The [CI](#ci) jobs on Linux and on Windows run all of these tests as part of the offline suite, except the pseudo-terminal test files, which run only on Linux, and `azdo_terminal_windows_test.go`, which runs only on Windows. Apart from that `azdo` prompt test, no test drives `integrations login` with a terminal on a native Windows host.
 

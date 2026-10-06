@@ -237,7 +237,7 @@ The owner label is the authoritative check: a container or volume with a matchin
 
 A container that `up` creates mounts its three named volumes, or with `WORKSPACE` the workspace bind and the home and SSH server state volumes, and nothing else: no other host path, no SSH-agent socket, no container-engine socket, and no display socket (ADR-0003). The resource limits need delegated cgroup v2 controllers, which the preflight checks.
 
-A sandbox created by this version does not yet offer agent version pins on `up` (#43). `--agents` takes agent names only and installs the version that is current at that time ([Enable agents with `up`](#enable-agents-with-up)).
+`--agents` takes agent names only. For each listed agent that is not enabled yet, it installs the version that is current at that time, and it leaves agents that are already enabled as they are, pins included ([Enable agents with `up`](#enable-agents-with-up)). To pin an agent, run `sandboxed-agents agents enable NAME AGENT --version X` afterwards ([Install and pin a version](agents.md#install-and-pin-a-version)).
 
 `up` opens no SSH connection to the sandbox. Without `--ssh-config` it neither reads nor writes any file in your SSH directory; with it, `up` installs the opt-in [SSH setup](ssh.md#ssh-setup) after the sandbox runs. On Windows, the preflight runs its read-only machine checks through `podman machine ssh`. These checks run in the Podman machine, not in the sandbox.
 

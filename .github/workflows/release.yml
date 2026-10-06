@@ -60,10 +60,15 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             native: sandboxed-agents-linux-amd64
+            test_timeout: 20m
+            job_timeout: 30
           - os: windows-latest
             platform: windows
             native: sandboxed-agents-windows-amd64.exe
+            test_timeout: 40m
+            job_timeout: 50
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.job_timeout }}
     env:
       NATIVE_BINARY: ${{ matrix.native }}
     steps:
@@ -81,8 +86,15 @@ jobs:
           cmp .scratch/expected-version.txt .scratch/version.txt
           (cd .scratch/preview && sha256sum -c SHA256SUMS)
       - run: |
-          go test -timeout 20m ./...
+          go test -timeout "${{ matrix.test_timeout }}" -json ./... | tee .scratch/offline-tests.jsonl
           go vet ./...
+      - name: Upload offline test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: offline-test-results-${{ matrix.platform }}
+          path: .scratch/offline-tests.jsonl
+          include-hidden-files: true
       - if: runner.os == 'Linux'
         run: bash tests/test-mirror-issue.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

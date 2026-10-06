@@ -49,7 +49,7 @@ The archive holds the Linux manager and the build context. Before packaging, the
 
 ## Test
 
-On a clean checkout, run the build tool before the tests, because `internal/assets` embeds `internal/assets/bundle.zip` and does not compile without it:
+On a clean checkout, run the build tool before the tests, because `internal/assets` embeds `internal/assets/bundle.zip` and does not compile without it. On Linux:
 
 ```sh
 go run ./tools/build
@@ -57,7 +57,15 @@ go test -timeout 20m ./...
 go vet ./...
 ```
 
-`-timeout 20m` raises Go's default limit of 10 minutes per test binary. The update failure tests run the real 60-second readiness deadline (#53), and on Windows the full `internal/cli` suite with these tests exceeded 10 minutes. The limit only bounds the run; the tests and the product's timeouts stay the same.
+On Windows:
+
+```sh
+go run ./tools/build
+go test -timeout 40m ./...
+go vet ./...
+```
+
+`-timeout` limits each test binary, that is each package, on its own and replaces Go's default of 10 minutes. The update failure tests run the real 60-second readiness deadline (#53), which makes `internal/cli` the slowest package. On Linux it takes about 488 seconds. On native Windows it ran into a 20-minute limit in two CI runs, both ending at 1200 seconds while the test running at that moment had been active for only 8 and 1 seconds, so the time accumulated across the package rather than in one stuck test (#120). Windows therefore gets twice the Linux budget. The budgets only bound the run: every test and assertion stays, and so do the product's 60-second readiness deadlines.
 
 The mirror workflow has its own offline test:
 
@@ -69,7 +77,19 @@ The build tool's test copies the sources into a temporary directory and builds h
 
 ### CI
 
-The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every push and pull request, on Linux and on Windows, with module downloads turned off. Each job runs the build tool, then `go test -timeout 20m ./...` ([Test](#test)) and `go vet ./...`. The Linux job also runs the mirror test. Each job then records the output of its native `version`, and a final job checks that the Linux and Windows outputs are identical. That check confirms that both builds embed the same assets.
+The `Offline suite` workflow (`.github/workflows/offline.yml`) runs on every push and pull request, on Linux and on Windows, with module downloads turned off. Each job runs the build tool, then the tests with its platform's budget from [Test](#test), recording Go's JSON test events. The Linux job runs:
+
+```sh
+go test -timeout 20m -json ./... | tee .scratch/offline-tests.jsonl
+```
+
+The Windows job runs the same command with `-timeout 40m`. The steps run in Bash with `pipefail`, so a failing test fails the step even though `tee` succeeds, and `go vet ./...` runs only after the tests pass. Each job then uploads the file as the artifact `offline-test-results-linux` or `offline-test-results-windows`, also after a test failure, so the per-test and per-package durations of a failed or timed-out run can be read from it.
+
+The job timeout is 30 minutes on Linux and 50 minutes on Windows. Because `-timeout` limits each test binary separately, the job timeout bounds the run as a whole, and it lies 10 minutes above the test budget, so a package that runs into its budget normally fails through Go's own timeout, which names the running test, before the job is cancelled.
+
+The Linux job also runs the mirror test. Each job then records the output of its native `version`, and a final job checks that the Linux and Windows outputs are identical. That check confirms that both builds embed the same assets.
+
+The `Preview release` workflow (`.github/workflows/release.yml`) runs the same test command, budgets, job timeouts, and timing artifacts in its Linux and Windows build jobs; [Releases](releases.md) describes its other checks.
 
 ### Live suite
 

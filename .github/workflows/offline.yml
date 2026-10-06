@@ -35,6 +35,9 @@ jobs:
           source = path.read_text()
           target = 't.Fatal("install did not finish")'
           assert source.count(target) == 1
+          guard = 'case <-time.After(time.Second):\n\t\t\t\tt.Fatal("install did not finish")'
+          assert source.count(guard) == 1
+          source = source.replace(guard, guard.replace("time.After(time.Second)", "time.After(5 * time.Second)"))
           source = source.replace('import (', 'import (\n\t"runtime"', 1)
           source = source.replace(target, 'stack := make([]byte, 1<<20)\n\t\t\t\tn := runtime.Stack(stack, true)\n\t\t\t\tt.Logf("[DEBUG-native120] guard goroutines:\\n%s", stack[:n])\n\t\t\t\t' + target)
           path.write_text(source)

@@ -410,7 +410,39 @@ The preflight (step 2), the terminal check (step 8), and the session guard (step
 ssh agent01
 ```
 
+`ssh` connects through the host entry, whose name is the sandbox name in the controller group `default` and `NAME.GROUP` in any other group: `agent01` for the sandbox `agent01` in `default`, `agent01.live` for the sandbox `agent01` in `live` ([Host entry name](#host-entry-name)). The executable's own commands keep taking the sandbox name, `agent01`, in the current [controller group](sandboxes.md#controller-groups).
+
 VS Code Remote SSH and other desktop UIs read the same SSH configuration, so they list the host entry and connect through it. `sandboxed-agents check NAME` attempts one connection through the host entry of a running sandbox and reports whether it succeeded; it also reports an SSH setup that remains for a sandbox without a container ([Check a sandbox](check.md#manager-and-ssh)). No live run has confirmed a connection yet ([Verification](#verification)).
+
+#### Connect with VS Code Remote SSH
+
+These steps lead to a VS Code window on a sandbox's workspace, whether the sandbox runs, is stopped, or does not exist yet. They follow the SSH setup above and the official guide [Remote Development using SSH](https://code.visualstudio.com/docs/remote/ssh); nobody has run them against a live sandbox yet, and the manual checklist (#64) records that check ([Verification](#verification)).
+
+1. **Install the SSH setup.** Pick the command for the sandbox's state ([SSH setup](#ssh-setup)):
+
+   | Sandbox | Command |
+   | --- | --- |
+   | running | `sandboxed-agents ssh-config agent01 --install` |
+   | stopped | `sandboxed-agents start agent01 --ssh-config` |
+   | new, or existing in either state | `sandboxed-agents up agent01 --ssh-config` |
+
+   `sandboxed-agents ssh-config agent01 --install` needs a running sandbox: on a stopped sandbox it fails, names `sandboxed-agents start agent01`, and starts nothing on its own ([Install the SSH setup](#install-the-ssh-setup)). The SSH setup is opt-in: `up` and `start` without `--ssh-config` leave every file in your SSH directory untouched. `sandboxed-agents ssh-config agent01` only prints the host entry and installs nothing; the printed entry works only after the SSH setup is installed ([Print the host entry](#print-the-host-entry)).
+
+2. **Install VS Code and its Remote - SSH extension.** VS Code also needs an OpenSSH-compatible `ssh` on your machine, which the executable needs as well ([Host prerequisites](host-prerequisites.md)).
+
+3. **Connect to the host entry.** Open the Command Palette and run **Remote-SSH: Connect to Host...**. VS Code lists the hosts of your SSH configuration, the host entry among them; when it is not listed, enter its name. When VS Code asks for the platform of the host, choose **Linux**: the sandbox is a Linux container also on Windows. Wait while VS Code connects and sets up the remote window. The connection uses the dedicated key and the pinned host key of the host entry, so VS Code asks for no password and no host key confirmation.
+
+4. **Open the workspace.** The remote window shows the host entry name in its status bar. Choose **File > Open Folder...** and enter `/workspace`, the sandbox's workspace ([Workspace bind](sandboxes.md#workspace-bind)).
+
+#### Other desktop UIs
+
+Every desktop UI that reads your SSH configuration connects to the same host entry name, with the same key, pin, and settings; no second entry is needed. A UI that shows the sandbox's host key fingerprint and asks you to confirm it needs the fingerprint from the sandbox itself:
+
+```sh
+sandboxed-agents fingerprint agent01
+```
+
+It prints the SHA256 fingerprint of each of the sandbox's three host keys, one per line, each preceded by its key type (`ssh-ed25519`, `ecdsa-sha2-nistp256`, `ssh-rsa`). Compare the line of the key type the UI negotiated; through the host entry that is `ssh-ed25519`, because the entry accepts only that key ([Host entry](#host-entry)). `fingerprint` needs a running sandbox, reads the keys through `podman exec`, needs no SSH setup, and changes nothing ([Host keys and sign-in](sandboxes.md#host-keys-and-sign-in)).
 
 ### Not in this version
 
@@ -428,4 +460,4 @@ The removal of the SSH setup is covered by offline tests at the CLI boundary aga
 
 The Windows permissions are checked only in the Windows job of the offline suite, on the real file system of the test machine. After `ssh-config --install`, `up --ssh-config`, and `start --ssh-config` against the same fake programs, the tests read back the owner, whether inheritance is turned off, and every permission entry of each file and directory the installation creates, also after a second sandbox. They also check that an existing `.ssh` directory and an existing SSH configuration, with and without inherited permissions, keep their permissions. They show which permissions the installation sets, not that OpenSSH for Windows accepts them, and they do not run under a standard account.
 
-No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, not that `ssh-config --remove` removes the authorization from a real sandbox, not that OpenSSH for Windows accepts the files of the SSH setup with their permissions, and not that the installation sets these permissions under a standard account without administrator rights. That evidence needs the live suite (#24) and the live SSH tests (#35).
+No offline test starts a real container or opens an SSH connection, and nothing on this page has been confirmed against Podman on a live host: not that the shell runs as `agent` in `/workspace`, not how it behaves with a pseudo-terminal inside the sandbox, not that it ends when its input ends, not the target binding on Windows, not that `ssh` connects through the host entry with only the dedicated key and the pinned host key, not that `ssh-config --remove` removes the authorization from a real sandbox, not that OpenSSH for Windows accepts the files of the SSH setup with their permissions, and not that the installation sets these permissions under a standard account without administrator rights. That evidence needs the live suite (#24) and the live SSH tests (#35). The VS Code walkthrough in [Connect](#connect-with-vs-code-remote-ssh) has not been followed against a live sandbox either; one VS Code Remote SSH connection is an item of the manual checklist (#64).

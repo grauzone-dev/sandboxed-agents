@@ -18,6 +18,8 @@ func TestUpdateReplacesTheToolchainSetAndKeepsSandboxConfiguration(t *testing.T)
 				options                     []string
 			}{
 				{"dotnet", "dotnet", "current-dotnet", "localhost/sandboxed-agents:toolchains-dotnet-fixture-assets", []string{"--with", "dotnet"}},
+				{"playwright", "playwright", "current-playwright", "localhost/sandboxed-agents:toolchains-playwright-fixture-assets", []string{"--with", "playwright"}},
+				{"playwright,native,playwright", "native,playwright", "current-native-playwright", "localhost/sandboxed-agents:toolchains-native-playwright-fixture-assets", []string{"--with=playwright,native,playwright"}},
 				{"none", "", "current-base", "localhost/sandboxed-agents:base-fixture-assets", []string{"--with=none"}},
 				{"native,dotnet,native", "dotnet,native", "current-dotnet-native", "localhost/sandboxed-agents:toolchains-dotnet-native-fixture-assets", []string{"--with=native,dotnet,native"}},
 			} {
@@ -67,7 +69,7 @@ func TestUpdateReplacesTheToolchainSetAndKeepsSandboxConfiguration(t *testing.T)
 						if podmanArgs[0] == "build" {
 							t.Fatalf("rebuilt an existing current image: %v", podmanArgs)
 						}
-						if podmanArgs[0] == "image" && strings.Contains(strings.Join(podmanArgs, " "), "toolchains-native-") {
+						if podmanArgs[0] == "image" && slices.Contains(podmanArgs, "localhost/sandboxed-agents:toolchains-native-fixture-assets") {
 							t.Fatalf("selected the recorded set instead of the requested set: %v", podmanArgs)
 						}
 					}

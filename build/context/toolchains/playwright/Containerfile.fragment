@@ -1,0 +1,8 @@
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+COPY playwright/cli.sh /usr/local/bin/playwright
+COPY playwright/record.sh /usr/local/share/sandboxed-agents/versions.d/playwright.sh
+COPY playwright/record.cjs /usr/local/share/sandboxed-agents/record-playwright.cjs
+COPY playwright/smoke.sh /usr/local/share/sandboxed-agents/smoke/playwright.sh
+COPY playwright/smoke.cjs /usr/local/share/sandboxed-agents/smoke/playwright.cjs
+COPY playwright/install.sh /tmp/install-playwright.sh
+RUN sh /tmp/install-playwright.sh && rm /tmp/install-playwright.sh

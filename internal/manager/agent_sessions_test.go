@@ -52,6 +52,7 @@ func TestRootSessionQueryReportsTheAgentUsersSessions(t *testing.T) {
 }
 
 func TestAgentSessionSurvivesDetachReattachesAndEndsWithItsAgent(t *testing.T) {
+	t.Setenv("PLAYWRIGHT_BROWSERS_PATH", "/opt/playwright-browsers")
 	home := t.TempDir()
 	writeRunSelection(t, home, `{"codex":{"version":"1.2.3"}}`)
 	writeInstalledPackage(t, home, "@openai/codex", "1.2.3")
@@ -72,6 +73,9 @@ func TestAgentSessionSurvivesDetachReattachesAndEndsWithItsAgent(t *testing.T) {
 			}
 		case "new-session":
 			starts++
+			if !slices.Contains(r.Env, "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers") {
+				t.Fatalf("session cannot find image browsers: environment=%q", r.Env)
+			}
 			want := []string{"new-session", "-d", "-s", "sandboxed-agents-codex", "-c", "/workspace", manager.ExecutablePath, "agents", "session-worker", "agent01", "codex"}
 			if !reflect.DeepEqual(r.Args[4:], want) {
 				t.Fatalf("start=%v", r.Args)

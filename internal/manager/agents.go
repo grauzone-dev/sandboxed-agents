@@ -92,7 +92,11 @@ func (m *Manager) listAgents(output io.Writer) error {
 }
 
 func agentEnvironment(home string) []string {
-	return []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}
+	environment := []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "/opt/playwright-browsers" {
+		environment = append(environment, "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers")
+	}
+	return environment
 }
 
 type selectedAgent struct {

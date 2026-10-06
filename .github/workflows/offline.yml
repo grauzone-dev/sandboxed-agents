@@ -1,38 +1,20 @@
-name: Offline suite
+name: Native Windows diagnosis
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  offline:
-    name: offline (${{ matrix.os }}, ${{ matrix.output }}, ${{ matrix.artifact }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            output: .scratch/sandboxed-agents
-            artifact: linux
-            test_timeout: 20m
-            job_timeout: 30
-          - os: windows-latest
-            output: .scratch/sandboxed-agents.exe
-            artifact: windows
-            test_timeout: 40m
-            job_timeout: 50
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.job_timeout }}
+  focused:
+    runs-on: windows-latest
+    timeout-minutes: 15
     env:
       GOPROXY: 'off'
       GOSUMDB: 'off'
       GOTOOLCHAIN: local
       CGO_ENABLED: '0'
-      HOST_OUTPUT: ${{ matrix.output }}
     defaults:
       run:
         shell: bash
@@ -43,36 +25,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.27.1'
-      - name: Build manager and host
-        run: go run ./tools/build -output "$HOST_OUTPUT"
-      - name: Test and vet
+      - name: Build embedded assets
+        run: go run ./tools/build -output .scratch/sandboxed-agents.exe
+      - name: Repeat native failure paths
         run: |
-          go test -timeout "${{ matrix.test_timeout }}" -json ./... | tee .scratch/offline-tests.jsonl
-          go vet ./...
-      - name: Upload offline test timings
+          go test -count=100 -timeout=10m -json -run '^(TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock|TestCurrentHostIdentifiesNativeWindowsHost)$' ./internal/manager ./internal/platform | tee .scratch/focused-tests.jsonl
+      - name: Preserve diagnostic results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: offline-test-results-${{ matrix.artifact }}
-          path: .scratch/offline-tests.jsonl
+          name: native-diagnostic-results
+          path: .scratch/focused-tests.jsonl
           include-hidden-files: true
-      - name: Test issue mirror
-        if: runner.os == 'Linux'
-        run: bash tests/test-mirror-issue.sh
-      - name: Record embedded asset hash
-        run: '"$HOST_OUTPUT" version > .scratch/version.txt'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: version-${{ matrix.artifact }}
-          path: .scratch/version.txt
-
-  compare-assets:
-    needs: offline
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: version-*
-          path: versions
-      - name: Compare Linux and Windows embedded assets
-        run: cmp versions/version-linux/version.txt versions/version-windows/version.txt

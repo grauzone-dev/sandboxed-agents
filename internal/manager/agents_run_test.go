@@ -64,6 +64,39 @@ func TestRunAgentPreservesArgumentsStreamsAndExitStatusAsAgent(t *testing.T) {
 	}
 }
 
+func TestAgentsUseTheImagePlaywrightBrowsersInRunsAndSessions(t *testing.T) {
+	for _, operation := range []string{"run", "session-worker"} {
+		for _, browserPath := range []string{"", "/opt/playwright-browsers", "/home/agent/other-browsers"} {
+			t.Run(operation+"/"+browserPath, func(t *testing.T) {
+				t.Setenv("PLAYWRIGHT_BROWSERS_PATH", browserPath)
+				t.Setenv("TERM", "")
+				home := t.TempDir()
+				writeRunSelection(t, home, `{"codex":{"version":"1.2.3"}}`)
+				wantEnv := []string{"HOME=" + home, "USER=agent", "LOGNAME=agent", "SHELL=/bin/bash", "PATH=" + filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin"}
+				if browserPath == "/opt/playwright-browsers" {
+					wantEnv = append(wantEnv, "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers")
+				}
+				calls := 0
+				app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
+					if request.Name == "/usr/bin/tmux" {
+						return 0, nil
+					}
+					calls++
+					if request.Name != filepath.Join(home, ".local", "bin", "codex") || request.User == nil || *request.User != (process.Identity{UID: 1000, GID: 1000}) || !reflect.DeepEqual(request.Env, wantEnv) {
+						t.Fatalf("agent request=%+v want environment=%q", request, wantEnv)
+					}
+					return 0, nil
+				}, manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }})
+				var stderr bytes.Buffer
+				status := app.Run(context.Background(), []string{"agents", operation, "agent01", "codex"}, process.Streams{Stderr: &stderr})
+				if status != 0 || stderr.Len() != 0 || calls != 1 {
+					t.Fatalf("status=%d stderr=%q calls=%d", status, stderr.String(), calls)
+				}
+			})
+		}
+	}
+}
+
 func TestRunAgentRefusesRootAndOtherIdentitiesBeforeHomeWork(t *testing.T) {
 	for _, identity := range []process.Identity{{UID: 0, GID: 0}, {UID: 0, GID: 1000}, {UID: 1000, GID: 0}, {UID: 1001, GID: 1000}} {
 		t.Run(fmt.Sprint(identity), func(t *testing.T) {

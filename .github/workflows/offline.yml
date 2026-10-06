@@ -27,13 +27,64 @@ jobs:
           go-version: '1.27.1'
       - name: Build embedded assets
         run: go run ./tools/build -output .scratch/sandboxed-agents.exe
-      - name: Repeat native failure paths
+      - name: Capture the exact failing guard
         run: |
-          go test -count=100 -timeout=10m -json -run '^(TestAgentLoginReportsDisabledBeforeMissingTerminal|TestVersionPrintsVersionAndAssetHash|TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock|TestCurrentHostIdentifiesNativeWindowsHost)$' ./... | tee .scratch/focused-tests.jsonl
+          python - <<'PYTHON'
+          from pathlib import Path
+          path = Path('internal/manager/agent_sessions_test.go')
+          source = path.read_text()
+          target = 't.Fatal("install did not finish")'
+          assert source.count(target) == 1
+          source = source.replace('import (', 'import (\n\t"runtime"', 1)
+          source = source.replace(target, 'stack := make([]byte, 1<<20)\n\t\t\t\tn := runtime.Stack(stack, true)\n\t\t\t\tt.Logf("[DEBUG-native120] guard goroutines:\\n%s", stack[:n])\n\t\t\t\t' + target)
+          path.write_text(source)
+          PYTHON
+          gofmt -w internal/manager/agent_sessions_test.go
+      - name: Repeat the exact assertion under the original suite workload
+        run: |
+          python - <<'PYTHON'
+          import json, pathlib, subprocess, sys, time
+          root = pathlib.Path('.scratch')
+          focused_path = root / 'focused-tests.jsonl'
+          load_path = root / 'full-suite-tests.jsonl'
+          command = ['go', 'test', '-count=100', '-timeout=3m', '-json', '-run', '^TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock$', './internal/manager']
+          start = time.monotonic()
+          with load_path.open('w', encoding='utf-8') as load_output, focused_path.open('w', encoding='utf-8') as focused_output:
+              load = subprocess.Popen(['go', 'test', '-count=1', '-timeout=40m', '-json', './...'], stdout=load_output, stderr=subprocess.STDOUT)
+              try:
+                  focused = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8')
+                  for line in focused.stdout:
+                      focused_output.write(line)
+                      print(line, end='', flush=True)
+                  focused_status = focused.wait()
+              finally:
+                  subprocess.run(['taskkill', '/PID', str(load.pid), '/T', '/F'], capture_output=True)
+                  load.wait(timeout=20)
+          exact = []
+          trials = 0
+          for path in (focused_path, load_path):
+              for line in path.read_text(encoding='utf-8').splitlines():
+                  try:
+                      event = json.loads(line)
+                  except ValueError:
+                      continue
+                  if path == focused_path and event.get('Action') in ('pass', 'fail') and event.get('Test') == 'TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock':
+                      trials += 1
+                  if 'install did not finish' in event.get('Output', '') or event.get('Action') == 'fail' and event.get('Test') == 'TestCurrentHostIdentifiesNativeWindowsHost':
+                      exact.append({'source': path.name, 'event': event})
+          verdict = 'RED' if exact else 'GREEN' if focused_status == 0 and trials == 100 else 'INCOMPLETE'
+          result = {'verdict': verdict, 'trials': trials, 'focused_status': focused_status, 'elapsed': round(time.monotonic() - start, 3), 'exact_failures': exact}
+          (root / 'verdict.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+          print(json.dumps(result), flush=True)
+          sys.exit(1 if verdict == 'RED' else 0 if verdict == 'GREEN' else 2)
+          PYTHON
       - name: Preserve diagnostic results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: native-diagnostic-results
-          path: .scratch/focused-tests.jsonl
+          path: |
+            .scratch/focused-tests.jsonl
+            .scratch/full-suite-tests.jsonl
+            .scratch/verdict.json
           include-hidden-files: true

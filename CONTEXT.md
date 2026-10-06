@@ -27,8 +27,12 @@ The agent data embedded in the executable: per agent its install method, command
 _Avoid_: Agent registry, agent list
 
 **Agent selection**:
-The set of agents enabled in a sandbox. It is stored in the sandbox's home data, so it survives `stop` and `start`; host state keeps no copy.
+The set of agents enabled in a sandbox, each with its pin if it has one. It is stored in the sandbox's home data, so it and its pins survive `stop` and `start`; host state keeps no copy.
 _Avoid_: Enabled agents list, agent config
+
+**Pin**:
+The exact version of an agent's package that the user requested with `agents enable --version`, recorded with the agent in the agent selection. `agents update` reinstalls that version until `agents update --unpin` or `agents disable` removes the pin or a new `--version` replaces it.
+_Avoid_: Version lock, version constraint
 
 **Manager**:
 The trusted Go program in a sandbox's image that handles the executable's administrative requests and agent work. It handles administrative requests as container root and changes to the user `agent` before it reads home data or does work for an agent.

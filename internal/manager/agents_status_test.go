@@ -56,7 +56,7 @@ func TestAgentStatusReportsInstalledVersionAfterEnable(t *testing.T) {
 			writeInstalledPackage(t, home, test.pkg, "9.8.7")
 			stdout.Reset()
 			status := app.Run(context.Background(), []string{"agents", "status", test.agent}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			want := "Agent " + test.agent + " is enabled (version 9.8.7).\nSign-in state: " + test.state + ".\nAgent session: not running.\n"
+			want := "Agent " + test.agent + " is enabled (version 9.8.7).\nSign-in state: " + test.state + ".\nAgent session: not running.\nPin: none.\n"
 			if status != 0 || stdout.String() != want || stderr.Len() != 0 || installs != 1 {
 				t.Fatalf("status=%d stdout=%q stderr=%q installs=%d", status, stdout.String(), stderr.String(), installs)
 			}
@@ -141,7 +141,7 @@ func TestAgentStatusInterpretsOnlyTheCatalogBooleanField(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			status := app.Run(context.Background(), []string{"agents", "status", "fifth"}, process.Streams{Stdout: &stdout, Stderr: &stderr})
-			want := "Agent fifth is enabled (version 4.5.6).\nSign-in state: " + test.want + ".\nAgent session: not running.\n"
+			want := "Agent fifth is enabled (version 4.5.6).\nSign-in state: " + test.want + ".\nAgent session: not running.\nPin: none.\n"
 			if status != 0 || stdout.String() != want || stderr.Len() != 0 || probes != 1 {
 				t.Fatalf("status=%d stdout=%q stderr=%q probes=%d", status, stdout.String(), stderr.String(), probes)
 			}

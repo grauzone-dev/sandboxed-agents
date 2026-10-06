@@ -20,7 +20,13 @@ func (m *Manager) agentStatus(ctx context.Context, entry agentcatalog.Entry, str
 	if err != nil {
 		return err
 	}
-	_, enabled := selection[entry.Name]
+	data, enabled := selection[entry.Name]
+	var selected selectedAgent
+	if enabled {
+		if err := json.Unmarshal(data, &selected); err != nil {
+			return errors.New(agentSelectionInvalid)
+		}
+	}
 	var version string
 	if enabled {
 		version, err = installedVersion(m.options.Home, entry.Install.Package)
@@ -42,7 +48,10 @@ func (m *Manager) agentStatus(ctx context.Context, entry agentcatalog.Entry, str
 	}
 	signIn := m.signInState(ctx, entry, run)
 	_, err = fmt.Fprintf(streams.Stdout, agentStatusEnabledFormat, entry.Name, version, signIn, state)
-	return err
+	if err != nil {
+		return err
+	}
+	return reportPin(streams.Stdout, selected.Pin)
 }
 
 func (m *Manager) signInState(ctx context.Context, entry agentcatalog.Entry, run process.Runner) string {

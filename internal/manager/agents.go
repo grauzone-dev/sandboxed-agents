@@ -37,7 +37,33 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		return m.runAgent(ctx, args[1:], streams, run)
 	case len(args) == 1 && args[0] == "list":
 		apply = func() error { return m.listAgents(streams.Stdout) }
-	case len(args) == 2 && (args[0] == "enable" || args[0] == "disable" || args[0] == "status"):
+	case len(args) >= 3 && args[0] == "update":
+		entry, err := m.catalogEntry(args[2])
+		if err != nil {
+			return err
+		}
+		unpin := false
+		for _, arg := range args[3:] {
+			if arg != "--unpin" {
+				return errors.New(agentUsageMessage)
+			}
+			if unpin {
+				return errors.New(agentUnpinDuplicateMessage)
+			}
+			unpin = true
+		}
+		apply = func() error { return m.updateAgent(ctx, args[1], entry, unpin, streams, run) }
+	case len(args) >= 2 && args[0] == "enable":
+		entry, err := m.catalogEntry(args[1])
+		if err != nil {
+			return err
+		}
+		version, err := enableVersion(args[2:])
+		if err != nil {
+			return err
+		}
+		apply = func() error { return m.enable(ctx, entry, version, streams, run) }
+	case len(args) == 2 && (args[0] == "disable" || args[0] == "status"):
 		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
@@ -46,8 +72,6 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 			apply = func() error { return m.agentStatus(ctx, entry, streams, run) }
 		} else if args[0] == "disable" {
 			apply = func() error { return m.disable(ctx, entry, streams) }
-		} else {
-			apply = func() error { return m.enable(ctx, entry, streams, run) }
 		}
 	default:
 		return errors.New(agentUsageMessage)
@@ -104,9 +128,7 @@ type selectedAgent struct {
 	Pin     string `json:"pin,omitempty"`
 }
 
-func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams, run process.Runner) error {
-	prefix := filepath.Join(m.options.Home, ".local")
-	cache := filepath.Join(prefix, "cache", "sandboxed-agents", "npm")
+func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, requested string, streams process.Streams, run process.Runner) error {
 	selectionPath := m.selectionPath()
 	state := filepath.Dir(selectionPath)
 	if err := os.MkdirAll(state, 0700); err != nil {
@@ -121,31 +143,123 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, streams 
 	if err != nil {
 		return err
 	}
-	_, enabled := selection[entry.Name]
-	if !enabled {
-		code, err := run(ctx, process.Request{Name: "/usr/bin/npm", Args: []string{"install", "--global", "--prefix", prefix, "--cache", cache, entry.Install.Package + "@latest"}, User: &agentIdentity, Dir: m.options.Home, Env: agentEnvironment(m.options.Home), Streams: streams})
-		if err != nil {
-			return fmt.Errorf("install %s: %w", entry.Name, err)
-		}
-		if code != 0 {
-			return fmt.Errorf("install %s failed with exit status %d", entry.Name, code)
+	data, enabled := selection[entry.Name]
+	var selected selectedAgent
+	if enabled {
+		if err := json.Unmarshal(data, &selected); err != nil {
+			return errors.New(agentSelectionInvalid)
 		}
 	}
-	version, err := installedVersion(m.options.Home, entry.Install.Package)
-	if err != nil {
-		return err
-	}
-	if !enabled {
-		selection[entry.Name], err = json.Marshal(selectedAgent{Version: version})
+	var version string
+	if enabled {
+		version, err = installedVersion(m.options.Home, entry.Install.Package)
 		if err != nil {
 			return err
 		}
-		if err := saveSelection(selectionPath, selection); err != nil {
-			return fmt.Errorf("save agent selection: %w", err)
+	}
+	if !enabled || (requested != "" && requested != version) {
+		version, err = m.installAgent(ctx, entry, requested, streams, run)
+		if err != nil {
+			return err
 		}
 	}
-	_, err = fmt.Fprintf(streams.Stdout, "Agent %s is enabled (version %s).\n", entry.Name, version)
+	if !enabled || requested != "" && (selected.Pin != requested || selected.Version != version) {
+		selected.Version = version
+		if requested != "" {
+			selected.Pin = requested
+		}
+		if err := saveSelectedAgent(selectionPath, selection, entry.Name, selected); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(streams.Stdout, agentEnabledVersionFormat, entry.Name, version); err != nil {
+		return err
+	}
+	return reportPin(streams.Stdout, selected.Pin)
+}
+
+func (m *Manager) installAgent(ctx context.Context, entry agentcatalog.Entry, requested string, streams process.Streams, run process.Runner) (string, error) {
+	target := requested
+	if target == "" {
+		target = "latest"
+	}
+	prefix := filepath.Join(m.options.Home, ".local")
+	cache := filepath.Join(prefix, "cache", "sandboxed-agents", "npm")
+	code, err := run(ctx, process.Request{Name: "/usr/bin/npm", Args: []string{"install", "--global", "--prefix", prefix, "--cache", cache, entry.Install.Package + "@" + target}, User: &agentIdentity, Dir: m.options.Home, Env: agentEnvironment(m.options.Home), Streams: streams})
+	if err != nil {
+		return "", fmt.Errorf("install %s: %w", entry.Name, err)
+	}
+	if code != 0 {
+		return "", fmt.Errorf("install %s failed with exit status %d", entry.Name, code)
+	}
+	version, err := installedVersion(m.options.Home, entry.Install.Package)
+	if err != nil {
+		return "", err
+	}
+	if requested != "" && version != requested {
+		return "", fmt.Errorf(agentInstallVersionMismatchFormat, version, requested)
+	}
+	return version, nil
+}
+
+func saveSelectedAgent(path string, selection map[string]json.RawMessage, name string, selected selectedAgent) error {
+	var fields map[string]json.RawMessage
+	if data, ok := selection[name]; ok {
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return errors.New(agentSelectionInvalid)
+		}
+	}
+	if fields == nil {
+		fields = make(map[string]json.RawMessage)
+	}
+	fields["version"], _ = json.Marshal(selected.Version)
+	if selected.Pin == "" {
+		delete(fields, "pin")
+	} else {
+		fields["pin"], _ = json.Marshal(selected.Pin)
+	}
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	selection[name] = data
+	if err := saveSelection(path, selection); err != nil {
+		return fmt.Errorf("save agent selection: %w", err)
+	}
+	return nil
+}
+
+func reportPin(output io.Writer, pin string) error {
+	if pin == "" {
+		pin = agentPinNone
+	}
+	_, err := fmt.Fprintf(output, agentPinFormat, pin)
 	return err
+}
+
+func enableVersion(args []string) (string, error) {
+	var version string
+	for len(args) > 0 {
+		option, value, inline := strings.Cut(args[0], "=")
+		if option != "--version" {
+			return "", errors.New(agentUsageMessage)
+		}
+		if version != "" {
+			return "", errors.New(agentVersionDuplicateMessage)
+		}
+		args = args[1:]
+		if !inline {
+			if len(args) == 0 {
+				return "", errors.New(agentVersionMissingMessage)
+			}
+			value, args = args[0], args[1:]
+		}
+		if !agentcatalog.IsExactVersion(value) {
+			return "", fmt.Errorf(agentVersionInvalidFormat, value)
+		}
+		version = value
+	}
+	return version, nil
 }
 
 func (m *Manager) disable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams) error {

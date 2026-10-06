@@ -24,7 +24,7 @@ import (
 
 func TestEnableAgentInstallsThroughTheSandboxManager(t *testing.T) {
 	for _, agent := range []string{"copilot", "claude", "codex", "opencode"} {
-		for _, report := range []string{"Agent " + agent + " is enabled (version 1.2.3).\n"} {
+		for _, report := range []string{"Agent " + agent + " is enabled (version 1.2.3).\nPin: none.\n"} {
 			t.Run(agent+"/"+report, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				owned := "default"
@@ -50,7 +50,7 @@ func TestEnableAgentInstallsThroughTheSandboxManager(t *testing.T) {
 }
 
 func TestAgentCommandsRejectUnknownAgentsBeforePodman(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, fixture := range []string{"sandbox-host", "windows"} {
 				t.Run(fixture, func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestAgentCommandsRejectUnknownAgentsBeforePodman(t *testing.T) {
 }
 
 func TestAgentCommandsRejectUndeliveredCatalogEntriesBeforePodman(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, data := range []string{
 				`{"schema_version":1,"entries":[{"name":"future","delivered":false,"command":"future","install":{"kind":"npm","package":"future"}},{"name":"codex","delivered":true,"command":"codex","install":{"kind":"npm","package":"@openai/codex"}}]}`,
@@ -121,18 +121,18 @@ func TestEnableAgentCanUseAnAdditionalCatalogEntry(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"
 	responses := sandboxObjectResponses(&owned, true, nil, nil)
-	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Agent fifth is enabled (version 2.0.0).\n"})
+	responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: "Agent fifth is enabled (version 2.0.0).\nPin: none.\n"})
 	fakes.Script("podman", responses...)
 	var stdout, stderr bytes.Buffer
 	status := cli.RunWithCatalog([]string{"agents", "enable", "agent01", "fifth"}, &stdout, &stderr, "fixture", "assets", preflight.Host{Platform: "linux", Run: platform.Run}, catalog)
 	calls := fakes.Calls("podman")
-	if status != 0 || stderr.Len() != 0 || stdout.String() != "Agent fifth is enabled (version 2.0.0).\n" || len(calls) != len(responses) || !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", "enable", "fifth"}) {
+	if status != 0 || stderr.Len() != 0 || stdout.String() != "Agent fifth is enabled (version 2.0.0).\nPin: none.\n" || len(calls) != len(responses) || !reflect.DeepEqual(calls[len(calls)-1].Args, []string{"exec", "--user=0:0", "sandboxed-agents.default.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", "enable", "fifth"}) {
 		t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout.String(), stderr.String(), calls)
 	}
 }
 
 func TestAgentCommandsBoundManagerQueriesAndStopOnProcessFailure(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, failure := range []string{"start", "timeout", "canceled"} {
 				t.Run(failure, func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestAgentCommandsBoundManagerQueriesAndStopOnProcessFailure(t *testing.T) {
 }
 
 func TestAgentCommandsReportTheEarliestSandboxFailure(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			owned, foreign, unlabeled := "default", "other", ""
 			for _, test := range []struct {
@@ -216,7 +216,7 @@ func TestAgentCommandsReportTheEarliestSandboxFailure(t *testing.T) {
 }
 
 func TestEnableAndDisableAgentsRejectInvalidUsageBeforePodman(t *testing.T) {
-	for _, operation := range []string{"enable", "disable"} {
+	for _, operation := range []string{"enable", "disable", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, fixture := range []string{"sandbox-host", "windows"} {
 				for _, args := range [][]string{
@@ -224,7 +224,7 @@ func TestEnableAndDisableAgentsRejectInvalidUsageBeforePodman(t *testing.T) {
 					{"agents", operation, ".bad", "codex"}, {"agents", operation, "--bad", "codex"},
 					{"agents", operation, "agent01", "codex", "extra"},
 					{"agents", operation, "agent01", "codex", "--force"},
-					{"agents", operation, "agent01", "codex", "--version", "1.0.0"},
+					{"agents", operation, "agent01", "codex", "--bad"},
 				} {
 					t.Run(fixture+"/"+strings.Join(args, " "), func(t *testing.T) {
 						fakes := testutil.NewFakePrograms(t)
@@ -241,7 +241,7 @@ func TestEnableAndDisableAgentsRejectInvalidUsageBeforePodman(t *testing.T) {
 }
 
 func TestEnableAndDisableAgentsStopAfterAManagerRequestFailure(t *testing.T) {
-	for _, operation := range []string{"enable", "disable"} {
+	for _, operation := range []string{"enable", "disable", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			owned := "default"
@@ -258,7 +258,7 @@ func TestEnableAndDisableAgentsStopAfterAManagerRequestFailure(t *testing.T) {
 }
 
 func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			t.Setenv("SANDBOXED_AGENTS_GROUP", "team-a")
@@ -272,11 +272,13 @@ func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
 				objects[i].Stdout = strings.ReplaceAll(objects[i].Stdout, ".default.", ".team-a.")
 			}
 			responses = append(responses, objects...)
-			report := "Agent codex is enabled (version 1.2.3).\n"
+			report := "Agent codex is enabled (version 1.2.3).\nPin: none.\n"
 			if operation == "disable" {
 				report = "Agent codex is disabled.\n"
+			} else if operation == "update" {
+				report = "Agent codex is updated (version 1.2.3).\nPin: none.\n"
 			} else if operation == "status" {
-				report = "Agent codex is enabled (version 1.2.3).\nSign-in state: unknown.\n"
+				report = "Agent codex is enabled (version 1.2.3).\nPin: none.\nSign-in state: unknown.\n"
 			}
 			responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: report})
 			for index := range responses {
@@ -296,6 +298,9 @@ func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
 				{Args: []string{"exec", "--user=0:0", "sandboxed-agents.team-a.agent01", "/usr/local/bin/sandboxed-agents-manager", "version"}},
 				{Args: []string{"exec", "--user=0:0", "sandboxed-agents.team-a.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", operation, "codex"}},
 			}
+			if operation == "update" {
+				want[1].Args = []string{"exec", "--user=0:0", "sandboxed-agents.team-a.agent01", "/usr/local/bin/sandboxed-agents-manager", "agents", "update", "agent01", "codex"}
+			}
 			if !reflect.DeepEqual(operations[len(operations)-2:], want) {
 				t.Fatal(operations)
 			}
@@ -305,7 +310,7 @@ func TestWindowsAgentCommandsKeepManagerCallsOnTheSelectedTarget(t *testing.T) {
 }
 
 func TestWindowsAgentCommandsRefuseAnUnavailableTarget(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			fakes := testutil.NewFakePrograms(t)
 			fakes.Script("podman", testutil.Response{Stdout: "[]"})
@@ -318,7 +323,7 @@ func TestWindowsAgentCommandsRefuseAnUnavailableTarget(t *testing.T) {
 }
 
 func TestAgentCommandsRefuseWhenTheManagerDoesNotAnswer(t *testing.T) {
-	for _, operation := range []string{"enable", "disable", "status"} {
+	for _, operation := range []string{"enable", "disable", "status", "update"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, response := range []testutil.Response{
 				{ExitCode: 127, Stderr: "manager missing\n"},
@@ -357,18 +362,24 @@ func TestEnabledAgentSelectionSurvivesStopAndStart(t *testing.T) {
 		return 0, os.WriteFile(path, []byte(`{"version":"1.2.3"}`), 0600)
 	}
 	options := manager.Options{Home: home, User: func() process.Identity { return process.Identity{UID: 1000, GID: 1000} }}
-	enable := func() {
+	enable := func(arguments ...string) {
 		var stdout, stderr bytes.Buffer
 		app := manager.NewWithOptions("test", runner, options)
-		if status := app.Run(context.Background(), []string{"agents", "enable", "codex"}, process.Streams{Stdout: &stdout, Stderr: &stderr}); status != 0 || stdout.String() != "Agent codex is enabled (version 1.2.3).\n" {
+		if status := app.Run(context.Background(), append([]string{"agents", "enable", "codex"}, arguments...), process.Streams{Stdout: &stdout, Stderr: &stderr}); status != 0 || stdout.String() != "Agent codex is enabled (version 1.2.3).\nPin: 1.2.3.\n" {
 			t.Fatalf("enable status=%d out=%s err=%s", status, &stdout, &stderr)
 		}
 	}
-	enable()
+	enable("--version", "1.2.3")
 	selectionPath := filepath.Join(home, ".local", "state", "sandboxed-agents", "selection.json")
 	before, err := os.ReadFile(selectionPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var selection map[string]struct {
+		Pin string `json:"pin"`
+	}
+	if err := json.Unmarshal(before, &selection); err != nil || selection["codex"].Pin != "1.2.3" {
+		t.Fatalf("selection=%s err=%v", before, err)
 	}
 	fakes := testutil.NewFakePrograms(t)
 	owned := "default"

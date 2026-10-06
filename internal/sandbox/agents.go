@@ -14,12 +14,13 @@ type AgentCommand struct {
 	*sandboxObjects
 	agent      string
 	subcommand string
+	options    []string
 }
 
 var managerVersionResponse = regexp.MustCompile(`^sandboxed-agents-manager [^\s]+\n$`)
 
-func NewAgentCommand(name, group, agent, subcommand string, run process.Runner, streams process.Streams) *AgentCommand {
-	return &AgentCommand{sandboxObjects: newSandboxObjects(name, group, run, streams), agent: agent, subcommand: subcommand}
+func NewAgentCommand(name, group, agent, subcommand string, run process.Runner, streams process.Streams, options ...string) *AgentCommand {
+	return &AgentCommand{sandboxObjects: newSandboxObjects(name, group, run, streams), agent: agent, subcommand: subcommand, options: options}
 }
 
 func (objects *sandboxObjects) CheckManager(ctx context.Context) error {
@@ -36,5 +37,11 @@ func managerArgs(container string, args ...string) []string {
 }
 
 func (request *AgentCommand) Execute(ctx context.Context) error {
-	return request.runPodman(ctx, managerArgs(request.container, "agents", request.subcommand, request.agent)...)
+	args := []string{"agents", request.subcommand}
+	if request.subcommand == "update" {
+		args = append(args, request.name)
+	}
+	args = append(args, request.agent)
+	args = append(args, request.options...)
+	return request.runPodman(ctx, managerArgs(request.container, args...)...)
 }

@@ -40,40 +40,46 @@ jobs:
           path.write_text(source)
           PYTHON
           gofmt -w internal/manager/agent_sessions_test.go
-      - name: Repeat the exact assertion under the original suite workload
+      - name: Run four fixed batches under the original suite workload
         run: |
           python - <<'PYTHON'
-          import json, pathlib, subprocess, sys, time
+          import concurrent.futures, json, pathlib, subprocess, sys, threading, time
           root = pathlib.Path('.scratch')
-          focused_path = root / 'focused-tests.jsonl'
+          focused_paths = [root / f'focused-tests-{index}.jsonl' for index in range(4)]
+          print_lock = threading.Lock()
           load_path = root / 'full-suite-tests.jsonl'
           command = ['go', 'test', '-count=100', '-timeout=3m', '-json', '-run', '^TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock$', './internal/manager']
           start = time.monotonic()
-          with load_path.open('w', encoding='utf-8') as load_output, focused_path.open('w', encoding='utf-8') as focused_output:
-              load = subprocess.Popen(['go', 'test', '-count=1', '-timeout=40m', '-json', './...'], stdout=load_output, stderr=subprocess.STDOUT)
-              try:
+          def run_focused(path):
+              with path.open('w', encoding='utf-8') as output:
                   focused = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8')
                   for line in focused.stdout:
-                      focused_output.write(line)
-                      print(line, end='', flush=True)
-                  focused_status = focused.wait()
+                      output.write(line)
+                      with print_lock:
+                          print(line, end='', flush=True)
+                  return focused.wait()
+          with load_path.open('w', encoding='utf-8') as load_output:
+              load = subprocess.Popen(['go', 'test', '-count=1', '-timeout=40m', '-json', './...'], stdout=load_output, stderr=subprocess.STDOUT)
+              try:
+                  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                      focused_statuses = list(executor.map(run_focused, focused_paths))
               finally:
                   subprocess.run(['taskkill', '/PID', str(load.pid), '/T', '/F'], capture_output=True)
                   load.wait(timeout=20)
           exact = []
           trials = 0
-          for path in (focused_path, load_path):
+          for path in [*focused_paths, load_path]:
               for line in path.read_text(encoding='utf-8').splitlines():
                   try:
                       event = json.loads(line)
                   except ValueError:
                       continue
-                  if path == focused_path and event.get('Action') in ('pass', 'fail') and event.get('Test') == 'TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock':
+                  if path in focused_paths and event.get('Action') in ('pass', 'fail') and event.get('Test') == 'TestSessionChangesWaitForAnInstallationToReleaseTheManagerLock':
                       trials += 1
                   if 'install did not finish' in event.get('Output', '') or event.get('Action') == 'fail' and event.get('Test') == 'TestCurrentHostIdentifiesNativeWindowsHost':
                       exact.append({'source': path.name, 'event': event})
-          verdict = 'RED' if exact else 'GREEN' if focused_status == 0 and trials == 100 else 'INCOMPLETE'
-          result = {'verdict': verdict, 'trials': trials, 'focused_status': focused_status, 'elapsed': round(time.monotonic() - start, 3), 'exact_failures': exact}
+          verdict = 'RED' if exact else 'GREEN' if not any(focused_statuses) and trials == 400 else 'INCOMPLETE'
+          result = {'verdict': verdict, 'trials': trials, 'focused_statuses': focused_statuses, 'elapsed': round(time.monotonic() - start, 3), 'exact_failures': exact}
           (root / 'verdict.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
           print(json.dumps(result), flush=True)
           sys.exit(1 if verdict == 'RED' else 0 if verdict == 'GREEN' else 2)
@@ -84,7 +90,7 @@ jobs:
         with:
           name: native-diagnostic-results
           path: |
-            .scratch/focused-tests.jsonl
+            .scratch/focused-tests-*.jsonl
             .scratch/full-suite-tests.jsonl
             .scratch/verdict.json
           include-hidden-files: true

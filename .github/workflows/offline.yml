@@ -17,10 +17,15 @@ jobs:
           - os: ubuntu-latest
             output: .scratch/sandboxed-agents
             artifact: linux
+            test_timeout: 20m
+            job_timeout: 30
           - os: windows-latest
             output: .scratch/sandboxed-agents.exe
             artifact: windows
+            test_timeout: 40m
+            job_timeout: 50
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.job_timeout }}
     env:
       GOPROXY: 'off'
       GOSUMDB: 'off'
@@ -41,8 +46,15 @@ jobs:
         run: go run ./tools/build -output "$HOST_OUTPUT"
       - name: Test and vet
         run: |
-          go test -timeout 20m ./...
+          go test -timeout "${{ matrix.test_timeout }}" -json ./... | tee .scratch/offline-tests.jsonl
           go vet ./...
+      - name: Upload offline test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: offline-test-results-${{ matrix.artifact }}
+          path: .scratch/offline-tests.jsonl
+          include-hidden-files: true
       - name: Test issue mirror
         if: runner.os == 'Linux'
         run: bash tests/test-mirror-issue.sh

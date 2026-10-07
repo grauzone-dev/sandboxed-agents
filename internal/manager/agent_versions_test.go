@@ -20,7 +20,7 @@ func TestEnableExactVersionPinsAndReportsTheInstalledAgent(t *testing.T) {
 	home := t.TempDir()
 	installs := 0
 	app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
-		if r.Name == "/usr/bin/tmux" {
+		if isSessionListRequest(r) {
 			return 0, nil
 		}
 		installs++
@@ -37,7 +37,7 @@ func TestEnableExactVersionPinsAndReportsTheInstalledAgent(t *testing.T) {
 		t.Fatalf("status=%d out=%q diagnostic=%q", status, out, diagnostic)
 	}
 	app = manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
-		if r.Name != "/usr/bin/tmux" {
+		if !isSessionListRequest(r) {
 			t.Errorf("status started unexpected process: %+v", r)
 		}
 		return 0, nil
@@ -65,7 +65,7 @@ func TestEnableVersionReplacesInstallationsAndSetsPinsWithoutReinstallingMatches
 			}
 			installs := 0
 			app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
-				if r.Name == "/usr/bin/tmux" {
+				if isSessionListRequest(r) {
 					return 0, nil
 				}
 				installs++
@@ -127,7 +127,7 @@ func TestUpdateReinstallsPinsAndUnpinInstallsTheNewestVersion(t *testing.T) {
 			writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", fmt.Sprintf(`{"codex":{"version":"1.2.3","pin":%q,"future":true},"copilot":{"version":"7.8.9","pin":"7.8.9"}}`, test.pin), 0600)
 			installs := 0
 			app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
-				if r.Name == "/usr/bin/tmux" {
+				if isSessionListRequest(r) {
 					return 0, nil
 				}
 				installs++
@@ -146,7 +146,7 @@ func TestUpdateReinstallsPinsAndUnpinInstallsTheNewestVersion(t *testing.T) {
 				t.Fatalf("status=%d out=%q diagnostic=%q installs=%d", status, out, diagnostic, installs)
 			}
 			app = manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
-				if r.Name != "/usr/bin/tmux" {
+				if !isSessionListRequest(r) {
 					t.Errorf("unexpected process: %+v", r)
 				}
 				return 0, nil
@@ -181,7 +181,7 @@ func TestDisableRemovesThePinAndReenableGetsTheCurrentVersion(t *testing.T) {
 			home := t.TempDir()
 			targets := []string{}
 			app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
-				if r.Name == "/usr/bin/tmux" {
+				if isSessionListRequest(r) {
 					return 0, nil
 				}
 				if r.Name == filepath.Join(home, ".local", "bin", "claude") {
@@ -263,6 +263,12 @@ func TestFailedAgentInstallationsPreserveTheSelectionAndPin(t *testing.T) {
 				original := `{"codex":{"version":"1.2.3","pin":"1.2.3","future":42},"copilot":{"version":"4.5.6"}}` + "\n"
 				writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", original, 0600)
 				app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+					if isSessionListRequest(r) {
+						return 0, nil
+					}
+					if r.Name != "/usr/bin/npm" {
+						t.Fatalf("unexpected installation: %+v", r)
+					}
 					switch failure {
 					case "exit status":
 						return 17, nil
@@ -316,6 +322,13 @@ func TestPinChangesAndAgentUpdatesWaitForTheManagerLock(t *testing.T) {
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			defer unblock()
 			app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+				if isSessionListRequest(r) {
+					return 0, nil
+				}
+				if r.Name != "/usr/bin/npm" {
+					t.Errorf("unexpected installation: %+v", r)
+					return 1, nil
+				}
 				target := r.Args[len(r.Args)-1]
 				if target == "@github/copilot@latest" {
 					close(held)
@@ -498,6 +511,9 @@ func TestUpdateRefusesAnInvalidStoredPinUntilUnpinIsRequested(t *testing.T) {
 	writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", original, 0600)
 	installs := 0
 	app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+		if isSessionListRequest(r) {
+			return 0, nil
+		}
 		installs++
 		if r.Name != "/usr/bin/npm" || r.Args[len(r.Args)-1] != "@openai/codex@latest" {
 			t.Fatalf("unsafe installation: %+v", r)

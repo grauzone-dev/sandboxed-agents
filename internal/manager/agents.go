@@ -42,8 +42,12 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		if err != nil {
 			return err
 		}
+		options, force, err := changeForce(args[3:])
+		if err != nil {
+			return err
+		}
 		unpin := false
-		for _, arg := range args[3:] {
+		for _, arg := range options {
 			if arg != "--unpin" {
 				return errors.New(agentUsageMessage)
 			}
@@ -52,18 +56,29 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 			}
 			unpin = true
 		}
-		apply = func() error { return m.updateAgent(ctx, args[1], entry, unpin, streams, run) }
+		apply = func() error { return m.updateAgent(ctx, args[1], entry, unpin, force, streams, run) }
 	case len(args) >= 2 && args[0] == "enable":
 		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
 		}
-		version, err := enableVersion(args[2:])
+		options, force, err := changeForce(args[2:])
 		if err != nil {
 			return err
 		}
-		apply = func() error { return m.enable(ctx, entry, version, streams, run) }
-	case len(args) == 2 && (args[0] == "disable" || args[0] == "status"):
+		version, err := enableVersion(options)
+		if err != nil {
+			return err
+		}
+		apply = func() error { return m.enable(ctx, entry, version, force, streams, run) }
+	case len(args) >= 2 && (args[0] == "disable" || args[0] == "status"):
+		options, force, err := changeForce(args[2:])
+		if err != nil {
+			return err
+		}
+		if len(options) != 0 || (args[0] == "status" && force) {
+			return errors.New(agentUsageMessage)
+		}
 		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
@@ -71,7 +86,7 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		if args[0] == "status" {
 			apply = func() error { return m.agentStatus(ctx, entry, streams, run) }
 		} else if args[0] == "disable" {
-			apply = func() error { return m.disable(ctx, entry, streams) }
+			apply = func() error { return m.disable(ctx, entry, force, streams, run) }
 		}
 	default:
 		return errors.New(agentUsageMessage)
@@ -128,7 +143,7 @@ type selectedAgent struct {
 	Pin     string `json:"pin,omitempty"`
 }
 
-func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, requested string, streams process.Streams, run process.Runner) error {
+func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, requested string, force bool, streams process.Streams, run process.Runner) error {
 	selectionPath := m.selectionPath()
 	state := filepath.Dir(selectionPath)
 	if err := os.MkdirAll(state, 0700); err != nil {
@@ -158,6 +173,11 @@ func (m *Manager) enable(ctx context.Context, entry agentcatalog.Entry, requeste
 		}
 	}
 	if !enabled || (requested != "" && requested != version) {
+		if enabled {
+			if err := m.guardAgentChange(ctx, entry.Name, force, streams, run); err != nil {
+				return err
+			}
+		}
 		version, err = m.installAgent(ctx, entry, requested, streams, run)
 		if err != nil {
 			return err
@@ -262,7 +282,7 @@ func enableVersion(args []string) (string, error) {
 	return version, nil
 }
 
-func (m *Manager) disable(ctx context.Context, entry agentcatalog.Entry, streams process.Streams) error {
+func (m *Manager) disable(ctx context.Context, entry agentcatalog.Entry, force bool, streams process.Streams, run process.Runner) error {
 	selectionPath := m.selectionPath()
 	state := filepath.Dir(selectionPath)
 	lockPath := filepath.Join(state, "manager.lock")
@@ -295,6 +315,9 @@ func (m *Manager) disable(ctx context.Context, entry agentcatalog.Entry, streams
 	var selected selectedAgent
 	if err := json.Unmarshal(data, &selected); err != nil {
 		return errors.New(agentSelectionInvalid)
+	}
+	if err := m.guardAgentChange(ctx, entry.Name, force, streams, run); err != nil {
+		return err
 	}
 	commandPath := filepath.Join(m.options.Home, ".local", "bin", entry.Command)
 	if err := os.Remove(commandPath); err != nil && !errors.Is(err, os.ErrNotExist) {

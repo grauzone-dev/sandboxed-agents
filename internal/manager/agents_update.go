@@ -12,7 +12,7 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 )
 
-func (m *Manager) updateAgent(ctx context.Context, sandbox string, entry agentcatalog.Entry, unpin bool, streams process.Streams, run process.Runner) error {
+func (m *Manager) updateAgent(ctx context.Context, sandbox string, entry agentcatalog.Entry, unpin, force bool, streams process.Streams, run process.Runner) error {
 	selectionPath := m.selectionPath()
 	state := filepath.Dir(selectionPath)
 	if _, err := os.Stat(state); errors.Is(err, os.ErrNotExist) {
@@ -43,6 +43,9 @@ func (m *Manager) updateAgent(ctx context.Context, sandbox string, entry agentca
 	}
 	if pin != "" && !agentcatalog.IsExactVersion(pin) {
 		return fmt.Errorf(agentVersionInvalidFormat, pin)
+	}
+	if err := m.guardAgentChange(ctx, entry.Name, force, streams, run); err != nil {
+		return err
 	}
 	version, err := m.installAgent(ctx, entry, pin, streams, run)
 	if err != nil {

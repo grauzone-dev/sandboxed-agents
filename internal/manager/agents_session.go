@@ -108,30 +108,40 @@ func (m *Manager) stopAgentSession(ctx context.Context, entry agentcatalog.Entry
 	if err != nil {
 		return err
 	}
+	stopped := false
 	if sessionRunning(sessions, entry.Name) {
-		var diagnostic bytes.Buffer
-		code, err := run(ctx, m.tmuxRequest([]string{"kill-session", "-t", "=" + sessionPrefix + entry.Name}, process.Streams{Stdout: io.Discard, Stderr: &diagnostic}))
-		if code == 1 && err == nil {
-			remaining, queryErr := m.runningSessions(ctx, run)
-			if queryErr == nil && !sessionRunning(remaining, entry.Name) {
-				_, err = fmt.Fprintf(streams.Stdout, agentSessionNotRunningFormat, entry.Name)
-				return err
-			}
-		}
-		if _, outputErr := io.Copy(streams.Stderr, &diagnostic); outputErr != nil {
-			return outputErr
-		}
+		stopped, err = m.endAgentSession(ctx, entry.Name, streams, run)
 		if err != nil {
-			return fmt.Errorf(agentSessionStopFailure, err)
+			return err
 		}
-		if code != 0 {
-			return fmt.Errorf(agentSessionStopStatusFormat, code)
-		}
-		_, err = fmt.Fprintf(streams.Stdout, agentSessionStoppedFormat, entry.Name)
-		return err
 	}
-	_, err = fmt.Fprintf(streams.Stdout, agentSessionNotRunningFormat, entry.Name)
+	format := agentSessionNotRunningFormat
+	if stopped {
+		format = agentSessionStoppedFormat
+	}
+	_, err = fmt.Fprintf(streams.Stdout, format, entry.Name)
 	return err
+}
+
+func (m *Manager) endAgentSession(ctx context.Context, agent string, streams process.Streams, run process.Runner) (bool, error) {
+	var diagnostic bytes.Buffer
+	code, err := run(ctx, m.tmuxRequest([]string{"kill-session", "-t", "=" + sessionPrefix + agent}, process.Streams{Stdout: io.Discard, Stderr: &diagnostic}))
+	if code == 1 && err == nil {
+		remaining, queryErr := m.runningSessions(ctx, run)
+		if queryErr == nil && !sessionRunning(remaining, agent) {
+			return false, nil
+		}
+	}
+	if _, outputErr := io.Copy(streams.Stderr, &diagnostic); outputErr != nil {
+		return false, outputErr
+	}
+	if err != nil {
+		return false, fmt.Errorf(agentSessionStopFailure, err)
+	}
+	if code != 0 {
+		return false, fmt.Errorf(agentSessionStopStatusFormat, code)
+	}
+	return true, nil
 }
 
 func (m *Manager) attachSession(ctx context.Context, agent string, streams process.Streams, run process.Runner) error {

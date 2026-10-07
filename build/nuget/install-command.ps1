@@ -3,18 +3,8 @@ param([string]$InstallDirectory, [switch]$NoPathUpdate)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if (-not $InstallDirectory) {
-    if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA is not set. Set it, or choose a directory with -InstallDirectory.' }
-    $InstallDirectory = Join-Path $env:LOCALAPPDATA 'Programs/sandboxed-agents'
-}
-try {
-    $InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
-} catch {
-    throw ('The install directory ''{0}'' is not a valid path: {1}' -f $InstallDirectory, $_.Exception.Message)
-}
-if (-not $NoPathUpdate -and $InstallDirectory.Contains(';')) {
-    throw ('The install directory ''{0}'' contains '';'', which separates PATH entries. Choose another directory, or run the script again with -NoPathUpdate.' -f $InstallDirectory)
-}
+. (Join-Path $PSScriptRoot 'command-path.ps1')
+$InstallDirectory = Resolve-CommandInstallDirectory $InstallDirectory -NoPathUpdate:$NoPathUpdate
 $source = Join-Path $PSScriptRoot 'sandboxed-agents-windows-amd64.exe'
 $checksumLines = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'SHA256SUMS') | Where-Object {
     $_ -cmatch '^[a-fA-F0-9]{64} [ *]sandboxed-agents-windows-amd64\.exe$'
@@ -26,7 +16,6 @@ if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $expected) {
     throw ('{0} does not match its checksum in SHA256SUMS. Nothing was changed. Download and extract the package again.' -f $source)
 }
 if (-not $NoPathUpdate) {
-    . (Join-Path $PSScriptRoot 'command-path.ps1')
     $originalPath = Get-CommandUserPath
 }
 [IO.Directory]::CreateDirectory($InstallDirectory) | Out-Null

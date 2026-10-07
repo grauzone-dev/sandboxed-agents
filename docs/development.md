@@ -90,6 +90,14 @@ The job timeout is 30 minutes on Linux and 50 minutes on Windows. Because `-time
 
 The Linux job also runs the mirror test. Each job then records the output of its native `version`, and a final job checks that the Linux and Windows outputs are identical. That check confirms that both builds embed the same assets.
 
+A separate Windows job, `nuget-installer`, runs the build tool and then only the native installer test ([NuGet installer tests](#nuget-installer-tests)):
+
+```sh
+go test ./tools/release -run '^TestNuGetWindowsInstallerPreservesRawUserPathWithoutAdministratorRights$' -count=1 -v
+```
+
+Its job timeout is 10 minutes, and it reports that test's result and log apart from the full suite. The full Windows job still runs the test as part of `./...`.
+
 The `Preview release` workflow (`.github/workflows/release.yml`) runs the same test command, budgets, job timeouts, and timing artifacts in its Linux and Windows build jobs; [Releases](releases.md) describes its other checks.
 
 ### Live suite
@@ -390,7 +398,7 @@ The portable tests run on every operating system with placeholder binaries, whic
 - that both scripts refuse a directory containing `;` without `-NoPathUpdate`, without creating it, and accept it with `-NoPathUpdate`;
 - that removal deletes only the command, keeps other files, and succeeds when run twice.
 
-`TestNuGetWindowsInstallerPreservesRawUserPathWithoutAdministratorRights` runs only on native Windows and changes the real user `PATH` in `HKEY_CURRENT_USER\Environment`. It builds two real commands from `cmd/sandboxed-agents` that report different versions, then runs `tests/nuget/run-user-path.ps1` once each with the `Path` value as a string, as an expandable string, and absent. When the test process is elevated, the launcher starts `tests/nuget/user-path.ps1` with a restricted token built by `tests/nuget/restricted-process.cs`; otherwise it runs it directly. `user-path.ps1` fails when it has administrator rights. It saves the raw `Path` value and its type, or its absence, and restores them in a `finally` block; the launcher does the same around the restricted process. For the two string types, `user-path.ps1` sets a value with unrelated entries, among them `%USERPROFILE%\bin`, an empty entry, one with surrounding spaces, and the relative entries `.`, `bin`, and `C:bin`. It checks after each step that the raw value and its type are exactly as expected:
+`TestNuGetWindowsInstallerPreservesRawUserPathWithoutAdministratorRights` runs only on native Windows and changes the real user `PATH` in `HKEY_CURRENT_USER\Environment`. It builds two real commands from `cmd/sandboxed-agents` that report different versions, then runs `tests/nuget/run-user-path.ps1` once each with the `Path` value as a string, as an expandable string, and absent. When the test process is elevated, the launcher starts `tests/nuget/user-path.ps1` in a new PowerShell 7 process through `tests/nuget/restricted-process.cs`. That helper derives a restricted token from the launcher's own token with `CreateRestrictedToken` (`DISABLE_MAX_PRIVILEGE | LUA_TOKEN`) and starts the process with `CreateProcessAsUserW`, passing the launcher's environment and the package directory as the working directory. Otherwise the launcher runs `user-path.ps1` directly. On Windows, the tests resolve the package directory, the directories of the built commands, and the parent of `LOCALAPPDATA` to their long names, so an 8.3 alias such as `RUNNER~1` cannot make the paths the test expects differ from those the scripts write, and the raw `PATH` comparisons stay exact. `user-path.ps1` fails when it has administrator rights. It saves the raw `Path` value and its type, or its absence, and restores them in a `finally` block; the launcher does the same around the restricted process. For the two string types, `user-path.ps1` sets a value with unrelated entries, among them `%USERPROFILE%\bin`, an empty entry, one with surrounding spaces, and the relative entries `.`, `bin`, and `C:bin`. It checks after each step that the raw value and its type are exactly as expected:
 
 - install to the default directory, a repeated install, and an upgrade, each followed by the installed `version`; these and the two removals below run with the default directory as the working directory, where `.` would resolve to the install directory, and must leave the relative entries unchanged;
 - a tampered binary over the existing installation, which keeps the upgraded version, and into a new directory, which creates nothing;

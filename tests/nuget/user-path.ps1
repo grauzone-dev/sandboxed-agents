@@ -18,11 +18,12 @@ try {
     $identity.Dispose()
 }
 
-function Invoke-TestProcess([string]$Executable, [string[]]$Arguments) {
+function Invoke-TestProcess([string]$Executable, [string[]]$Arguments, [string]$WorkingDirectory = '') {
     $info = [Diagnostics.ProcessStartInfo]::new($Executable)
     $info.UseShellExecute = $false
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
+    if ($WorkingDirectory) { $info.WorkingDirectory = $WorkingDirectory }
     foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
@@ -37,8 +38,8 @@ function Invoke-TestProcess([string]$Executable, [string[]]$Arguments) {
     }
 }
 
-function Invoke-Installer([string]$Script, [string[]]$Arguments = @(), [switch]$Fails) {
-    $result = Invoke-TestProcess $PowerShell (@('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PackageDirectory $Script)) + $Arguments)
+function Invoke-Installer([string]$Script, [string[]]$Arguments = @(), [switch]$Fails, [string]$WorkingDirectory = '') {
+    $result = Invoke-TestProcess $PowerShell (@('-NoLogo', '-NoProfile', '-NonInteractive', '-File', (Join-Path $PackageDirectory $Script)) + $Arguments) $WorkingDirectory
     if (($result.ExitCode -eq 0) -eq [bool]$Fails) { throw "$Script returned $($result.ExitCode): $($result.Output)" }
 }
 
@@ -65,7 +66,7 @@ if ($existed) {
     $originalKind = $key.GetValueKind('Path')
 }
 try {
-    $raw = ' C:\Keep Mixed CASE ;%USERPROFILE%\bin;;C:\Other\;'
+    $raw = ' C:\Keep Mixed CASE ;%USERPROFILE%\bin;;C:\Other\;.;bin;C:bin;'
     $kind = [Microsoft.Win32.RegistryValueKind]::String
     if ($PathKind -eq 'ExpandString') { $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString }
     if ($PathKind -eq 'Absent') {
@@ -77,20 +78,20 @@ try {
     $defaultDirectory = Join-Path $env:LOCALAPPDATA 'Programs/sandboxed-agents'
     $expected = $defaultDirectory
     if ($raw) { $expected = $raw + ';' + $defaultDirectory }
-    [IO.Directory]::CreateDirectory($env:LOCALAPPDATA) | Out-Null
+    [IO.Directory]::CreateDirectory($defaultDirectory) | Out-Null
     $outside = Join-Path $env:LOCALAPPDATA 'untouched.txt'
     [IO.File]::WriteAllText($outside, 'outside installation')
-    Invoke-Installer 'install-command.ps1'
+    Invoke-Installer 'install-command.ps1' -WorkingDirectory $defaultDirectory
     Assert-Path $expected $kind
     Assert-Version $defaultDirectory 'sandboxed-agents v1.0.0-preview.20261007.1'
-    Invoke-Installer 'install-command.ps1'
+    Invoke-Installer 'install-command.ps1' -WorkingDirectory $defaultDirectory
     Assert-Path $expected $kind
 
     $source = Join-Path $PackageDirectory 'sandboxed-agents-windows-amd64.exe'
     Copy-Item -LiteralPath $UpgradeBinary -Destination $source -Force
     $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText((Join-Path $PackageDirectory 'SHA256SUMS'), "$hash  sandboxed-agents-windows-amd64.exe`n")
-    Invoke-Installer 'install-command.ps1'
+    Invoke-Installer 'install-command.ps1' -WorkingDirectory $defaultDirectory
     Assert-Path $expected $kind
     Assert-Version $defaultDirectory 'sandboxed-agents v1.0.0-preview.20261007.2'
 
@@ -105,11 +106,11 @@ try {
 
     $unrelated = Join-Path $defaultDirectory 'keep.txt'
     [IO.File]::WriteAllText($unrelated, 'unrelated file')
-    Invoke-Installer 'remove-command.ps1'
+    Invoke-Installer 'remove-command.ps1' -WorkingDirectory $defaultDirectory
     Assert-Path $raw $kind
     if (Test-Path -LiteralPath (Join-Path $defaultDirectory 'sandboxed-agents.exe')) { throw 'Removal left the command installed.' }
     if ([IO.File]::ReadAllText($unrelated) -cne 'unrelated file') { throw 'Removal changed an unrelated file.' }
-    Invoke-Installer 'remove-command.ps1'
+    Invoke-Installer 'remove-command.ps1' -WorkingDirectory $defaultDirectory
     Assert-Path $raw $kind
 
     Copy-Item -LiteralPath $UpgradeBinary -Destination $source -Force
@@ -121,6 +122,22 @@ try {
     Assert-Version $custom 'sandboxed-agents v1.0.0-preview.20261007.2'
     Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
     Assert-Path $raw $kind
+
+    $expandableEntry = '%LOCALAPPDATA%\custom directory'
+    $expandableRaw = $expandableEntry
+    if ($raw) { $expandableRaw = $raw + ';' + $expandableEntry }
+    $key.SetValue('Path', $expandableRaw, $kind)
+    Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom)
+    $expandableInstalled = $expandableRaw
+    $expandableRemoved = $raw
+    if ($kind -eq [Microsoft.Win32.RegistryValueKind]::String) {
+        $expandableInstalled += ';' + $custom
+        $expandableRemoved = $expandableRaw
+    }
+    Assert-Path $expandableInstalled $kind
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $expandableRemoved $kind
+    $key.SetValue('Path', $raw, $kind)
 
     $existingEntry = $custom.ToUpperInvariant() + '\'
     $existingRaw = $existingEntry

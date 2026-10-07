@@ -1,3 +1,19 @@
+function Resolve-CommandInstallDirectory([string]$InstallDirectory, [switch]$NoPathUpdate) {
+    if (-not $InstallDirectory) {
+        if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA is not set. Set it, or choose a directory with -InstallDirectory.' }
+        $InstallDirectory = Join-Path $env:LOCALAPPDATA 'Programs/sandboxed-agents'
+    }
+    try {
+        $InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
+    } catch {
+        throw ('The install directory ''{0}'' is not a valid path: {1}' -f $InstallDirectory, $_.Exception.Message)
+    }
+    if (-not $NoPathUpdate -and $InstallDirectory.Contains(';')) {
+        throw ('The install directory ''{0}'' contains '';'', which separates PATH entries. Choose another directory, or run the script again with -NoPathUpdate.' -f $InstallDirectory)
+    }
+    return $InstallDirectory
+}
+
 function Get-CommandUserPath {
     if (-not $IsWindows) { throw 'The user PATH can only be updated on Windows. Run the script again with -NoPathUpdate.' }
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
@@ -19,10 +35,15 @@ function Get-CommandUserPath {
     }
 }
 
-function Test-CommandPathEntry([string]$Entry, [string]$Directory) {
+function Test-CommandPathEntry([string]$Entry, [string]$Directory, [Microsoft.Win32.RegistryValueKind]$Kind) {
     if (-not $Entry) { return $false }
     try {
-        $candidate = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Entry.Trim('"'))).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $candidate = $Entry.Trim('"')
+        if ($Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) {
+            $candidate = [Environment]::ExpandEnvironmentVariables($candidate)
+        }
+        if (-not [IO.Path]::IsPathFullyQualified($candidate)) { return $false }
+        $candidate = [IO.Path]::GetFullPath($candidate).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
         $target = $Directory.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
         return [string]::Equals($candidate, $target, [StringComparison]::OrdinalIgnoreCase)
     } catch {
@@ -42,7 +63,7 @@ function Set-CommandUserPath([hashtable]$Original, [string]$Value) {
 
 function Add-CommandUserPath([hashtable]$Original, [string]$Directory) {
     foreach ($entry in $Original.Value.Split(';')) {
-        if (Test-CommandPathEntry $entry $Directory) {
+        if (Test-CommandPathEntry $entry $Directory $Original.Kind) {
             Write-Output ('{0} is already on the user PATH.' -f $Directory)
             return
         }
@@ -54,7 +75,7 @@ function Add-CommandUserPath([hashtable]$Original, [string]$Directory) {
 }
 
 function Remove-CommandUserPath([hashtable]$Original, [string]$Directory) {
-    $remaining = @($Original.Value.Split(';') | Where-Object { -not (Test-CommandPathEntry $_ $Directory) })
+    $remaining = @($Original.Value.Split(';') | Where-Object { -not (Test-CommandPathEntry $_ $Directory $Original.Kind) })
     $value = $remaining -join ';'
     Set-CommandUserPath $Original $value
     if ($value -cne $Original.Value) { Write-Output ('Removed {0} from the user PATH. Open a new terminal for the change to take effect.' -f $Directory) }

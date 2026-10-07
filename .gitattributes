@@ -4,3 +4,4 @@
 *.sh text eol=lf
 /internal/agentcatalog/catalog.json text eol=lf
 /build/context/** text=auto eol=lf
+*.cjs text eol=lf

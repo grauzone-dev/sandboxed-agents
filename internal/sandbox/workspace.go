@@ -55,6 +55,22 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 	}
 	var protectedPaths []string
 	for _, path := range paths {
+		parent, err := resolveHostPath(filepath.Dir(path))
+		if err != nil {
+			return fmt.Errorf(workspaceAliasError, path, err)
+		}
+		entry := filepath.Join(parent, filepath.Base(path))
+		protectedPaths = append(protectedPaths, entry)
+		entryOverlap := pathContains(resolved, entry) || pathContains(entry, resolved)
+		if !entryOverlap && host.OS == "linux" {
+			entryOverlap, err = mountedPathsOverlap(resolved, entry, mounts)
+			if err != nil {
+				return fmt.Errorf(workspaceAliasError, entry, err)
+			}
+		}
+		if entryOverlap {
+			return fmt.Errorf(workspaceProtectedError, resolved, entry)
+		}
 		protected, err := resolveHostPath(path)
 		if err != nil {
 			return fmt.Errorf(workspaceAliasError, path, err)
@@ -102,6 +118,11 @@ func protectedHostPaths(hostOS, group string) ([]string, error) {
 	if hostOS == "linux" {
 		paths = append(paths, "/tmp")
 	}
+	npmPaths, err := npmProtectedPaths(executable)
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, npmPaths...)
 	return paths, nil
 }
 

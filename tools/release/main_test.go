@@ -1,17 +1,24 @@
 package main_test
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"debug/elf"
 	"debug/pe"
+	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
@@ -38,7 +45,24 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 	tag := "v1.0.0-preview.20261003.1"
 	outputs := []string{filepath.Join(t.TempDir(), "first"), t.TempDir()}
 	var first map[string][]byte
-	for _, dir := range outputs {
+	for index, dir := range outputs {
+		if index == 1 {
+			launcherPath := filepath.Join(source, "internal", "npmpackage", "launcher.cjs")
+			launcher, err := os.ReadFile(launcherPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(launcherPath, bytes.ReplaceAll(launcher, []byte("\n"), []byte("\r\n")), 0644); err != nil {
+				t.Fatal(err)
+			}
+			alternateTool := filepath.Join(t.TempDir(), filepath.Base(tool))
+			compile := exec.Command("go", "build", "-o", alternateTool, "./tools/release")
+			compile.Dir = source
+			if output, err := compile.CombinedOutput(); err != nil {
+				t.Fatalf("build release tool with Windows line endings: %v\n%s", err, output)
+			}
+			tool = alternateTool
+		}
 		command := exec.Command(tool, "-tag", tag, "-output", dir)
 		command.Dir = source
 		command.Env = append(os.Environ(), "GOFLAGS=-ldflags=-s", "GOEXPERIMENT=not-a-valid-experiment", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local")
@@ -49,7 +73,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantNames := []string{"SHA256SUMS", "sandboxed-agents-linux-amd64", "sandboxed-agents-windows-amd64.exe"}
+		wantNames := []string{"SHA256SUMS", "sandboxed-agents-1.0.0-preview.20261003.1.tgz", "sandboxed-agents-linux-amd64", "sandboxed-agents-windows-amd64.exe"}
 		if len(entries) != len(wantNames) {
 			t.Fatalf("release files: %v", entries)
 		}
@@ -67,8 +91,9 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 				t.Fatalf("repeated release changed %s", entry.Name())
 			}
 		}
+		assertNPMPackage(t, artifacts[wantNames[1]], artifacts)
 		first = artifacts
-		wantChecksums := fmt.Sprintf("%x  sandboxed-agents-linux-amd64\n%x  sandboxed-agents-windows-amd64.exe\n", sha256.Sum256(artifacts[wantNames[1]]), sha256.Sum256(artifacts[wantNames[2]]))
+		wantChecksums := fmt.Sprintf("%x  sandboxed-agents-linux-amd64\n%x  sandboxed-agents-windows-amd64.exe\n", sha256.Sum256(artifacts[wantNames[2]]), sha256.Sum256(artifacts[wantNames[3]]))
 		if string(artifacts["SHA256SUMS"]) != wantChecksums {
 			t.Fatalf("SHA256SUMS does not verify both binaries: %s", artifacts["SHA256SUMS"])
 		}
@@ -76,7 +101,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range wantNames[1:] {
+		for _, name := range wantNames[2:] {
 			if !bytes.Contains(artifacts[name], bundle) {
 				t.Fatalf("%s does not contain the shared embedded bundle", name)
 			}
@@ -91,8 +116,9 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 			if err != nil || string(output) != want {
 				t.Fatalf("native version = %q, %v; want %q", output, err, want)
 			}
+			assertInstalledVersion(t, dir, tag, want)
 		}
-		linux, err := elf.NewFile(bytes.NewReader(artifacts[wantNames[1]]))
+		linux, err := elf.NewFile(bytes.NewReader(artifacts[wantNames[2]]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +131,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 			}
 		}
 		linux.Close()
-		windows, err := pe.NewFile(bytes.NewReader(artifacts[wantNames[2]]))
+		windows, err := pe.NewFile(bytes.NewReader(artifacts[wantNames[3]]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,5 +271,96 @@ func TestReleasePublishesNothingWhenRepeatedBinariesDiffer(t *testing.T) {
 	}
 	if _, err := os.Stat(outputDir); !os.IsNotExist(err) {
 		t.Fatalf("inconsistent builds created output: %v", err)
+	}
+}
+
+func assertNPMPackage(t *testing.T, archive []byte, artifacts map[string][]byte) {
+	t.Helper()
+	compressed, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compressed.Close()
+	reader := tar.NewReader(compressed)
+	files := make(map[string][]byte)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Uid != 0 || header.Gid != 0 || !header.ModTime.Equal(time.Unix(0, 0)) {
+			t.Fatalf("non-normalized npm header: %+v", header)
+		}
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[header.Name] = data
+	}
+	for _, name := range []string{"SHA256SUMS", "sandboxed-agents-linux-amd64", "sandboxed-agents-windows-amd64.exe"} {
+		if !bytes.Equal(files["package/"+name], artifacts[name]) {
+			t.Fatalf("npm package differs for %s", name)
+		}
+	}
+	if len(files) != 5 || len(files["package/launcher.cjs"]) == 0 {
+		t.Fatalf("npm package files: %v", slices.Collect(maps.Keys(files)))
+	}
+	var metadata struct {
+		Name       string
+		Version    string
+		Bin        map[string]string
+		Scripts    map[string]string
+		Repository struct {
+			Type string
+			URL  string
+		}
+	}
+	if err := json.Unmarshal(files["package/package.json"], &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Name != "sandboxed-agents" || metadata.Version != "1.0.0-preview.20261003.1" || metadata.Bin["sandboxed-agents"] != "launcher.cjs" || metadata.Scripts["postinstall"] != "node launcher.cjs --verify-install" || metadata.Repository.URL != "git+https://github.com/grauzone-dev/sandboxed-agents.git" {
+		t.Fatalf("npm metadata: %+v", metadata)
+	}
+}
+
+func assertInstalledVersion(t *testing.T, directory, tag, want string) {
+	t.Helper()
+	prefix := t.TempDir()
+	npm, err := exec.LookPath("npm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := filepath.EvalSymlinks(npm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		cli = filepath.Join(filepath.Dir(npm), "node_modules", "npm", "bin", "npm-cli.js")
+	}
+	archive, err := filepath.Abs(filepath.Join(directory, "sandboxed-agents-"+strings.TrimPrefix(tag, "v")+".tgz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("node", cli, "install", archive, "--offline", "--no-audit", "--no-fund", "--update-notifier=false", "--ignore-scripts=false", "--prefix", prefix, "--cache", filepath.Join(prefix, "npm-cache"))
+	command.Dir = prefix
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("install release package: %v\n%s", err, output)
+	}
+	launch := filepath.Join(prefix, "node_modules", ".bin", "sandboxed-agents")
+	commands := []*exec.Cmd{exec.Command(launch, "version")}
+	if runtime.GOOS == "windows" {
+		commands = []*exec.Cmd{
+			exec.Command("cmd.exe", "/d", "/c", launch+".cmd", "version"),
+			exec.Command("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launch+".ps1", "version"),
+		}
+	}
+	for _, command := range commands {
+		output, err := command.CombinedOutput()
+		if err != nil || string(output) != want {
+			t.Fatalf("installed version: %v\n%s; want %s", err, output, want)
+		}
 	}
 }

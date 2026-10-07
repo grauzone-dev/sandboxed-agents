@@ -14,10 +14,9 @@ import (
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/buildenv"
+	"github.com/grauzone-dev/sandboxed-agents/internal/npmpackage"
 	"github.com/grauzone-dev/sandboxed-agents/internal/release"
 )
-
-var artifactNames = [...]string{release.LinuxExecutable, release.WindowsExecutable, release.ChecksumFilename}
 
 var previewTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-preview\.[0-9]{8}\.(0|[1-9][0-9]*)$`)
 
@@ -56,6 +55,7 @@ func buildPreview() error {
 		return err
 	}
 	defer os.RemoveAll(work)
+	artifactNames := []string{release.LinuxExecutable, release.WindowsExecutable, release.ChecksumFilename, npmpackage.Filename(*tag)}
 	var bundle []byte
 	for _, pass := range []string{"first", "second"} {
 		dir := filepath.Join(work, pass)
@@ -108,6 +108,9 @@ func buildPreview() error {
 		if err := os.WriteFile(filepath.Join(dir, release.ChecksumFilename), checksums, 0644); err != nil {
 			return err
 		}
+		if err := npmpackage.Write(dir, *tag); err != nil {
+			return err
+		}
 	}
 	for _, name := range artifactNames {
 		first, err := os.ReadFile(filepath.Join(work, "first", name))
@@ -122,7 +125,7 @@ func buildPreview() error {
 			return fmt.Errorf("repeated builds differ: %s", name)
 		}
 	}
-	return writeArtifacts(filepath.Join(work, "first"), *output)
+	return writeArtifacts(filepath.Join(work, "first"), *output, artifactNames)
 }
 
 func checkOutput(output string) error {
@@ -146,7 +149,7 @@ func checkOutput(output string) error {
 	return nil
 }
 
-func writeArtifacts(source, output string) error {
+func writeArtifacts(source, output string, artifactNames []string) error {
 	if err := checkOutput(output); err != nil {
 		return err
 	}
@@ -168,7 +171,7 @@ func writeArtifacts(source, output string) error {
 			return err
 		}
 		mode := os.FileMode(0755)
-		if name == release.ChecksumFilename {
+		if name == release.ChecksumFilename || strings.HasSuffix(name, ".tgz") {
 			mode = 0644
 		}
 		if err := os.WriteFile(filepath.Join(stage, name), contents, mode); err != nil {

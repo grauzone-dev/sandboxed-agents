@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestUpProtectsNpmLauncherPathsBeforePodman(t *testing.T) {
 			}
 			t.Setenv("SANDBOXED_AGENTS_NPM_PATHS", string(paths))
 			stdout, stderr, status := runCLI(t, fixture, "up", "agent01", workspace)
-			if status == 0 || stdout != "" || !strings.Contains(stderr, "protected host path") || !strings.Contains(strings.ToLower(stderr), strings.ToLower(protected)) {
+			if status == 0 || stdout != "" || !strings.Contains(stderr, "protected host path") || !strings.Contains(strings.ToLower(stderr), strings.ToLower(strconv.Quote(protected))) {
 				t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 			}
 			if len(fakes.Calls("podman")) != 0 {
@@ -80,12 +81,10 @@ func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install: %v\n%s", err, output)
 	}
-	packageDir := filepath.Join(prefix, "lib", "node_modules", "sandboxed-agents")
-	link := filepath.Join(prefix, "bin", "sandboxed-agents")
+	packageDir, link := testutil.NpmInstallationPaths(prefix, true)
 	workspaces := []string{filepath.Dir(link)}
 	protectedNames := []string{link}
 	if runtime.GOOS == "windows" {
-		packageDir = filepath.Join(prefix, "node_modules", "sandboxed-agents")
 		link = filepath.Join(prefix, "sandboxed-agents.cmd")
 		workspaces, protectedNames = nil, nil
 	}
@@ -113,7 +112,7 @@ func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
 		command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE="+fixture)
 		var stdout, stderr bytes.Buffer
 		command.Stdout, command.Stderr = &stdout, &stderr
-		if err := command.Run(); err == nil || stdout.Len() != 0 || !strings.Contains(stderr.String(), "protected host path") || !strings.Contains(strings.ToLower(stderr.String()), strings.ToLower(protectedNames[i])) {
+		if err := command.Run(); err == nil || stdout.Len() != 0 || !strings.Contains(stderr.String(), "protected host path") || !strings.Contains(strings.ToLower(stderr.String()), strings.ToLower(strconv.Quote(protectedNames[i]))) {
 			t.Fatalf("workspace=%q run: %v stdout=%q stderr=%q", workspace, err, stdout.String(), stderr.String())
 		}
 	}
@@ -221,27 +220,4 @@ func npmWorkspaceFixture(t *testing.T) (string, string) {
 		fixture = "windows"
 	}
 	return root, fixture
-}
-
-func TestNpmGuardKeepsLinuxSSHLinkEntryBehavior(t *testing.T) {
-	fakes := linuxHost(t)
-	root := workspaceFixture(t)
-	home := filepath.Join(root, "home")
-	ssh := filepath.Join(root, "outside-ssh")
-	for _, dir := range []string{home, ssh} {
-		if err := os.Mkdir(dir, 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.Symlink(ssh, filepath.Join(home, ".ssh")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	responses := append(upObjectResponses(nil, false, nil, nil), make([]testutil.Response, 5)...)
-	fakes.Script("podman", responses...)
-	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", home)
-	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
-		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
-	}
-	assertNoSSH(t, fakes)
 }

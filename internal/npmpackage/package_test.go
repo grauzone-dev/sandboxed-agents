@@ -60,17 +60,7 @@ func install(t *testing.T, archive string, global bool) (string, string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("npm install: %v\n%s", err, output)
 	}
-	root := filepath.Join(prefix, "node_modules", "sandboxed-agents")
-	launch := filepath.Join(prefix, "node_modules", ".bin", "sandboxed-agents")
-	if global {
-		launch = filepath.Join(prefix, "bin", "sandboxed-agents")
-		if runtime.GOOS == "windows" {
-			launch = filepath.Join(prefix, "sandboxed-agents")
-		} else {
-			root = filepath.Join(prefix, "lib", "node_modules", "sandboxed-agents")
-		}
-	}
-	return root, launch
+	return testutil.NpmInstallationPaths(prefix, global)
 }
 
 func installedCommand(launch string, args ...string) *exec.Cmd {
@@ -131,8 +121,7 @@ func TestInstalledPowerShellShimForwardsArgumentsStreamsAndStatus(t *testing.T) 
 		t.Run(map[bool]string{false: "local", true: "global"}[global], func(t *testing.T) {
 			root, launch := install(t, archive, global)
 			if runtime.GOOS != "windows" {
-				npm := testutil.NpmCommand(t, t.TempDir())
-				module := filepath.Join(filepath.Dir(filepath.Dir(npm.Args[1])), "node_modules", "cmd-shim")
+				module := filepath.Join(filepath.Dir(filepath.Dir(testutil.NpmCLIPath(t))), "node_modules", "cmd-shim")
 				generate := exec.Command("node", "-e", `require(process.argv[1])(process.argv[2],process.argv[3]).catch(error=>{console.error(error);process.exit(1)})`, module, filepath.Join(root, "launcher.cjs"), launch)
 				if output, err := generate.CombinedOutput(); err != nil {
 					t.Fatalf("generate npm PowerShell shim: %v\n%s", err, output)
@@ -385,10 +374,7 @@ func TestInstallUpgradeAndRemoveLeaveHostPathsUntouched(t *testing.T) {
 					t.Fatalf("npm %s changed host paths: before %v after %v", args, before, after)
 				}
 			}
-			root := filepath.Join(prefix, "node_modules", "sandboxed-agents")
-			if global && runtime.GOOS != "windows" {
-				root = filepath.Join(prefix, "lib", "node_modules", "sandboxed-agents")
-			}
+			root, _ := testutil.NpmInstallationPaths(prefix, global)
 			if _, err := os.Lstat(root); !os.IsNotExist(err) {
 				t.Fatalf("uninstall left the package: %v", err)
 			}

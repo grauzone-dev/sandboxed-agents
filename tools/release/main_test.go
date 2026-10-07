@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/npmpackage"
 	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
@@ -329,7 +330,7 @@ func assertNPMPackage(t *testing.T, archive []byte, artifacts map[string][]byte)
 func assertInstalledVersion(t *testing.T, directory, tag, want string) {
 	t.Helper()
 	prefix := t.TempDir()
-	archive, err := filepath.Abs(filepath.Join(directory, "sandboxed-agents-"+strings.TrimPrefix(tag, "v")+".tgz"))
+	archive, err := filepath.Abs(filepath.Join(directory, npmpackage.Filename(tag)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +338,7 @@ func assertInstalledVersion(t *testing.T, directory, tag, want string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install release package: %v\n%s", err, output)
 	}
-	launch := filepath.Join(prefix, "node_modules", ".bin", "sandboxed-agents")
+	_, launch := testutil.NpmInstallationPaths(prefix, false)
 	commands := []*exec.Cmd{exec.Command(launch, "version")}
 	if runtime.GOOS == "windows" {
 		commands = []*exec.Cmd{

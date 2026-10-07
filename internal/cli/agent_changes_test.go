@@ -13,11 +13,7 @@ func TestAgentChangeForceOptionsReachTheManager(t *testing.T) {
 		for _, args := range [][]string{{"enable", "--force"}, {"enable", "--version", "2.3.4", "--force"}, {"enable", "--force", "--version=2.3.4"}, {"disable", "--force"}, {"update", "--force"}, {"update", "--force", "--unpin"}, {"update", "--unpin", "--force"}} {
 			t.Run(fixture+"/"+strings.Join(args, " "), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
-				owned := "default"
-				responses := sandboxObjectResponses(&owned, true, nil, nil)
-				if fixture == "windows" {
-					responses = append(append([]testutil.Response{}, healthyWindowsPodman()[1:3]...), responses...)
-				}
+				responses := agentChangeObjectResponses(fixture)
 				report := "Ended the agent session sandboxed-agents-codex of codex before changing its installation.\n"
 				responses = append(responses, testutil.Response{Stdout: "sandboxed-agents-manager dev\n"}, testutil.Response{Stdout: report})
 				fakes.Script("podman", responses...)
@@ -54,11 +50,7 @@ func TestAgentChangesWithForceStillRefuseAnUnavailableManager(t *testing.T) {
 			for _, force := range []bool{false, true} {
 				t.Run(fixture+"/"+action+"/"+map[bool]string{false: "plain", true: "force"}[force], func(t *testing.T) {
 					fakes := testutil.NewFakePrograms(t)
-					owned := "default"
-					responses := sandboxObjectResponses(&owned, true, nil, nil)
-					if fixture == "windows" {
-						responses = append(append([]testutil.Response{}, healthyWindowsPodman()[1:3]...), responses...)
-					}
+					responses := agentChangeObjectResponses(fixture)
 					responses = append(responses, testutil.Response{ExitCode: 127, Stderr: "manager unavailable\n"})
 					fakes.Script("podman", responses...)
 					args := []string{"agents", action, "agent01", "codex"}
@@ -116,4 +108,13 @@ func TestAgentForceOptionsRejectInvalidUsageBeforePodman(t *testing.T) {
 			})
 		}
 	}
+}
+
+func agentChangeObjectResponses(fixture string) []testutil.Response {
+	owned := "default"
+	responses := sandboxObjectResponses(&owned, true, nil, nil)
+	if fixture == "windows" {
+		return append(append([]testutil.Response{}, healthyWindowsPodman()[1:3]...), responses...)
+	}
+	return responses
 }

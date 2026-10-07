@@ -64,21 +64,3 @@ message names the session. With --force, the session is ended first and
 named in the output, and then the agent is updated. A session of another
 agent does not block the update.
 `
-
-const agentDisableHelp = `Usage: sandboxed-agents agents disable NAME AGENT [--force]
-
-Remove the agent AGENT from the agent selection of the running sandbox NAME,
-together with its pin, and remove its managed command. The agent's
-credentials and cached data stay in the home volume.
-
-Options:
-  --force    end a running agent session of AGENT before the agent is
-             disabled
-  --help     show this help
-
-While an agent session of AGENT is running, agents disable is refused and
-the message names the session. With --force, the session is ended first and
-named in the output, and then the agent is disabled. A session of another
-agent does not block it. On an agent that is not enabled, agents disable
-reports that nothing was to do.
-`

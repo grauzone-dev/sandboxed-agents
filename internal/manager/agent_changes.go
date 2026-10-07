@@ -30,7 +30,7 @@ func (m *Manager) guardAgentChange(ctx context.Context, agent string, force bool
 	return nil
 }
 
-func changeForce(args []string) ([]string, bool, error) {
+func extractAgentForce(args []string) ([]string, bool, error) {
 	options := make([]string, 0, len(args))
 	force := false
 	for i := 0; i < len(args); i++ {

@@ -14,13 +14,9 @@ import (
 )
 
 func TestAgentChangesRefuseWhileTheAffectedSessionRuns(t *testing.T) {
-	for _, args := range [][]string{{"disable", "codex"}, {"update", "agent01", "codex"}, {"update", "agent01", "codex", "--unpin"}, {"enable", "codex", "--version", "2.3.4"}} {
+	for _, args := range agentChangeCommands() {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			home := t.TempDir()
-			writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", `{"codex":{"version":"1.2.3","pin":"1.2.3"}}`, 0600)
-			writeHomeFile(t, home, ".local/state/sandboxed-agents/manager.lock", "", 0600)
-			writeHomeFile(t, home, ".local/bin/codex", "installed command", 0700)
-			writeInstalledPackage(t, home, "@openai/codex", "1.2.3")
+			home := pinnedAgentChangeHome(t)
 			before := homeFiles(t, home)
 			queries := 0
 			app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
@@ -44,7 +40,7 @@ func TestAgentChangesRefuseWhileTheAffectedSessionRuns(t *testing.T) {
 }
 
 func TestForcedAgentChangesStopTheAffectedSessionBeforeChangingInstallation(t *testing.T) {
-	for _, args := range [][]string{{"disable", "codex"}, {"update", "agent01", "codex"}, {"update", "agent01", "codex", "--unpin"}, {"enable", "codex", "--version", "2.3.4"}} {
+	for _, args := range agentChangeCommands() {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			home := t.TempDir()
 			writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", `{"codex":{"version":"1.2.3","pin":"1.2.3"}}`, 0600)
@@ -226,4 +222,8 @@ func TestManagerRejectsForceUsedAsAVersionValueWithoutChanges(t *testing.T) {
 	if status == 0 || out != "" || diagnostic == "" || len(homeFiles(t, home)) != 0 {
 		t.Fatalf("status=%d out=%q diagnostic=%q", status, out, diagnostic)
 	}
+}
+
+func agentChangeCommands() [][]string {
+	return [][]string{{"disable", "codex"}, {"update", "agent01", "codex"}, {"update", "agent01", "codex", "--unpin"}, {"enable", "codex", "--version", "2.3.4"}}
 }

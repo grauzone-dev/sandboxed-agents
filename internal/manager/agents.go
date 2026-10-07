@@ -42,7 +42,7 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		if err != nil {
 			return err
 		}
-		options, force, err := changeForce(args[3:])
+		options, force, err := extractAgentForce(args[3:])
 		if err != nil {
 			return err
 		}
@@ -62,7 +62,7 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 		if err != nil {
 			return err
 		}
-		options, force, err := changeForce(args[2:])
+		options, force, err := extractAgentForce(args[2:])
 		if err != nil {
 			return err
 		}
@@ -71,23 +71,26 @@ func (m *Manager) agents(ctx context.Context, args []string, streams process.Str
 			return err
 		}
 		apply = func() error { return m.enable(ctx, entry, version, force, streams, run) }
-	case len(args) >= 2 && (args[0] == "disable" || args[0] == "status"):
-		options, force, err := changeForce(args[2:])
+	case len(args) == 2 && args[0] == "status":
+		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
 		}
-		if len(options) != 0 || (args[0] == "status" && force) {
+		apply = func() error { return m.agentStatus(ctx, entry, streams, run) }
+	case len(args) >= 2 && args[0] == "disable":
+		options, force, err := extractAgentForce(args[2:])
+		if err != nil {
+			return err
+		}
+		if len(options) != 0 {
 			return errors.New(agentUsageMessage)
 		}
 		entry, err := m.catalogEntry(args[1])
 		if err != nil {
 			return err
 		}
-		if args[0] == "status" {
-			apply = func() error { return m.agentStatus(ctx, entry, streams, run) }
-		} else if args[0] == "disable" {
-			apply = func() error { return m.disable(ctx, entry, force, streams, run) }
-		}
+		apply = func() error { return m.disable(ctx, entry, force, streams, run) }
+
 	default:
 		return errors.New(agentUsageMessage)
 	}

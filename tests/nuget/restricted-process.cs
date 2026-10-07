@@ -101,9 +101,14 @@ public static class NuGetRestrictedProcess
             var commandLine = new StringBuilder(Quote(executable));
             foreach (string argument in arguments) commandLine.Append(' ').Append(Quote(argument));
             var startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfo>() };
+            Console.Error.WriteLine("[DEBUG-62-launch] CommandLineLength=" + commandLine.Length);
             if (!CreateProcessWithTokenW(restricted, 0, executable, commandLine, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                 environment, directory, ref startup, out process))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessWithTokenW");
+            {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "[DEBUG-62-launch] CreateProcessWithTokenW NativeErrorCode=" +
+                    error + " NativeMessage=" + new Win32Exception(error).Message);
+            }
             uint waited = WaitForSingleObject(process.Process, 180000);
             if (waited != 0)
             {

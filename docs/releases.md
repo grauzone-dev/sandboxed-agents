@@ -49,12 +49,12 @@ sha256sum -c SHA256SUMS
 
 The NuGet package installs the command on Windows for the current user, with PowerShell 7 and without administrator rights. It is a command package, not a library: it has no NuGet install scripts and no library assets, so adding it to a project or restoring it installs nothing. Previews are not published to the NuGet registry, where `SandboxedAgents` stays at the prototype's version 0.2.0 until the stable release (#67).
 
-Download the package from a prerelease, extract it, and run its installer:
+Download the package from a prerelease, extract it, and run its installer. The example uses the tag `v1.0.0-preview.20261007.2`; use the tag of the prerelease you install:
 
 ```powershell
-gh release download v1.0.0-preview.20261007.1 -R grauzone-dev/sandboxed-agents -p '*.nupkg'
+gh release download v1.0.0-preview.20261007.2 -R grauzone-dev/sandboxed-agents -p '*.nupkg'
 mkdir SandboxedAgents
-tar -xf SandboxedAgents.1.0.0-preview.20261007.1.nupkg -C SandboxedAgents
+tar -xf SandboxedAgents.1.0.0-preview.20261007.2.nupkg -C SandboxedAgents
 pwsh -File SandboxedAgents/tools/install-command.ps1
 ```
 
@@ -65,7 +65,7 @@ The installer copies only the binary, so keep the extracted package to remove th
 - `-InstallDirectory DIR` uses `DIR` instead of the default directory.
 - `-NoPathUpdate` leaves the user `PATH` untouched. Without it, the scripts refuse a directory that contains `;`, which separates `PATH` entries.
 
-The scripts change only the `Path` value under `HKEY_CURRENT_USER\Environment`. They read it without expanding it and write it back with its registry type; when the value does not exist, the installer creates it as a string. Every other entry, including an unexpanded one such as `%USERPROFILE%\bin`, stays byte for byte as it was. An entry that names the install directory, after expanding environment variables and ignoring case, quotes, and a trailing `\`, counts as that directory: the installer adds no second entry, and the removal removes each such entry. A value that is neither a string nor an expandable string stops either script before it changes anything. Neither script calls Podman, needs network access, or touches sandboxes, SSH configuration, or host state: they change only the install directory and the user `PATH`.
+The scripts change only the `Path` value under `HKEY_CURRENT_USER\Environment`. They read it without expanding it and write it back with its registry type; when the value does not exist, the installer creates it as a string. Every other entry, including an unexpanded one such as `%USERPROFILE%\bin`, stays byte for byte as it was. An entry counts as the install directory only when it is a fully qualified path that names that directory, ignoring case, surrounding quotes, and a trailing `\`. For that comparison the scripts expand environment variables in an expandable string and take a plain string literally, so `%LOCALAPPDATA%\Programs\sandboxed-agents` names the default directory only in an expandable string. Relative entries such as `.`, `bin`, or `C:bin` never count, whatever directory the script runs in. When an entry counts, the installer adds no second entry, and the removal removes each such entry whole; no entry's text is expanded or rewritten. A value that is neither a string nor an expandable string stops either script before it changes anything. Neither script calls Podman, needs network access, or touches sandboxes, SSH configuration, or host state: they change only the install directory and the user `PATH`.
 
 ## Validate a preview
 
@@ -79,4 +79,4 @@ The offline suite covers the launcher, its platform check, its checksum checks a
 
 Attestations are created and checked only in the workflow, because signing and verification depend on GitHub; the release tool and the offline suite do neither. Before creating the release, the workflow verifies each release file against the attestation bundle it just produced. After publishing, it downloads the release files, verifies each against the attestations stored for the repository, and checks that a modified copy of each file fails verification.
 
-The offline suite runs both installer scripts ([NuGet installer tests](development.md#nuget-installer-tests)). Not observed yet: a preview tag built with the package, the package's attestation, and the installer tests on native Windows.
+The offline suite runs both installer scripts ([NuGet installer tests](development.md#nuget-installer-tests)). Only its native Windows job changes the user `PATH` in the registry and runs the scripts without administrator rights; on other operating systems the tests cover only runs with `-NoPathUpdate` and the `;` refusal. The package's attestation exists only for a package that the workflow built and published for a pushed tag, so it can be checked only on such a prerelease. Installing from the package on a clean machine is part of the manual checklist (#64).

@@ -7,6 +7,14 @@ using System.Text;
 
 public static class NuGetRestrictedProcess
 {
+    private const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+    private const uint TOKEN_DUPLICATE = 0x0002;
+    private const uint TOKEN_QUERY = 0x0008;
+    private const uint DISABLE_MAX_PRIVILEGE = 0x0001;
+    private const uint LUA_TOKEN = 0x0004;
+    private const uint CREATE_NO_WINDOW = 0x08000000;
+    private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StartupInfo
     {
@@ -80,9 +88,9 @@ public static class NuGetRestrictedProcess
         var process = new ProcessInformation();
         try
         {
-            if (!OpenProcessToken(GetCurrentProcess(), 0x000b, out original))
+            if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY, out original))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken");
-            if (!CreateRestrictedToken(original, 0x0005, 0, IntPtr.Zero, 0, IntPtr.Zero, 0, IntPtr.Zero, out restricted))
+            if (!CreateRestrictedToken(original, DISABLE_MAX_PRIVILEGE | LUA_TOKEN, 0, IntPtr.Zero, 0, IntPtr.Zero, 0, IntPtr.Zero, out restricted))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRestrictedToken");
 
             var variables = new List<string>();
@@ -93,7 +101,7 @@ public static class NuGetRestrictedProcess
             var commandLine = new StringBuilder(Quote(executable));
             foreach (string argument in arguments) commandLine.Append(' ').Append(Quote(argument));
             var startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfo>() };
-            if (!CreateProcessWithTokenW(restricted, 0, executable, commandLine, 0x08000400,
+            if (!CreateProcessWithTokenW(restricted, 0, executable, commandLine, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                 environment, directory, ref startup, out process))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessWithTokenW");
             uint waited = WaitForSingleObject(process.Process, 180000);

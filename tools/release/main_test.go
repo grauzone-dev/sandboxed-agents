@@ -2,12 +2,14 @@ package main_test
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"debug/elf"
 	"debug/pe"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"maps"
@@ -74,7 +76,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantNames := []string{"SHA256SUMS", "sandboxed-agents-1.0.0-preview.20261003.1.tgz", "sandboxed-agents-linux-amd64", "sandboxed-agents-windows-amd64.exe"}
+		wantNames := []string{"SHA256SUMS", "SandboxedAgents.1.0.0-preview.20261003.1.nupkg", "sandboxed-agents-1.0.0-preview.20261003.1.tgz", "sandboxed-agents-linux-amd64", "sandboxed-agents-windows-amd64.exe"}
 		if len(entries) != len(wantNames) {
 			t.Fatalf("release files: %v", entries)
 		}
@@ -92,9 +94,10 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 				t.Fatalf("repeated release changed %s", entry.Name())
 			}
 		}
-		assertNPMPackage(t, artifacts[wantNames[1]], artifacts)
+		assertNPMPackage(t, artifacts[npmpackage.Filename(tag)], artifacts)
 		first = artifacts
-		wantChecksums := fmt.Sprintf("%x  sandboxed-agents-linux-amd64\n%x  sandboxed-agents-windows-amd64.exe\n", sha256.Sum256(artifacts[wantNames[2]]), sha256.Sum256(artifacts[wantNames[3]]))
+		checkNuGetPackage(t, artifacts)
+		wantChecksums := fmt.Sprintf("%x  sandboxed-agents-linux-amd64\n%x  sandboxed-agents-windows-amd64.exe\n", sha256.Sum256(artifacts["sandboxed-agents-linux-amd64"]), sha256.Sum256(artifacts["sandboxed-agents-windows-amd64.exe"]))
 		if string(artifacts["SHA256SUMS"]) != wantChecksums {
 			t.Fatalf("SHA256SUMS does not verify both binaries: %s", artifacts["SHA256SUMS"])
 		}
@@ -102,7 +105,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range wantNames[2:] {
+		for _, name := range []string{"sandboxed-agents-linux-amd64", "sandboxed-agents-windows-amd64.exe"} {
 			if !bytes.Contains(artifacts[name], bundle) {
 				t.Fatalf("%s does not contain the shared embedded bundle", name)
 			}
@@ -119,7 +122,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 			}
 			assertInstalledVersion(t, dir, tag, want)
 		}
-		linux, err := elf.NewFile(bytes.NewReader(artifacts[wantNames[2]]))
+		linux, err := elf.NewFile(bytes.NewReader(artifacts["sandboxed-agents-linux-amd64"]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +135,7 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 			}
 		}
 		linux.Close()
-		windows, err := pe.NewFile(bytes.NewReader(artifacts[wantNames[3]]))
+		windows, err := pe.NewFile(bytes.NewReader(artifacts["sandboxed-agents-windows-amd64.exe"]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,6 +143,72 @@ func TestReleaseBuildsReproducibleArtifactsWithTaggedVersion(t *testing.T) {
 			t.Fatalf("Windows architecture = %v", windows.Machine)
 		}
 		windows.Close()
+	}
+}
+
+func checkNuGetPackage(t *testing.T, artifacts map[string][]byte) {
+	t.Helper()
+	contents := artifacts["SandboxedAgents.1.0.0-preview.20261003.1.nupkg"]
+	archive, err := zip.NewReader(bytes.NewReader(contents), int64(len(contents)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNames := []string{
+		"SandboxedAgents.nuspec", "[Content_Types].xml", "_rels/.rels",
+		"tools/SHA256SUMS", "tools/command-path.ps1", "tools/install-command.ps1",
+		"tools/remove-command.ps1", "tools/sandboxed-agents-windows-amd64.exe",
+	}
+	if len(archive.File) != len(wantNames) {
+		t.Fatalf("NuGet contents: %v", archive.File)
+	}
+	files := make(map[string][]byte)
+	for i, file := range archive.File {
+		if file.Name != wantNames[i] {
+			t.Fatalf("NuGet entry %d = %q; want %q", i, file.Name, wantNames[i])
+		}
+		reader, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[file.Name], err = io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"SHA256SUMS", "sandboxed-agents-windows-amd64.exe"} {
+		if !bytes.Equal(files["tools/"+name], artifacts[name]) {
+			t.Fatalf("NuGet %s differs from the attested release file", name)
+		}
+	}
+	for _, name := range []string{"command-path.ps1", "install-command.ps1", "remove-command.ps1"} {
+		script, err := os.ReadFile(filepath.Join("..", "..", "build", "nuget", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(files["tools/"+name], bytes.ReplaceAll(script, []byte("\r\n"), []byte("\n"))) {
+			t.Fatalf("NuGet %s differs from its source", name)
+		}
+	}
+	var manifest struct {
+		XMLName  xml.Name `xml:"package"`
+		Metadata struct {
+			ID         string `xml:"id"`
+			Version    string `xml:"version"`
+			Authors    string `xml:"authors"`
+			ProjectURL string `xml:"projectUrl"`
+			Repository struct {
+				Type string `xml:"type,attr"`
+				URL  string `xml:"url,attr"`
+			} `xml:"repository"`
+		} `xml:"metadata"`
+	}
+	if err := xml.Unmarshal(files["SandboxedAgents.nuspec"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	metadata := manifest.Metadata
+	if metadata.ID != "SandboxedAgents" || metadata.Version != "1.0.0-preview.20261003.1" || metadata.Authors != "grauzone" || metadata.ProjectURL != "https://github.com/grauzone-dev/sandboxed-agents" || metadata.Repository.Type != "git" || metadata.Repository.URL != "https://github.com/grauzone-dev/sandboxed-agents" {
+		t.Fatalf("NuGet metadata = %+v", metadata)
 	}
 }
 

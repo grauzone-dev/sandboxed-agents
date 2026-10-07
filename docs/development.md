@@ -379,6 +379,29 @@ These are offline tests: the native ones run in the Windows job of the [offline 
 - **Windows.** `preflight.CheckWindows` takes a `context.Context`, a `platform.Host`, and a `process.Runner` and returns a `Report` with the status of each prerequisite. It also returns the automount root in `Report.AutomountRoot`, which `up` uses to translate a `WORKSPACE` ([Windows workspace tests](#windows-workspace-tests)), and the selected Podman machine for later commands. `preflight.SelectWindowsConnection` applies the same selection rule for commands that run no preflight. The test binary enters the CLI through `cli.RunWithWindowsHost` with a Windows host identity fixture. The tests run the fake `podman`, `ssh`, `ssh-keygen`, and `ssh-keyscan` programs as real processes, not as in-process stubs. These tests are in `windows_preflight_test.go`. None of them verify a live Windows host or a live Podman machine.
 - **Windows `up`.** These tests are in `windows_preflight_test.go` and use a fake Windows host identity, so they run on the Linux and the Windows CI job alike. The `windows-build` fixture passes the real embedded asset hash, and the tests read that hash from `version`. They cover a host without the sandbox, both with an existing and with a missing base image. In each case they check that the preflight's read-only calls come first. Next come the `exists` lookups of the container, the three volumes, and the backup container, the `ps --all --format json` inventory of recorded SSH ports, and the image lookup. Each call after the preflight must start with `--connection` and the machine the preflight selected. The run ends with the three `volume create` calls with the owner label, the `create` call with the real tag, and `start`. When the image is missing, they also check exactly one `podman build` with the real tag, the captured build context, and its removal. A missing and an unknown Podman client version each stop `up` after the preflight's calls, before any sandbox lookup. Usage errors and invalid names are rejected before the preflight, with no Podman call. Every Windows `up` test asserts that `ssh` was never called. The resource limit tests in `resource_limits_test.go` also cover existing sandboxes, owner conflicts, and interrupted updates with the Windows fixture, and check `--connection` and the selected machine on the calls after the preflight that they compare; kept volumes are covered by the Linux `up` tests only.
 
+### NuGet installer tests
+
+The tests in `tools/release/installer_test.go` run the scripts from `build/nuget/` as real PowerShell 7 processes. Each test copies them into a temporary package directory beside a binary and its `SHA256SUMS`, and puts the fake programs of `testutil.NewFakePrograms` first on `PATH`; these also point `LOCALAPPDATA` into the test's temporary directory, so the default install directory lies there. Every test asserts that `podman` was never called. Without `pwsh` on `PATH`, the tests fail on Windows and skip themselves on other operating systems.
+
+The portable tests run on every operating system with placeholder binaries, which they never run. Apart from the `;` refusal, they pass `-NoPathUpdate` and check:
+
+- that the installer copies the verified binary as `sandboxed-agents.exe` to the default directory and to `-InstallDirectory`, and that a second run upgrades it;
+- that an empty or malformed `SHA256SUMS`, one with only the Linux entry, and one with two Windows entries create no install directory, and that a binary that does not match leaves an existing command unchanged and creates no install directory;
+- that both scripts refuse a directory containing `;` without `-NoPathUpdate`, without creating it, and accept it with `-NoPathUpdate`;
+- that removal deletes only the command, keeps other files, and succeeds when run twice.
+
+`TestNuGetWindowsInstallerPreservesRawUserPathWithoutAdministratorRights` runs only on native Windows and changes the real user `PATH` in `HKEY_CURRENT_USER\Environment`. It builds two real commands from `cmd/sandboxed-agents` that report different versions, then runs `tests/nuget/run-user-path.ps1` once each with the `Path` value as a string, as an expandable string, and absent. When the test process is elevated, the launcher starts `tests/nuget/user-path.ps1` with a restricted token built by `tests/nuget/restricted-process.cs`; otherwise it runs it directly. `user-path.ps1` fails when it has administrator rights. It saves the raw `Path` value and its type, or its absence, and restores them in a `finally` block; the launcher does the same around the restricted process. For the two string types, `user-path.ps1` sets a value with unrelated entries, among them `%USERPROFILE%\bin`, an empty entry, and one with surrounding spaces. It checks after each step that the raw value and its type are exactly as expected:
+
+- install to the default directory, a repeated install, and an upgrade, each followed by the installed `version`;
+- a tampered binary over the existing installation, which keeps the upgraded version, and into a new directory, which creates nothing;
+- removal, which keeps an unrelated file in the directory, and a repeated removal;
+- install and removal with `-InstallDirectory`, and with an existing entry for that directory in upper case with a trailing `\`, which the installer keeps and does not add again;
+- install and removal with `-NoPathUpdate`, which leave the value unchanged;
+- a `DWORD` value, which both scripts refuse without changing it, the installation, or the command;
+- a directory containing `;`, refused without `-NoPathUpdate` and installed with it.
+
+Finally it checks that no file outside the install directory was added or changed in `LOCALAPPDATA`.
+
 ### Order of checks
 
 A command declares its checks in `cli.Checks`. The tree runs them in this order and reports the first failure:

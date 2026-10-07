@@ -54,7 +54,7 @@ func TestSecurityDocumentsTheDefaultPodmanOptionsIssuedByUp(t *testing.T) {
 					option += " " + create[index]
 				}
 				if name == "--name" || name == "--label" {
-					continue
+					option = name
 				}
 				if name == "--publish" {
 					parts := strings.Split(option, ":")

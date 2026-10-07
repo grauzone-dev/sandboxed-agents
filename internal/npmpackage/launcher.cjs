@@ -5,6 +5,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
+const { constants } = require('node:os');
 
 const names = {
   'linux/x64': 'sandboxed-agents-linux-amd64',
@@ -81,6 +82,9 @@ if (!installing) {
     console.error(`cannot start the binary: ${result.error.message}`);
     process.exit(1);
   }
-  if (result.signal) process.kill(process.pid, result.signal);
-  else process.exit(result.status);
+  if (result.signal) {
+    const signalNumber = constants.signals[result.signal];
+    process.exitCode = signalNumber ? 128 + signalNumber : 1;
+    process.kill(process.pid, result.signal);
+  } else process.exit(result.status);
 }

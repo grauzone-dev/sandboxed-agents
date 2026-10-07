@@ -2,5 +2,6 @@
 *.mod text eol=lf
 *.yml text eol=lf
 *.sh text eol=lf
+*.ps1 text eol=lf
 /internal/agentcatalog/catalog.json text eol=lf
 /build/context/** text=auto eol=lf

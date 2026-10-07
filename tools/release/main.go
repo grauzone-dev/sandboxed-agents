@@ -108,8 +108,12 @@ func buildPreview() error {
 		if err := os.WriteFile(filepath.Join(dir, release.ChecksumFilename), checksums, 0644); err != nil {
 			return err
 		}
+		if err := release.BuildNuGet(dir, *tag, filepath.Join("build", "nuget")); err != nil {
+			return err
+		}
 	}
-	for _, name := range artifactNames {
+	names := append(artifactNames[:], release.NuGetFilename(*tag))
+	for _, name := range names {
 		first, err := os.ReadFile(filepath.Join(work, "first", name))
 		if err != nil {
 			return err
@@ -122,7 +126,7 @@ func buildPreview() error {
 			return fmt.Errorf("repeated builds differ: %s", name)
 		}
 	}
-	return writeArtifacts(filepath.Join(work, "first"), *output)
+	return writeArtifacts(filepath.Join(work, "first"), *output, names)
 }
 
 func checkOutput(output string) error {
@@ -146,7 +150,7 @@ func checkOutput(output string) error {
 	return nil
 }
 
-func writeArtifacts(source, output string) error {
+func writeArtifacts(source, output string, names []string) error {
 	if err := checkOutput(output); err != nil {
 		return err
 	}
@@ -162,14 +166,14 @@ func writeArtifacts(source, output string) error {
 	if err := os.Chmod(stage, 0755); err != nil {
 		return err
 	}
-	for _, name := range artifactNames {
+	for _, name := range names {
 		contents, err := os.ReadFile(filepath.Join(source, name))
 		if err != nil {
 			return err
 		}
-		mode := os.FileMode(0755)
-		if name == release.ChecksumFilename {
-			mode = 0644
+		mode := os.FileMode(0644)
+		if name == release.LinuxExecutable || name == release.WindowsExecutable {
+			mode = 0755
 		}
 		if err := os.WriteFile(filepath.Join(stage, name), contents, mode); err != nil {
 			return err

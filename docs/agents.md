@@ -2,7 +2,7 @@
 
 An agent is a coding CLI from the agent catalog. `sandboxed-agents agents enable NAME AGENT` installs it into the home volume of the sandbox `NAME` and records it as enabled there, `--version X` installs exactly version `X` and pins the agent to it, and `sandboxed-agents agents login NAME AGENT [WORKFLOW]` runs one of its login workflows there. `sandboxed-agents agents update NAME AGENT` reinstalls the pinned version or moves an agent without a pin to the newest version. `sandboxed-agents agents disable NAME AGENT` removes the agent's command and its record, pin included, and keeps its credentials and cached data. Agents in one sandbox share its user `agent`, its files, and the credentials stored in its home volume.
 
-This page covers `agents enable NAME AGENT [--version X]`, `agents update NAME AGENT [--unpin]`, `agents disable NAME AGENT`, and `agents status NAME AGENT`, of which `agents disable` and `agents status` take no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, `agents run NAME AGENT [ARG...]`, which runs an enabled agent once, and `agents session NAME AGENT [--stop]`, which keeps an enabled agent running in a persistent agent session.
+This page covers `agents enable NAME AGENT [--version X] [--force]`, `agents update NAME AGENT [--unpin] [--force]`, `agents disable NAME AGENT [--force]`, and `agents status NAME AGENT`, of which `agents status` takes no options, `agents login NAME AGENT [WORKFLOW]`, which signs in to an enabled agent, `up NAME --agents LIST`, which enables agents as part of `up`, the `AGENTS` column of `list`, `agents run NAME AGENT [ARG...]`, which runs an enabled agent once, and `agents session NAME AGENT [--stop]`, which keeps an enabled agent running in a persistent agent session.
 
 ## Agent catalog
 
@@ -73,7 +73,7 @@ What `--version X` does depends on the agent's state:
 
 In each case the command prints `Agent AGENT is enabled (version X).` followed by `Pin: X.` and exits with status 0.
 
-`agents enable --version` on an enabled agent does not check for a running [agent session](#keep-an-agent-running-in-a-session) of the agent, and replacing the installed version does not end that session. Refusing while a session runs, and `--force`, come with #46.
+Replacing the installed version, the second row, is refused while an [agent session](#keep-an-agent-running-in-a-session) of the agent is running; `--force` ends that session first ([Protect a running agent session](#protect-a-running-agent-session)). The other two rows replace nothing, are not refused, and need no `--force`.
 
 ## Update an agent
 
@@ -95,7 +95,7 @@ It reads the installed version as `agents enable` does, prints `Agent AGENT is u
 
 On an agent that is not enabled, `agents update` installs nothing, exits with status 1, and names `sandboxed-agents agents enable NAME AGENT`. The manager reads the selection for this check while it holds the [manager lock](#manager-lock), so an `agents disable` that finishes first is seen. On a home volume where no agent was ever enabled, it refuses without taking the lock and creates no file. Otherwise `agents update` refuses in the same cases and order as `agents enable` ([Refusals](#refusals)).
 
-`agents update` does not check for a running [agent session](#keep-an-agent-running-in-a-session) of the agent, and reinstalling does not end that session. Refusing while a session runs, and `--force`, come with #46.
+`agents update`, with or without `--unpin`, is refused while an [agent session](#keep-an-agent-running-in-a-session) of the agent is running; `--force` ends that session first ([Protect a running agent session](#protect-a-running-agent-session)).
 
 ### When an installation fails
 
@@ -121,7 +121,43 @@ When the agent is not enabled, `agents disable` changes nothing, prints `Agent A
 
 If removing the command or writing the selection fails, `agents disable` reports the failure and exits with status 1. The two steps are not undone together: when writing the selection fails after the command was removed, the agent stays in the selection without its command. Run `agents disable` again to finish the removal.
 
-`agents disable` does not check for a running [agent session](#keep-an-agent-running-in-a-session) of the agent. Refusing while a session runs, and `--force`, come with #46.
+`agents disable` on an enabled agent is refused while an [agent session](#keep-an-agent-running-in-a-session) of the agent is running; `--force` ends that session first ([Protect a running agent session](#protect-a-running-agent-session)).
+
+## Protect a running agent session
+
+```sh
+sandboxed-agents agents disable NAME AGENT --force
+sandboxed-agents agents update NAME AGENT [--unpin] --force
+sandboxed-agents agents enable NAME AGENT --version X --force
+```
+
+An [agent session](#keep-an-agent-running-in-a-session) ends with its agent, so a change that removes or replaces the agent's installation would pull the agent out from under its own work. Three changes are therefore refused while a session of the agent concerned is running:
+
+- `agents disable NAME AGENT` on an enabled agent;
+- `agents update NAME AGENT`, with or without `--unpin`;
+- `agents enable NAME AGENT --version X` on an enabled agent whose installed version is not `X`.
+
+The refusal names the running session, for example `agent session sandboxed-agents-claude of claude is running; end it first, or repeat the command with --force to end it before the change`. The command exits with status 1 and changes neither the installation, the agent selection, the pin, nor the session.
+
+With `--force`, the command still asks the manager for the agent's running session. When one runs, it ends that session, and with it the agent running in it, prints `Ended the agent session sandboxed-agents-AGENT of AGENT before changing its installation.`, and then completes the disable, the update, or the installation of `X`. Afterwards [`agents status`](#show-an-agents-status) reports `Agent session: not running.` When no session of the agent runs, `--force` changes nothing about the command; that includes a session that ends on its own between the query and the attempt to end it, which the output then does not name. `--force` takes no value and may be given at most once; given twice, it is refused with `option --force is given more than once`, before any Podman call. `agents enable --help`, `agents update --help`, and `agents disable --help` describe it.
+
+When the session query fails, or ending the session fails or cannot be confirmed, the command reports the failure, exits with status 1, and changes neither the installation, the agent selection, nor the pin. Ending the session is not undone: when the disable, the update, or the installation fails after `--force` ended the session, the session stays ended, and the installation and the selection are left as described in [When an installation fails](#when-an-installation-fails) and [Disable an agent](#disable-an-agent).
+
+Only the agent's own session counts. A session of another agent in the same sandbox does not make any of the three commands refuse, and it keeps running.
+
+Changes that replace nothing are not refused, need no `--force`, and leave a running session of the agent running:
+
+- `agents enable NAME AGENT` on an agent that is not enabled, which installs it;
+- `agents enable NAME AGENT` without `--version` on an enabled agent, which runs no installation;
+- `agents enable NAME AGENT --version X` on an enabled agent that has `X` installed, which runs no installation and at most sets the pin to `X`.
+
+`--force` on any of these has no effect and is no error: the command behaves as without it and ends no session.
+
+The session guard is the last step of the [order of checks](development.md#order-of-checks), directly before the change, so every other refusal in [Refusals](#refusals) is reported first. The manager's worker runs it while it holds the [manager lock](#manager-lock), after it has read the selection and, for `agents enable --version`, the installed version, so no session of the agent can start between the guard and the change. It reads the sessions from the tmux server of `agent`, as the [session query](#session-query) does. When that read fails, the command fails and changes nothing, with or without `--force`.
+
+When the manager does not answer, the three commands fail at step 7, before the session guard, as every `agents ...` command does: the message says that the manager does not answer and names `sandboxed-agents check NAME` and `sandboxed-agents restart NAME`. `--force` does not change that. Proceeding without knowing the running sessions is for `stop`, `restart`, `remove`, and sandbox `update` only ([Running agent sessions](sandboxes.md#running-agent-sessions)).
+
+Attaching to a running session takes no lock, so `agents session NAME AGENT` attaches to the session of `AGENT` also while an installation change of another agent holds the manager lock.
 
 ## How the request reaches the manager
 
@@ -134,16 +170,16 @@ podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agen
 The manager answers when this call exits with status 0 within 30 seconds and prints one line `sandboxed-agents-manager VERSION`. The executable then passes the request on with the call for its command:
 
 ```sh
-podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents enable AGENT [--version X]
-podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents update NAME AGENT [--unpin]
-podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents disable AGENT
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents enable AGENT [--version X] [--force]
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents update NAME AGENT [--unpin] [--force]
+podman exec --user=0:0 sandboxed-agents.GROUP.NAME /usr/local/bin/sandboxed-agents-manager agents disable AGENT [--force]
 ```
 
 The manager's output and the output of npm pass through to your terminal. `NAME` reaches the manager with `agents update` only for the recovery command in its not-enabled message, as with `agents run`.
 
 On Windows, the version check and the request also name the [selected Podman machine](sandboxes.md#target-on-windows) with `--connection`.
 
-The manager does not install or remove an agent as root. It starts its own trusted worker, the same manager program from the image, with the identity of the user `agent`: UID 1000, GID 1000, and no supplementary groups. The worker gets a fixed environment (`HOME`, `USER`, `LOGNAME`, `SHELL`, and a `PATH` that starts with `/home/agent/.local/bin`) and inherits none of root's. The one addition is `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers`, present only when the manager's own environment holds exactly that value, as in an image with the `playwright` toolchain ([Images](images.md#toolchain-image-contents)); no other value is passed on. Every process the manager starts for an agent, from npm to the agent itself in a run or a session, starts from this environment. It reads the home volume only after this change of identity. The worker receives the request's arguments unchanged, `NAME`, `--version X`, and `--unpin` included. It takes the [manager lock](#manager-lock) and reads the selection. For `agents enable` and `agents update`, it then runs npm and every other command of the installation and writes the selection; for `agents disable`, it removes the managed command and writes the selection. All of this runs as `agent`, so every file the installation creates in the home volume belongs to `agent`.
+The manager does not install or remove an agent as root. It starts its own trusted worker, the same manager program from the image, with the identity of the user `agent`: UID 1000, GID 1000, and no supplementary groups. The worker gets a fixed environment (`HOME`, `USER`, `LOGNAME`, `SHELL`, and a `PATH` that starts with `/home/agent/.local/bin`) and inherits none of root's. The one addition is `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers`, present only when the manager's own environment holds exactly that value, as in an image with the `playwright` toolchain ([Images](images.md#toolchain-image-contents)); no other value is passed on. Every process the manager starts for an agent, from npm to the agent itself in a run or a session, starts from this environment. It reads the home volume only after this change of identity. The worker receives the request's arguments unchanged, `NAME`, `--version X`, `--unpin`, and `--force` included. It takes the [manager lock](#manager-lock) and reads the selection. Where the change removes or replaces the installation, it runs the [session guard](#protect-a-running-agent-session) and, with `--force`, ends the agent's session. For `agents enable` and `agents update`, it then runs npm and every other command of the installation and writes the selection; for `agents disable`, it removes the managed command and writes the selection. All of this runs as `agent`, so every file the installation creates in the home volume belongs to `agent`.
 
 While the manager runs as root, it starts no program and no script from the home volume or the workspace, and it takes no command or argument from data stored there. A selection file or an npm configuration in the home volume that names a command can only make that command run as UID and GID 1000.
 
@@ -161,7 +197,7 @@ The manager serializes changes to the agent installations with one lock, the fil
 
 `agents enable`, `agents update`, and `agents disable` hold the lock from before they read the selection until their change is complete, also when the change only sets or removes a pin. One exception keeps `agents disable` from creating files: when the lock file does not exist yet, it first reads the selection without the lock, and if the agent is not listed there, it reports that nothing was to do and stops. A second `agents enable`, `agents update`, or `agents disable` that takes the lock on the same sandbox, for the same or another agent, waits until the first has released it. Two concurrent `agents enable` calls for different agents therefore leave both agents in the selection.
 
-Starting an [agent session](#keep-an-agent-running-in-a-session) and ending one with `agents session NAME AGENT --stop` take the same lock. A session start or `--stop` issued while an installation change holds it does not run until the lock is released. Attaching to a running session takes no lock.
+Starting an [agent session](#keep-an-agent-running-in-a-session) and ending one with `agents session NAME AGENT --stop` take the same lock. A session start or `--stop` issued while an installation change holds it does not run until the lock is released. The [session guard](#protect-a-running-agent-session) of `agents disable`, `agents update`, and `agents enable --version`, and the end of a session with `--force`, run while the change holds the lock. Attaching to a running session takes no lock, also while an installation change holds it.
 
 ## Enable agents with `up`
 
@@ -219,7 +255,7 @@ Agent claude is not enabled.
 Agent session: not running.
 ```
 
-The session field of an agent that is not enabled comes from the same query, so it reads `running` when the agent's session still runs after `agents disable`. When the manager cannot read the sessions, `agents status` reports the failure and exits with status 1.
+The session field of an agent that is not enabled comes from the same query, so it reads `running` when a session of the agent still runs although the agent is not enabled. When the manager cannot read the sessions, `agents status` reports the failure and exits with status 1.
 
 The sign-in state comes from the agent's status probe in the catalog. The manager's worker runs the installed command `/home/agent/.local/bin/COMMAND` with the probe's arguments as the user `agent`, never as root, and with the same fixed environment as an installation. It reads the probe's standard output and does not show it; the probe's standard error is discarded. When the output is one JSON object whose field named by the probe is `true`, the state is `signed in`; when it is `false`, the state is `not signed in`. This holds whatever status the command exits with. The state is `unknown` when:
 
@@ -287,13 +323,14 @@ The agent's command decides where it stores what you sign in with. Because its h
 
 | Step | Refusal |
 | --- | --- |
-| 1. Usage and names | An invalid controller group, a usage error, or an invalid sandbox name. Usage errors include `--version` without a value or given twice, a version that is not exact, which is refused with `invalid agent version "X"; use an exact version such as 1.2.3`, and `--unpin` given twice. An unknown agent name lists the valid agent names. A catalog name whose agent is not delivered yet counts as unknown and is not listed; in this version all four agents are delivered. For `agents login`, a missing workflow name for an agent with more than one login workflow and an unknown workflow name list the agent's workflow names. None of these calls Podman. |
+| 1. Usage and names | An invalid controller group, a usage error, or an invalid sandbox name. Usage errors include `--version` without a value or given twice, a version that is not exact, which is refused with `invalid agent version "X"; use an exact version such as 1.2.3`, `--unpin` given twice, and `--force` given twice. An unknown agent name lists the valid agent names. A catalog name whose agent is not delivered yet counts as unknown and is not listed; in this version all four agents are delivered. For `agents login`, a missing workflow name for an agent with more than one login workflow and an unknown workflow name list the agent's workflow names. None of these calls Podman. |
 | 3. Sandbox existence | An unknown sandbox, also one of another controller group. A sandbox of which only volumes remain is refused with a message naming `sandboxed-agents up NAME`, which adopts the volumes. |
 | 4. Owner | The container, one of the volumes, or the backup container has a missing or different owner label. The message names each such Podman object and points to Podman, also when the container carries the current owner and only a volume does not ([Owners and backup containers](sandboxes.md#owners-and-backup-containers)). |
 | 5. Interrupted update | A backup container with the current owner exists. The message names `sandboxed-agents update NAME`. |
 | 6. Running state | The sandbox is stopped. The message names `sandboxed-agents start NAME`, and nothing starts on its own. |
 | 7. Preconditions | The manager does not answer. The message says so and names `sandboxed-agents check NAME` for diagnosis and `sandboxed-agents restart NAME` as the next step. The command issues no further call into the sandbox. For `agents login` and `agents update`, the agent is not enabled in the sandbox; the message names `sandboxed-agents agents enable NAME AGENT`. `agents login` asks the manager for this before its workflow call; `agents update` makes no such query, and the manager checks it in the update call itself. |
 | 8. Terminal | `agents login` without an interactive terminal. This is reported only when the manager answers and the agent is enabled. |
+| 9. Session guard | Without `--force`, `agents disable`, `agents update`, and an `agents enable --version` that replaces the installed version, while a session of the agent is running. The message names the session and `--force` ([Protect a running agent session](#protect-a-running-agent-session)). |
 
 `sandboxed-agents check NAME` reports whether the manager answers, together with the rest of the sandbox's state ([Check a sandbox](check.md)). `restart NAME` is available ([Stop, start, and restart a sandbox](sandboxes.md#stop-start-and-restart-a-sandbox)).
 
@@ -342,7 +379,7 @@ Starting a session and attaching to one need an interactive terminal on standard
 
 ### End a session
 
-`agents session NAME AGENT --stop` ends the agent's session, which ends the agent running in it. It prints `Ended the agent session of AGENT.` and exits with status 0. When no session of the agent is running, it prints `No agent session of AGENT is running; nothing to do.` and exits with status 0. The same holds when the agent exits on its own while `--stop` is ending its session. When the agent is not enabled, `--stop` prints `Agent AGENT is not enabled; nothing to do.` and exits with status 0. This does not mean that no session runs: `agents disable` does not end a running session (refusing while one runs comes with #46), and `--stop` on an agent that is not enabled leaves such a session running. [`agents status`](#show-an-agents-status) still reports it. `--stop` needs no terminal, so a script can call it.
+`agents session NAME AGENT --stop` ends the agent's session, which ends the agent running in it. It prints `Ended the agent session of AGENT.` and exits with status 0. When no session of the agent is running, it prints `No agent session of AGENT is running; nothing to do.` and exits with status 0. The same holds when the agent exits on its own while `--stop` is ending its session. When the agent is not enabled, `--stop` prints `Agent AGENT is not enabled; nothing to do.` and exits with status 0. This does not mean that no session runs: `--stop` on an agent that is not enabled leaves a running session of that agent running, and [`agents status`](#show-an-agents-status) still reports it. `--stop` needs no terminal, so a script can call it.
 
 ### Identity
 
@@ -459,7 +496,7 @@ Offline tests cover the behavior on this page as follows ([Test seams](developme
 - the exact-version check shared by host and manager: plain versions, prereleases, and build metadata accepted; dist-tags, ranges, partial versions, a `v` prefix, leading zeros, empty identifiers, surrounding whitespace, and `file:` and `npm:` specifiers refused;
 - `agents enable --version` and `agents update [--unpin]` at the CLI boundary against a fake `podman`:
   - `--version X`, `--version=X`, and a version with a prerelease and build metadata forwarded to the manager as `--version X`, and `agents update` forwarded with the sandbox name and `--unpin`;
-  - on the Linux and the Windows target, `--version` without a value, empty, or given twice, `--unpin` given twice or with a value, an option of the other command, `--force`, an extra argument, and a version that is not exact, each refused before any Podman call;
+  - on the Linux and the Windows target, `--version` without a value, empty, or given twice, `--unpin` given twice or with a value, an option of the other command, an extra argument, and a version that is not exact, each refused before any Podman call;
   - the pin line of `agents enable`, `agents update`, and `agents status` and the removed pin named by `agents disable` passed through unchanged, and an `agents update` of an agent that is not enabled exiting non-zero with the manager's message naming `agents enable NAME AGENT`;
   - the help of both commands;
 - the manager's pin handling with injected process functions:
@@ -479,3 +516,27 @@ No test covers a failure while writing the selection after the command was remov
 The manager lock uses the native file lock of the platform the tests run on, so these manager tests also run on Windows; the manager itself ships only for Linux.
 
 The process runner has its own tests on native Linux only. Run without privileges, a test asks for a different UID and GID and checks that the start fails instead of running under the caller's identity. Run as root, it checks that the process runs as UID and GID 1000 with no supplementary groups. Both checks also run with process group cleanup. Neither is a change of identity inside a sandbox. Further tests start a test program that leaves a child process holding its output open. When the run is canceled, or when the program exits while the child keeps running, they check that the runner returns within the bound instead of waiting for the child's output, and, polling briefly, that the child no longer runs afterwards. In a third case the child deliberately moves to a process group of its own before the run is canceled, so the cleanup does not kill it; this test checks only that the runner still returns within the bound. These test programs stand in for a probe; they are not an agent. No test runs npm against the registry, installs a real pinned version, starts a real container, runs a real agent's status probe, removes an agent from a real sandbox, signs in to an agent, or starts a real tmux session. Nothing on this page has been confirmed on a live host. One real login per agent is a manual check that comes with #64. In the [live suite](live-suite.md), the identities in a real sandbox come with #24, and a real `agents enable` with an npm install comes with #68; neither exists yet. No live test runs `up --agents` or reads the `AGENTS` column of a real sandbox.
+
+### Session guard tests
+
+Offline tests cover [Protect a running agent session](#protect-a-running-agent-session) at the two seams of this page.
+
+The manager with injected process functions, in `internal/manager/agent_changes_test.go` and `internal/manager/agent_change_lock_test.go`:
+
+- `agents disable`, `agents update` with and without `--unpin`, and a replacing `agents enable --version` exit non-zero while the agent's session runs, name the session, issue only the session query, and leave every home file, the installation, the selection, and the pin included, unchanged byte for byte;
+- with `--force`, each of the four ends the session with one `kill-session` of `=sandboxed-agents-AGENT`, names it, runs npm only after the session has ended (and none for `agents disable`), and starts every process as UID and GID 1000; `agents status` afterwards reports `Agent session: not running.`;
+- with `--force`, a session query that cannot start, exits non-zero, or lists an unknown agent, and an end of the session that cannot start, exits non-zero, or reports the session absent while it still runs or cannot be confirmed, each make the four exit non-zero with no output and every home file unchanged;
+- `agents enable` without `--version`, with `--force` alone, and with the installed version as `--version`, with and without `--force` in either order, start no process, so no session query, no end of a session, and no installation, and leave every home file unchanged; on an agent without a pin, `--version` with the installed version sets the pin without a process; on an agent that is not enabled, `agents enable` with and without `--force` installs once without a session query and reports `Pin: none.`;
+- `agents disable`, `agents update`, and a replacing `agents enable --version`, with and without `--force`, proceed while only another agent's session runs, end no session, do not name it, and `agents status` of the other agent still reports its session as running and its pin unchanged;
+- `agents session` attaches to a running session, as UID and GID 1000, while an `agents enable` of another agent holds the manager lock, and the installation finishes only after its release;
+- while an installation of another agent or the start of the agent's session holds the manager lock, the four commands send no session query and do not complete; after the release they refuse and name the session, and the agent's version, pin, and session stay as they were;
+- `agents enable --version --force 1.2.3` is refused as an invalid version, with no process and no file.
+
+The CLI boundary against a fake `podman`, in `internal/cli/agent_changes_test.go`:
+
+- with the `sandbox-host` and the `windows` fixture, `--force` on `agents enable` with and without `--version`, `agents disable`, and `agents update` with `--unpin` before or after it reaches the manager call, `--version=X` as `--version X`, and the manager's line about the ended session is passed through; with the `windows` fixture the call carries `--connection` and the selected machine;
+- with both fixtures, a manager that does not answer makes `agents disable`, `agents update`, and `agents enable --version`, with and without `--force`, exit non-zero naming `check agent01` and `restart agent01`, with the `version` query as the last Podman call;
+- with the `sandbox-host` fixture, a refusal from the manager that names the running session is passed through with a non-zero exit status;
+- with both fixtures, a second `--force`, `--force` with a second `--version`, `--version` followed by `--force`, `--force=true` or a value after `--force` on `agents disable`, a second `--unpin` beside `--force`, and `--force` on `agents status` are usage errors with no Podman call.
+
+The `windows` fixture is a fake Windows host identity, so these CLI tests are not a run on native Windows. The manager tests and the CLI tests above passed in a local offline run on Linux. These are offline tests only: no test ends a real agent session, runs a real tmux, or changes an installation in a real sandbox, and nothing about the session guard has been confirmed on a live host.

@@ -223,7 +223,7 @@ func TestEnableAndDisableAgentsRejectInvalidUsageBeforePodman(t *testing.T) {
 					{"agents"}, {"agents", operation}, {"agents", operation, "agent01"},
 					{"agents", operation, ".bad", "codex"}, {"agents", operation, "--bad", "codex"},
 					{"agents", operation, "agent01", "codex", "extra"},
-					{"agents", operation, "agent01", "codex", "--force"},
+					{"agents", operation, "agent01", "codex", "--force", "--force"},
 					{"agents", operation, "agent01", "codex", "--bad"},
 				} {
 					t.Run(fixture+"/"+strings.Join(args, " "), func(t *testing.T) {

@@ -67,9 +67,9 @@ func TestAgentVersionOptionsRejectInvalidUsageBeforePodman(t *testing.T) {
 			{"enable", "--version"}, {"enable", "--version="}, {"enable", "--version", "--unpin"},
 			{"enable", "--version", "1.2.3", "--version", "2.0.0"},
 			{"enable", "--version=1.2.3", "--version=1.2.3"},
-			{"enable", "--unpin"}, {"enable", "--force"}, {"enable", "--version", "1.2.3", "extra"},
+			{"enable", "--unpin"}, {"enable", "--force", "--force"}, {"enable", "--version", "1.2.3", "extra"},
 			{"update", "--unpin", "--unpin"}, {"update", "--unpin=true"}, {"update", "--unpin", "extra"},
-			{"update", "--version", "1.2.3"}, {"update", "--force"},
+			{"update", "--version", "1.2.3"}, {"update", "--force", "--force"},
 		} {
 			t.Run(fixture+"/"+strings.Join(args, " "), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)

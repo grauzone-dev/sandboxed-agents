@@ -14,11 +14,13 @@ func agentCommand(subcommand string, group *string, run process.Runner, catalog 
 	ctx := context.Background()
 	var request *sandbox.AgentCommand
 	var help Handler
-	if subcommand == "enable" || subcommand == "update" {
+	if subcommand == "enable" || subcommand == "update" || subcommand == "disable" {
 		help = func(invocation *Invocation) error {
 			text := agentEnableHelp
 			if subcommand == "update" {
 				text = agentUpdateHelp
+			} else if subcommand == "disable" {
+				text = agentDisableHelp
 			}
 			_, err := fmt.Fprint(invocation.Stdout, text)
 			return err
@@ -55,11 +57,12 @@ func agentCommand(subcommand string, group *string, run process.Runner, catalog 
 
 func agentOptions(subcommand string, args []string) ([]string, error) {
 	var options []string
+	versionGiven, unpinGiven, forceGiven := false, false, false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case subcommand == "enable" && (arg == "--version" || strings.HasPrefix(arg, "--version=")):
-			if len(options) != 0 {
+			if versionGiven {
 				return nil, fmt.Errorf(agentVersionDuplicateMessage)
 			}
 			version := strings.TrimPrefix(arg, "--version=")
@@ -76,12 +79,20 @@ func agentOptions(subcommand string, args []string) ([]string, error) {
 			if !agentcatalog.IsExactVersion(version) {
 				return nil, fmt.Errorf(agentVersionInvalidFormat, version)
 			}
-			options = []string{"--version", version}
+			versionGiven = true
+			options = append(options, "--version", version)
 		case subcommand == "update" && arg == "--unpin":
-			if len(options) != 0 {
+			if unpinGiven {
 				return nil, fmt.Errorf(agentUnpinDuplicateMessage)
 			}
-			options = []string{"--unpin"}
+			unpinGiven = true
+			options = append(options, "--unpin")
+		case (subcommand == "enable" || subcommand == "disable" || subcommand == "update") && arg == "--force":
+			if forceGiven {
+				return nil, fmt.Errorf(agentForceDuplicateMessage)
+			}
+			forceGiven = true
+			options = append(options, "--force")
 		default:
 			return nil, unexpectedArgument(arg)
 		}

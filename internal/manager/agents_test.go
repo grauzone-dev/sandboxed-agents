@@ -252,7 +252,7 @@ func TestEnableFailureNeverRecordsAgent(t *testing.T) {
 }
 
 func TestInvalidAgentWorkStartsNoProcessOrHomeWrites(t *testing.T) {
-	for _, args := range [][]string{{"agents"}, {"agents", "enable"}, {"agents", "disable"}, {"agents", "enable", "unknown"}, {"agents", "disable", "unknown"}, {"agents", "enable", "codex", "extra"}, {"agents", "disable", "codex", "extra"}, {"agents", "disable", "codex", "--force"}} {
+	for _, args := range [][]string{{"agents"}, {"agents", "enable"}, {"agents", "disable"}, {"agents", "enable", "unknown"}, {"agents", "disable", "unknown"}, {"agents", "enable", "codex", "extra"}, {"agents", "disable", "codex", "extra"}, {"agents", "disable", "codex", "--force", "--force"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			home := t.TempDir()
 			app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {

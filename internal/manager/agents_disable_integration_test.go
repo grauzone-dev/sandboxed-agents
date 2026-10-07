@@ -18,7 +18,7 @@ func TestDisableSelectionIsSharedWithListStatusLoginAndRun(t *testing.T) {
 	writeInstalledPackage(t, home, "@github/copilot", "4.5.6")
 	requests := []process.Request{}
 	app := manager.NewWithOptions("test", func(_ context.Context, request process.Request) (int, error) {
-		if request.Name == "/usr/bin/tmux" {
+		if isSessionListRequest(request) {
 			return 0, nil
 		}
 		requests = append(requests, request)

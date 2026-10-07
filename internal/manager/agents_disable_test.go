@@ -44,7 +44,10 @@ func TestDisableRemovesOnlyManagedCommandAndWholeSelectionEntry(t *testing.T) {
 			}
 			commandPath := filepath.Join(home, ".local/bin", test.command)
 			before := homeFiles(t, home, commandPath, selectionPath)
-			app = manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
+			app = manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+				if isSessionListRequest(r) {
+					return 0, nil
+				}
 				t.Error("disable started a package command")
 				return 1, nil
 			}, options)
@@ -113,6 +116,9 @@ func TestEnableAfterDisableInstallsThenCurrentVersion(t *testing.T) {
 			version := "1.2.3"
 			installs := 0
 			app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+				if isSessionListRequest(r) {
+					return 0, nil
+				}
 				if r.Name != "/usr/bin/npm" || r.Args[len(r.Args)-1] != test.pkg+"@latest" {
 					t.Fatalf("installation=%+v", r)
 				}
@@ -148,7 +154,10 @@ func TestRootDisableLaunchesTrustedWorkerBeforeHomeAccess(t *testing.T) {
 	writeHomeFile(t, home, ".local/bin/codex", "managed", 0700)
 	writeHomeFile(t, home, "evil", "preserved", 0700)
 	before := homeFiles(t, home)
-	worker := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
+	worker := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+		if isSessionListRequest(r) {
+			return 0, nil
+		}
 		t.Error("disable worker started a process")
 		return 1, nil
 	}, agentOptions(home))
@@ -186,7 +195,14 @@ func TestDisableWaitsForConcurrentEnableBeforeReadingSelection(t *testing.T) {
 			close(release)
 		}
 	}()
-	app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
+	app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+		if isSessionListRequest(r) {
+			return 0, nil
+		}
+		if r.Name != "/usr/bin/npm" || r.Args[len(r.Args)-1] != "@openai/codex@latest" {
+			t.Errorf("unexpected installation: %+v", r)
+			return 1, nil
+		}
 		close(started)
 		<-release
 		writeInstalledPackage(t, home, "@openai/codex", "1.2.3")
@@ -308,7 +324,10 @@ func TestDisableInvalidSelectionAndFilesystemErrorsPreserveHomeData(t *testing.T
 				}
 			}
 			before := homeFiles(t, home)
-			app := manager.NewWithOptions("test", func(context.Context, process.Request) (int, error) {
+			app := manager.NewWithOptions("test", func(_ context.Context, r process.Request) (int, error) {
+				if setup == "command directory" && isSessionListRequest(r) {
+					return 0, nil
+				}
 				t.Error("disable started a process")
 				return 1, nil
 			}, agentOptions(home))
@@ -335,7 +354,7 @@ func TestDisableUnlinksManagedSymlinkAndPreservesItsTarget(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	before := homeFiles(t, home, commandPath, filepath.Join(home, ".local/state/sandboxed-agents/selection.json"))
-	app := manager.NewWithOptions("test", nil, agentOptions(home))
+	app := manager.NewWithOptions("test", emptyAgentSessions(t), agentOptions(home))
 	if status, _, diagnostic := runAgentCommand(app, "disable", "codex"); status != 0 {
 		t.Fatal(diagnostic)
 	}
@@ -350,7 +369,7 @@ func TestDisableUnlinksManagedSymlinkAndPreservesItsTarget(t *testing.T) {
 func TestDisableMissingManagedCommandStillRemovesSelectionEntry(t *testing.T) {
 	home := t.TempDir()
 	writeHomeFile(t, home, ".local/state/sandboxed-agents/selection.json", `{"codex":{"version":"1.2.3"}}`, 0600)
-	app := manager.NewWithOptions("test", nil, agentOptions(home))
+	app := manager.NewWithOptions("test", emptyAgentSessions(t), agentOptions(home))
 	if status, _, diagnostic := runAgentCommand(app, "disable", "codex"); status != 0 {
 		t.Fatal(diagnostic)
 	}
@@ -405,6 +424,21 @@ func TestDisableCanceledWhileWaitingForManagerLockLeavesHomeUnchanged(t *testing
 	}
 	if !reflect.DeepEqual(before, homeFiles(t, home)) {
 		t.Fatal("canceled disable changed home")
+	}
+}
+
+func isSessionListRequest(r process.Request) bool {
+	return r.Name == "/usr/bin/tmux" && reflect.DeepEqual(r.Args, []string{"-L", "sandboxed-agents", "-f", "/dev/null", "list-sessions", "-F", "#{session_name}"})
+}
+
+func emptyAgentSessions(t *testing.T) process.Runner {
+	t.Helper()
+	return func(_ context.Context, r process.Request) (int, error) {
+		if !isSessionListRequest(r) {
+			t.Errorf("unexpected process: %+v", r)
+			return 1, nil
+		}
+		return 0, nil
 	}
 }
 

@@ -23,7 +23,15 @@ func installerFixture(t *testing.T, binary []byte) (string, string, *testutil.Fa
 		t.Skip("PowerShell 7 is required for NuGet installer process tests")
 	}
 	fake := testutil.NewFakePrograms(t)
-	packageDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		localAppData := os.Getenv("LOCALAPPDATA")
+		parent, err := filepath.EvalSymlinks(filepath.Dir(localAppData))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("LOCALAPPDATA", filepath.Join(parent, filepath.Base(localAppData)))
+	}
+	packageDir := installerTempDir(t)
 	for _, name := range []string{"install-command.ps1", "remove-command.ps1", "command-path.ps1"} {
 		contents, err := os.ReadFile(filepath.Join("..", "..", "build", "nuget", name))
 		if err != nil {
@@ -35,6 +43,19 @@ func installerFixture(t *testing.T, binary []byte) (string, string, *testutil.Fa
 	}
 	writeInstallerBinary(t, packageDir, binary)
 	return pwsh, packageDir, fake
+}
+
+func installerTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		canonical, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return canonical
+	}
+	return dir
 }
 
 func TestNuGetInstallerUpgradesAndRemovalKeepsUnrelatedFiles(t *testing.T) {
@@ -211,8 +232,8 @@ func TestNuGetWindowsInstallerPreservesRawUserPathWithoutAdministratorRights(t *
 	if runtime.GOOS != "windows" {
 		t.Skip("native Windows user registry test")
 	}
-	first := filepath.Join(t.TempDir(), "first.exe")
-	upgrade := filepath.Join(t.TempDir(), "upgrade.exe")
+	first := filepath.Join(installerTempDir(t), "first.exe")
+	upgrade := filepath.Join(installerTempDir(t), "upgrade.exe")
 	for _, build := range []struct{ path, version string }{{first, "v1.0.0-preview.20261007.1"}, {upgrade, "v1.0.0-preview.20261007.2"}} {
 		command := exec.Command("go", "build", "-ldflags=-X main.version="+build.version, "-o", build.path, "./cmd/sandboxed-agents")
 		command.Dir = filepath.Join("..", "..")

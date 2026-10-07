@@ -85,6 +85,18 @@ jobs:
           printf 'sandboxed-agents %s\nassets %s\n' "$RELEASE_TAG" "$asset_hash" > .scratch/expected-version.txt
           cmp .scratch/expected-version.txt .scratch/version.txt
           (cd .scratch/preview && sha256sum -c SHA256SUMS)
+      - name: Verify the installed npm command
+        run: |
+          package_version="${RELEASE_TAG#v}"
+          npm install --offline --global --prefix "$PWD/.scratch/npm-install" \
+            --cache "$PWD/.scratch/npm-install/cache" --no-audit --no-fund \
+            "$PWD/.scratch/preview/sandboxed-agents-$package_version.tgz"
+          if [ "$RUNNER_OS" = Windows ]; then
+            .scratch/npm-install/sandboxed-agents.cmd version > .scratch/npm-version.txt
+          else
+            .scratch/npm-install/bin/sandboxed-agents version > .scratch/npm-version.txt
+          fi
+          cmp .scratch/version.txt .scratch/npm-version.txt
       - run: |
           go test -timeout "${{ matrix.test_timeout }}" -json ./... | tee .scratch/offline-tests.jsonl
           go vet ./...

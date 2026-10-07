@@ -141,6 +141,9 @@ The protected host paths are:
 | System temporary directory, where `build` and `up` write every build context | `$TMPDIR`, or `/tmp` when it is not set | the directory Windows reports as temporary, from `TMP`, `TEMP`, or `USERPROFILE`, in that order, otherwise the Windows directory |
 | `/tmp` | always, also when `$TMPDIR` names another directory | not protected |
 | The SSH directory | `.ssh` in your home directory, `$HOME` | `.ssh` in your user profile directory, `%USERPROFILE%` |
+| The npm launcher | `launcher.cjs` of the installed [npm package](releases.md#npm-package) | the same |
+| The npm shims | none: npm creates no shims on Linux | the `sandboxed-agents.cmd` and `sandboxed-agents.ps1` shims that npm creates for the command |
+| The npm launch link | the `sandboxed-agents` link that npm creates for the command | the `sandboxed-agents` entry that npm creates for the command beside the shims |
 
 Each protected host path is resolved like the workspace, so a workspace that reaches one through a symlink or, on Windows, a junction, and a protected host path that is itself such a link into the workspace, are refused. A protected host path that does not exist yet, such as host state before its first use, stays protected, also when a link on its path, such as a dangling symlink or a junction in place of one of its parents, points it into the workspace. Your home directory contains `.ssh` and is therefore refused, and so is the root that holds it: `/` on Linux, and on Windows the root of its drive, such as `C:\`.
 
@@ -155,7 +158,7 @@ These searches fail closed. On Linux, when the executable has more than one hard
 
 The guards compare the protected host paths themselves, not the files beneath them. A file inside a protected directory, such as `~/.ssh`, host state, or the temporary directory, that shares a hard link with a file in the workspace is not detected, and neither is a symlink or junction inside a protected directory that points into the workspace. A hard-linked file is the same file in both places, so agents read and change it directly through the workspace. Host programs that follow such a symlink read or write workspace content, which agents can read and change. The guards also check the file system only when `up` is given `WORKSPACE`; a link created afterwards is not detected.
 
-Later Stories add protected host paths, such as the npm launcher and its shims (#61).
+The npm rows apply when the command runs through the launcher of the npm package; the executable it starts is protected in every case.
 
 ### Windows paths
 

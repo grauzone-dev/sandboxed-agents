@@ -38,19 +38,7 @@ if ($existed) {
     $kind = $key.GetValueKind('Path')
 }
 try {
-    try {
-        $exitCode = [NuGetRestrictedProcess]::Run($PowerShell, @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded), $PackageDirectory)
-    } catch {
-        $originalFailure = $_
-        Write-Output ('[DEBUG-62-launch] Original launch failed: {0}' -f $originalFailure.Exception.Message)
-        try {
-            $probeExitCode = [NuGetRestrictedProcess]::Run($PowerShell, @('-NoProfile', '-NonInteractive', '-Command', 'exit 0'), $PackageDirectory)
-            Write-Output ('[DEBUG-62-launch] Short launch ExitCode={0}' -f $probeExitCode)
-        } catch {
-            Write-Output ('[DEBUG-62-launch] Short launch failed: {0}' -f $_.Exception.Message)
-        }
-        throw $originalFailure
-    }
+    $exitCode = [NuGetRestrictedProcess]::Run($PowerShell, @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded), $PackageDirectory)
     if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Output }
     if ($exitCode -ne 0) { throw "Restricted installer process exited with $exitCode." }
 } finally {

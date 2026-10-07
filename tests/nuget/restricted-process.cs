@@ -48,8 +48,9 @@ public static class NuGetRestrictedProcess
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessWithTokenW(IntPtr token, uint logonFlags, string application,
-        StringBuilder commandLine, uint creationFlags, IntPtr environment, string directory,
+    private static extern bool CreateProcessAsUserW(IntPtr token, string application, StringBuilder commandLine,
+        IntPtr processAttributes, IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+        uint creationFlags, IntPtr environment, string directory,
         ref StartupInfo startup, out ProcessInformation information);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -102,11 +103,11 @@ public static class NuGetRestrictedProcess
             foreach (string argument in arguments) commandLine.Append(' ').Append(Quote(argument));
             var startup = new StartupInfo { Size = (uint)Marshal.SizeOf<StartupInfo>() };
             Console.Error.WriteLine("[DEBUG-62-launch] CommandLineLength=" + commandLine.Length);
-            if (!CreateProcessWithTokenW(restricted, 0, executable, commandLine, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+            if (!CreateProcessAsUserW(restricted, executable, commandLine, IntPtr.Zero, IntPtr.Zero, false, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                 environment, directory, ref startup, out process))
             {
                 int error = Marshal.GetLastWin32Error();
-                throw new Win32Exception(error, "[DEBUG-62-launch] CreateProcessWithTokenW NativeErrorCode=" +
+                throw new Win32Exception(error, "[DEBUG-62-launch] CreateProcessAsUserW NativeErrorCode=" +
                     error + " NativeMessage=" + new Win32Exception(error).Message);
             }
             uint waited = WaitForSingleObject(process.Process, 180000);

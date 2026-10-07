@@ -48,7 +48,7 @@ func TestDisableRemovesOnlyManagedCommandAndWholeSelectionEntry(t *testing.T) {
 				t.Error("disable started a package command")
 				return 1, nil
 			}, options)
-			if status, out, diagnostic := runAgentCommand(app, "disable", test.name); status != 0 || !strings.Contains(out, test.name) {
+			if status, out, diagnostic := runAgentCommand(app, "disable", test.name); status != 0 || out != "Agent "+test.name+" is disabled.\n" {
 				t.Fatalf("status=%d out=%q diagnostic=%q", status, out, diagnostic)
 			}
 			if _, err := os.Lstat(commandPath); !os.IsNotExist(err) {

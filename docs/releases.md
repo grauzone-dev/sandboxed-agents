@@ -49,12 +49,12 @@ sha256sum -c SHA256SUMS
 
 The NuGet package installs the command on Windows for the current user, with PowerShell 7 and without administrator rights. It is a command package, not a library: it has no NuGet install scripts and no library assets, so adding it to a project or restoring it installs nothing. Previews are not published to the NuGet registry, where `SandboxedAgents` stays at the prototype's version 0.2.0 until the stable release (#67).
 
-Download the package from a prerelease, extract it, and run its installer. The example uses the tag `v1.0.0-preview.20261007.2`; use the tag of the prerelease you install:
+Download the package from a prerelease, extract it, and run its installer. The example uses the tag `v1.0.0-preview.20261007.3`; use the tag of the prerelease you install:
 
 ```powershell
-gh release download v1.0.0-preview.20261007.2 -R grauzone-dev/sandboxed-agents -p '*.nupkg'
+gh release download v1.0.0-preview.20261007.3 -R grauzone-dev/sandboxed-agents -p '*.nupkg'
 mkdir SandboxedAgents
-tar -xf SandboxedAgents.1.0.0-preview.20261007.2.nupkg -C SandboxedAgents
+tar -xf SandboxedAgents.1.0.0-preview.20261007.3.nupkg -C SandboxedAgents
 pwsh -File SandboxedAgents/tools/install-command.ps1
 ```
 

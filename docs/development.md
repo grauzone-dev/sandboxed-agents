@@ -5,8 +5,9 @@ How to build and test `sandboxed-agents` from source. The module holds two comma
 ## Requirements
 
 - Go 1.27 or newer.
+- For the offline test suite: Node.js and npm on `PATH`, and on Windows also PowerShell 7 as `pwsh`. The [npm package](releases.md#npm-package) tests install the package with npm and run its launcher, its `.cmd` shim, and its `.ps1` shim; without these programs they fail instead of being skipped.
 
-The module uses only the standard library. Building it and running the offline test suite need no network access, no Podman, no SSH, and no credentials.
+The module uses only the standard library, and building it needs only Go. Building it and running the offline test suite need no network access, no Podman, no SSH, and no credentials.
 
 ## Build
 
@@ -172,6 +173,9 @@ The live suite runs the executable against real Podman and starts only with `go 
 
   These tests check the mounts that `up` passes to Podman. No offline test starts a real container or confirms which host paths a running sandbox can reach.
 - **Windows workspace bind.** See [Windows workspace tests](#windows-workspace-tests).
+- **npm package.** The tests in `internal/npmpackage` build a package around a test program with a matching `SHA256SUMS` and install it with `npm --offline`, with npm's cache inside the install prefix, locally and with `--global`. Through the installed command they check the forwarding of arguments, standard streams, and exit status, both checksum failures, the refusal of unsupported platforms, and the protected paths the launcher reports. Install, upgrade, and removal run against the fake `podman` and `ssh` and must leave sentinel files for home, host state, and sandbox data unchanged. The release tool's test checks the packed `.tgz` and runs `version` through the installed command, on Windows through both shims. The tests in `internal/cli/npm_workspace_test.go` run `up NAME WORKSPACE` at the CLI boundary, also through a really installed launcher, and check that a workspace holding the launcher, a shim, or the launch link is refused before any Podman call. No offline test reaches the npm registry.
+
+  The launcher tells the executable its paths through `SANDBOXED_AGENTS_NPM_PATHS`. This variable is an internal handshake, not an option for users: the launcher always replaces an inherited value with a JSON array of the absolute paths of the launcher, its launch links, and its shims. The executable adds these to the [protected host paths](sandboxes.md#workspace-guards) and, independently, protects a `launcher.cjs` beside itself. When a value set outside the launcher is not a JSON array of absolute paths, `up NAME WORKSPACE` refuses the workspace before any Podman call instead of ignoring the value.
 - **SSH port.** Most tests in `ssh_port_test.go` run each case with the Linux host fixture and with the Windows host fixture, against the fake `podman` and `ssh`. Recorded ports come from scripted `ps --all --format json` and `inspect` answers. In these tests listeners are real: a test holds a TCP listener on `127.0.0.1` of the machine that runs the tests, or probes which ports it can bind, so the bind check runs natively on each CI job. Where `up` chooses the port, these tests read it from the `create` call and do not predict which ports the host has free. They cover:
   - `up agent01` on a host without sandboxes, with each fixture: the test predicts no port. It reads the port from the `create` call, which must carry exactly one `io.github.sandboxed-agents.ssh-port` label with a whole number from 2222 through 65535, and checks that the call publishes exactly `127.0.0.1:PORT:22` for that port, accepting `--publish`, `-p`, or `--publish=` as the form;
   - `--port N` beside resource limit options in both value forms, with the label, the single publication, and the limits on the `create` call;

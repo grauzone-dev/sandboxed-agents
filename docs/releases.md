@@ -18,11 +18,13 @@ npm install --offline --global --prefix PREFIX --cache PREFIX/cache --no-audit -
 
 `--cache PREFIX/cache` keeps npm's cache under the chosen prefix, `--no-audit` skips npm's audit request to the registry, and `--no-fund` its funding message.
 
-The package supports Linux x64 and Windows x64. On any other platform, ARM64 included, installation fails with a message that names the current platform and the two supported ones. Installation also checks the binary for the current platform against the bundled `SHA256SUMS` and fails on a mismatch.
+The package supports Linux x64 and Windows x64. On any other platform, ARM64 included, installation fails with a message that names the current platform and the two supported ones. The package's install script also checks both bundled binaries against the bundled `SHA256SUMS`, and installation fails when either does not match.
 
-The launcher checks the binary again on every run, before it starts it. When the binary no longer matches `SHA256SUMS`, for example because it was changed after installation, the launcher reports the checksum mismatch, does not start the binary, and exits with a non-zero status. Otherwise it runs the binary with the arguments as given, passes standard input, standard output, and standard error through, and exits with the binary's exit status.
+These install-time checks run only when npm runs install scripts, which it does by default. With `--ignore-scripts`, npm installs the package without them; the launcher's check before every run still applies.
 
-Installing, upgrading, and removing the package never call Podman and never touch sandboxes, SSH configuration, sandbox data, or host state. The package's install hooks only read the bundled binaries and verify them against `SHA256SUMS`; they change nothing on the host. npm itself manages the package's files in the chosen prefix and its own data in the chosen cache.
+The launcher checks the binary for the current platform on every run, before it starts it. When the binary no longer matches `SHA256SUMS`, for example because it was changed after installation, the launcher reports the checksum mismatch, does not start the binary, and exits with a non-zero status. Otherwise it starts the binary with the arguments it received, passes standard input, standard output, and standard error through, and exits with the binary's exit status. On Windows, the `.cmd` and `.ps1` shims are run by `cmd.exe` and PowerShell, which parse the command line first, so quoting and special characters follow that shell's rules before the arguments reach the launcher.
+
+Installing, upgrading, and removing the package never call Podman and never touch sandboxes, SSH configuration, sandbox data, or host state. The package's install script only reads the bundled binaries and verifies them against `SHA256SUMS`; it changes nothing on the host. npm itself manages the package's files in the chosen prefix and its own data in the chosen cache.
 
 The launcher, its `.cmd` and `.ps1` shims, and the launch link that npm creates for the command are protected host paths. `up NAME WORKSPACE` refuses a workspace that contains one of them or lies inside one, also through a symlink, junction, or other alias, before it calls Podman ([Workspace guards](sandboxes.md#workspace-guards)).
 

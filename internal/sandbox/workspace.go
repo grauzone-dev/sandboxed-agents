@@ -54,40 +54,37 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 		}
 	}
 	var protectedPaths []string
-	for _, path := range paths {
-		parent, err := resolveHostPath(filepath.Dir(path))
-		if err != nil {
-			return fmt.Errorf(workspaceAliasError, path, err)
-		}
-		entry := filepath.Join(parent, filepath.Base(path))
-		protectedPaths = append(protectedPaths, entry)
-		entryOverlap := pathContains(resolved, entry) || pathContains(entry, resolved)
-		if !entryOverlap && host.OS == "linux" {
-			entryOverlap, err = mountedPathsOverlap(resolved, entry, mounts)
+	for _, hostPath := range paths {
+		var candidates []string
+		if hostPath.protectEntry {
+			parent, err := resolveHostPath(filepath.Dir(hostPath.path))
 			if err != nil {
-				return fmt.Errorf(workspaceAliasError, entry, err)
+				return fmt.Errorf(workspaceAliasError, hostPath.path, err)
 			}
+			candidates = append(candidates, filepath.Join(parent, filepath.Base(hostPath.path)))
 		}
-		if entryOverlap {
-			return fmt.Errorf(workspaceProtectedError, resolved, entry)
-		}
-		protected, err := resolveHostPath(path)
+		target, err := resolveHostPath(hostPath.path)
 		if err != nil {
-			return fmt.Errorf(workspaceAliasError, path, err)
+			return fmt.Errorf(workspaceAliasError, hostPath.path, err)
 		}
-		protectedPaths = append(protectedPaths, protected)
-		var overlap bool
-		if host.OS == "linux" {
-			overlap, err = mountedPathsOverlap(resolved, protected, mounts)
+		if len(candidates) == 0 || candidates[0] != target {
+			candidates = append(candidates, target)
 		}
-		if err == nil && !overlap {
-			overlap, err = hostPathsOverlap(resolved, protected)
-		}
-		if err != nil {
-			return fmt.Errorf(workspaceAliasError, protected, err)
-		}
-		if overlap {
-			return fmt.Errorf(workspaceProtectedError, resolved, protected)
+		for _, protected := range candidates {
+			protectedPaths = append(protectedPaths, protected)
+			var overlap bool
+			if host.OS == "linux" {
+				overlap, err = mountedPathsOverlap(resolved, protected, mounts)
+			}
+			if err == nil && !overlap {
+				overlap, err = hostPathsOverlap(resolved, protected)
+			}
+			if err != nil {
+				return fmt.Errorf(workspaceAliasError, protected, err)
+			}
+			if overlap {
+				return fmt.Errorf(workspaceProtectedError, resolved, protected)
+			}
 		}
 	}
 	if host.OS == "windows" {
@@ -101,7 +98,12 @@ func (up *Up) BindWorkspace(host WorkspaceHost, workspace string) error {
 	return nil
 }
 
-func protectedHostPaths(hostOS, group string) ([]string, error) {
+type protectedHostPath struct {
+	path         string
+	protectEntry bool
+}
+
+func protectedHostPaths(hostOS, group string) ([]protectedHostPath, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -114,15 +116,17 @@ func protectedHostPaths(hostOS, group string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	paths := []string{executable, state, filepath.Dir(state), os.TempDir(), filepath.Join(home, ".ssh")}
+	paths := []protectedHostPath{{path: executable}, {path: state}, {path: filepath.Dir(state)}, {path: os.TempDir()}, {path: filepath.Join(home, ".ssh")}}
 	if hostOS == "linux" {
-		paths = append(paths, "/tmp")
+		paths = append(paths, protectedHostPath{path: "/tmp"})
 	}
 	npmPaths, err := npmProtectedPaths(executable)
 	if err != nil {
 		return nil, err
 	}
-	paths = append(paths, npmPaths...)
+	for _, path := range npmPaths {
+		paths = append(paths, protectedHostPath{path: path, protectEntry: true})
+	}
 	return paths, nil
 }
 

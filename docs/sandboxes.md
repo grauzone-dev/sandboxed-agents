@@ -158,7 +158,7 @@ These searches fail closed. On Linux, when the executable has more than one hard
 
 The guards compare the protected host paths themselves, not the files beneath them. A file inside a protected directory, such as `~/.ssh`, host state, or the temporary directory, that shares a hard link with a file in the workspace is not detected, and neither is a symlink or junction inside a protected directory that points into the workspace. A hard-linked file is the same file in both places, so agents read and change it directly through the workspace. Host programs that follow such a symlink read or write workspace content, which agents can read and change. The guards also check the file system only when `up` is given `WORKSPACE`; a link created afterwards is not detected.
 
-The npm rows apply when the command runs through the launcher of the npm package; the executable it starts is protected in every case.
+The npm shim and launch-link rows apply when the command runs through the launcher of the npm package, which reports its paths to the executable. A `launcher.cjs` beside the executable is protected also when the executable is started directly, and the executable itself is protected in every case. For the npm paths, the launch link and each shim are protected where they are, in addition to the file they resolve to, so a workspace that holds the link itself is refused.
 
 ### Windows paths
 

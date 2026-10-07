@@ -329,23 +329,11 @@ func assertNPMPackage(t *testing.T, archive []byte, artifacts map[string][]byte)
 func assertInstalledVersion(t *testing.T, directory, tag, want string) {
 	t.Helper()
 	prefix := t.TempDir()
-	npm, err := exec.LookPath("npm")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cli, err := filepath.EvalSymlinks(npm)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS == "windows" {
-		cli = filepath.Join(filepath.Dir(npm), "node_modules", "npm", "bin", "npm-cli.js")
-	}
 	archive, err := filepath.Abs(filepath.Join(directory, "sandboxed-agents-"+strings.TrimPrefix(tag, "v")+".tgz"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("node", cli, "install", archive, "--offline", "--no-audit", "--no-fund", "--update-notifier=false", "--ignore-scripts=false", "--prefix", prefix, "--cache", filepath.Join(prefix, "npm-cache"))
-	command.Dir = prefix
+	command := testutil.NpmCommand(t, prefix, "install", archive)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install release package: %v\n%s", err, output)
 	}

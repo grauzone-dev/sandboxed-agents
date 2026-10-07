@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,10 +24,7 @@ const testTag = "v1.0.0-preview.20261003.1"
 func fixturePackage(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	native := release.LinuxExecutable
-	if runtime.GOOS == "windows" {
-		native = release.WindowsExecutable
-	}
+	native := nativeExecutable()
 	command := exec.Command("go", "build", "-o", filepath.Join(dir, native), "./testdata/process")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build process fixture: %v\n%s", err, output)
@@ -51,29 +49,6 @@ func fixturePackage(t *testing.T) string {
 	return filepath.Join(dir, npmpackage.Filename(testTag))
 }
 
-func npm(t *testing.T, prefix string, args ...string) *exec.Cmd {
-	t.Helper()
-	binary, err := exec.LookPath("npm")
-	if err != nil {
-		t.Fatal(err)
-	}
-	argv := []string{"--offline", "--no-audit", "--no-fund", "--update-notifier=false", "--ignore-scripts=false", "--prefix", prefix, "--cache", filepath.Join(prefix, "npm-cache")}
-	argv = append(argv, args...)
-	cli, err := filepath.EvalSymlinks(binary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS == "windows" {
-		cli = filepath.Join(filepath.Dir(binary), "node_modules", "npm", "bin", "npm-cli.js")
-	}
-	if _, err := os.Stat(cli); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command("node", append([]string{cli}, argv...)...)
-	command.Dir = prefix
-	return command
-}
-
 func install(t *testing.T, archive string, global bool) (string, string) {
 	t.Helper()
 	prefix := t.TempDir()
@@ -81,7 +56,7 @@ func install(t *testing.T, archive string, global bool) (string, string) {
 	if global {
 		args = append(args, "--global")
 	}
-	command := npm(t, prefix, args...)
+	command := testutil.NpmCommand(t, prefix, args...)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("npm install: %v\n%s", err, output)
 	}
@@ -110,44 +85,13 @@ func TestInstalledCommandForwardsArgumentsStreamsAndStatus(t *testing.T) {
 	archive := fixturePackage(t)
 	for _, global := range []bool{false, true} {
 		t.Run(map[bool]string{false: "local", true: "global"}[global], func(t *testing.T) {
-			root, launch := install(t, archive, global)
-			args := []string{"argument with spaces", "", "quote\"inside", "--flag=literal", "unicode-é"}
+			_, launch := install(t, archive, global)
+			args := []string{"argument with spaces", "", "quote\"inside", "shell & | < > ^ ( ) symbols", "--flag=literal", "unicode-é"}
 			command := installedCommand(launch, args...)
 			if runtime.GOOS == "windows" {
-				args = []string{"argument with spaces", "", "--flag=literal", "unicode-é"}
-				command = installedCommand(launch, args...)
+				command = cmdShimCommand(t, launch, args)
 			}
-			command.Stdin = strings.NewReader("input\n")
-			var stdout, stderr bytes.Buffer
-			command.Stdout = &stdout
-			command.Stderr = &stderr
-			err := command.Run()
-			status, ok := err.(*exec.ExitError)
-			if !ok || status.ExitCode() != 23 {
-				t.Fatalf("exit status: %v; stdout %q; stderr %q", err, stdout.String(), stderr.String())
-			}
-			var actual []string
-			if err := json.Unmarshal(bytes.SplitN(stdout.Bytes(), []byte("\n"), 2)[0], &actual); err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Equal(actual, args) || !strings.HasSuffix(stdout.String(), "stdin:input\n") || stderr.String() != "fixture stderr\n" {
-				t.Fatalf("forwarded args %q stdout %q stderr %q", actual, stdout.String(), stderr.String())
-			}
-			if runtime.GOOS == "windows" {
-				args = []string{"quote\"inside", "shell & | < > ^ ( ) symbols"}
-				command = exec.Command("node", append([]string{filepath.Join(root, "launcher.cjs")}, args...)...)
-				output, err := command.Output()
-				status, ok := err.(*exec.ExitError)
-				if !ok || status.ExitCode() != 23 {
-					t.Fatalf("launcher process: %v\n%s", err, output)
-				}
-				if err := json.Unmarshal(bytes.SplitN(output, []byte("\n"), 2)[0], &actual); err != nil {
-					t.Fatal(err)
-				}
-				if !slices.Equal(actual, args) {
-					t.Fatalf("launcher process arguments %q; want %q", actual, args)
-				}
-			}
+			assertForwarding(t, command, args)
 		})
 	}
 	if len(fake.Calls("podman")) != 0 || len(fake.Calls("ssh")) != 0 {
@@ -155,12 +99,101 @@ func TestInstalledCommandForwardsArgumentsStreamsAndStatus(t *testing.T) {
 	}
 }
 
+func cmdShimCommand(t *testing.T, launch string, args []string) *exec.Cmd {
+	t.Helper()
+	dir := t.TempDir()
+	source := "@echo off\r\n\"%NPM_TEST_SHIM%\""
+	env := append(os.Environ(), "NPM_TEST_SHIM="+launch+".cmd")
+	for index, arg := range args {
+		key := "NPM_TEST_ARGUMENT_" + strconv.Itoa(index)
+		env = append(env, key+"="+strings.ReplaceAll(arg, "\"", "\"\""))
+		source += " \"%" + key + "%\""
+	}
+	source += "\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "forward.cmd"), []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("cmd.exe", "/d", "/v:off", "/c", "forward.cmd")
+	command.Env = env
+	command.Dir = dir
+	return command
+}
+
+func TestInstalledPowerShellShimForwardsArgumentsStreamsAndStatus(t *testing.T) {
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Fatal(err)
+		}
+		t.Skip("PowerShell is unavailable")
+	}
+	archive := fixturePackage(t)
+	for _, global := range []bool{false, true} {
+		t.Run(map[bool]string{false: "local", true: "global"}[global], func(t *testing.T) {
+			root, launch := install(t, archive, global)
+			if runtime.GOOS != "windows" {
+				npm := testutil.NpmCommand(t, t.TempDir())
+				module := filepath.Join(filepath.Dir(filepath.Dir(npm.Args[1])), "node_modules", "cmd-shim")
+				generate := exec.Command("node", "-e", `require(process.argv[1])(process.argv[2],process.argv[3]).catch(error=>{console.error(error);process.exit(1)})`, module, filepath.Join(root, "launcher.cjs"), launch)
+				if output, err := generate.CombinedOutput(); err != nil {
+					t.Fatalf("generate npm PowerShell shim: %v\n%s", err, output)
+				}
+			}
+			args := []string{"argument with spaces", "", "quote\"inside", "shell & | < > ^ ( ) symbols", "--flag=literal", "unicode-é"}
+			literals := make([]string, 0, len(args))
+			for _, arg := range args {
+				literals = append(literals, "'"+strings.ReplaceAll(arg, "'", "''")+"'")
+			}
+			arguments := "$arguments=@(" + strings.Join(literals, ",") + "); "
+			source := arguments + "& '" + strings.ReplaceAll(launch+".ps1", "'", "''") + "' @arguments; exit $LASTEXITCODE"
+			command := exec.Command("pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", source)
+			referenceSource := arguments + "& '" + strings.ReplaceAll(filepath.Join(root, nativeExecutable()), "'", "''") + "' @arguments; exit $LASTEXITCODE"
+			reference := exec.Command("pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", referenceSource)
+			stdout, stderr := captureForwarding(t, command, args)
+			wantStdout, wantStderr := captureForwarding(t, reference, args)
+			if !bytes.Equal(stdout, wantStdout) || !bytes.Equal(stderr, wantStderr) {
+				t.Fatalf("shim streams stdout %q stderr %q; native stdout %q stderr %q", stdout, stderr, wantStdout, wantStderr)
+			}
+		})
+	}
+}
+
+func assertForwarding(t *testing.T, command *exec.Cmd, args []string) {
+	t.Helper()
+	stdout, stderr := captureForwarding(t, command, args)
+	parts := bytes.SplitN(stdout, []byte("\n"), 2)
+	if len(parts) != 2 || string(parts[1]) != "stdin:input\n" || string(stderr) != "fixture stderr\n" {
+		t.Fatalf("forwarded stdout %q stderr %q", stdout, stderr)
+	}
+}
+
+func captureForwarding(t *testing.T, command *exec.Cmd, args []string) ([]byte, []byte) {
+	t.Helper()
+	command.Stdin = strings.NewReader("input\n")
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	status, ok := err.(*exec.ExitError)
+	if !ok || status.ExitCode() != 23 {
+		t.Fatalf("exit status: %v; stdout %q; stderr %q", err, stdout.String(), stderr.String())
+	}
+	parts := bytes.SplitN(stdout.Bytes(), []byte("\n"), 2)
+	if len(parts) != 2 {
+		t.Fatalf("stdout %q", stdout.String())
+	}
+	var actual []string
+	if err := json.Unmarshal(parts[0], &actual); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(actual, args) {
+		t.Fatalf("forwarded args %q; want %q", actual, args)
+	}
+	return stdout.Bytes(), stderr.Bytes()
+}
+
 func TestTamperedBinaryFailsInstallationAndEveryLaunch(t *testing.T) {
 	archive := fixturePackage(t)
-	native := release.LinuxExecutable
-	if runtime.GOOS == "windows" {
-		native = release.WindowsExecutable
-	}
+	native := nativeExecutable()
 	t.Run("after-install", func(t *testing.T) {
 		root, launch := install(t, archive, false)
 		binary := filepath.Join(root, native)
@@ -185,7 +218,7 @@ func TestTamperedBinaryFailsInstallationAndEveryLaunch(t *testing.T) {
 				t.Fatal(err)
 			}
 			prefix := t.TempDir()
-			output, err := npm(t, prefix, "install", archive, "--foreground-scripts").CombinedOutput()
+			output, err := testutil.NpmCommand(t, prefix, "install", archive, "--foreground-scripts").CombinedOutput()
 			if err == nil || !strings.Contains(string(output), "checksum mismatch") || !strings.Contains(string(output), name) {
 				t.Fatalf("tampered installation: %v\n%s", err, output)
 			}
@@ -217,7 +250,7 @@ func TestInstallationRejectsUnsupportedPlatforms(t *testing.T) {
 			if err := os.WriteFile(preload, []byte(data), 0644); err != nil {
 				t.Fatal(err)
 			}
-			command := npm(t, prefix, "install", archive, "--foreground-scripts", "--node-options=--require=\""+filepath.ToSlash(preload)+"\"")
+			command := testutil.NpmCommand(t, prefix, "install", archive, "--foreground-scripts", "--node-options=--require=\""+filepath.ToSlash(preload)+"\"")
 			output, err := command.CombinedOutput()
 			want := "unsupported platform " + platform.os + "/" + platform.arch
 			if err == nil || !strings.Contains(string(output), want) {
@@ -345,7 +378,7 @@ func TestInstallUpgradeAndRemoveLeaveHostPathsUntouched(t *testing.T) {
 				if global {
 					args = append(args, "--global")
 				}
-				if output, err := npm(t, prefix, args...).CombinedOutput(); err != nil {
+				if output, err := testutil.NpmCommand(t, prefix, args...).CombinedOutput(); err != nil {
 					t.Fatalf("npm %s: %v\n%s", args, err, output)
 				}
 				if after := tree(t, host); !reflect.DeepEqual(before, after) {
@@ -392,4 +425,11 @@ func tree(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return entries
+}
+
+func nativeExecutable() string {
+	if runtime.GOOS == "windows" {
+		return release.WindowsExecutable
+	}
+	return release.LinuxExecutable
 }

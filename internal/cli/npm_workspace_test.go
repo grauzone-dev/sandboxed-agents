@@ -19,13 +19,8 @@ import (
 func TestUpProtectsNpmLauncherPathsBeforePodman(t *testing.T) {
 	for _, name := range []string{"launcher.cjs", "sandboxed-agents", "sandboxed-agents.cmd", "sandboxed-agents.ps1"} {
 		t.Run(name, func(t *testing.T) {
-			root := workspaceFixture(t)
+			root, fixture := npmWorkspaceFixture(t)
 			fakes := testutil.NewFakePrograms(t)
-			fixture := "linux-preflight"
-			if runtime.GOOS == "windows" {
-				configureWindowsWorkspacePaths(t, root)
-				fixture = "windows"
-			}
 			workspace := filepath.Join(root, "installed")
 			if err := os.Mkdir(workspace, 0700); err != nil {
 				t.Fatal(err)
@@ -52,12 +47,7 @@ func TestUpProtectsNpmLauncherPathsBeforePodman(t *testing.T) {
 }
 
 func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
-	root := workspaceFixture(t)
-	fixture := "linux-preflight"
-	if runtime.GOOS == "windows" {
-		configureWindowsWorkspacePaths(t, root)
-		fixture = "windows"
-	}
+	root, fixture := npmWorkspaceFixture(t)
 	artifacts := filepath.Join(root, "artifacts")
 	if err := os.Mkdir(artifacts, 0700); err != nil {
 		t.Fatal(err)
@@ -83,10 +73,10 @@ func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
 		t.Fatal(err)
 	}
 	prefix := filepath.Join(root, "installed")
-	command := exec.Command("npm", "install", "--offline", "--global", "--prefix", prefix, "--cache", filepath.Join(prefix, "cache"), "--no-audit", "--no-fund", filepath.Join(artifacts, npmpackage.Filename(tag)))
-	if runtime.GOOS == "windows" {
-		command = exec.Command("cmd", append([]string{"/c", "npm"}, command.Args[1:]...)...)
+	if err := os.Mkdir(prefix, 0700); err != nil {
+		t.Fatal(err)
 	}
+	command := testutil.NpmCommand(t, prefix, "install", "--global", filepath.Join(artifacts, npmpackage.Filename(tag)))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install: %v\n%s", err, output)
 	}
@@ -96,12 +86,12 @@ func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
 	protectedNames := []string{link}
 	if runtime.GOOS == "windows" {
 		packageDir = filepath.Join(prefix, "node_modules", "sandboxed-agents")
-		link = filepath.Join(packageDir, "launcher.cjs")
+		link = filepath.Join(prefix, "sandboxed-agents.cmd")
 		workspaces, protectedNames = nil, nil
 	}
 	paths := []string{filepath.Join(packageDir, "launcher.cjs")}
 	if runtime.GOOS == "windows" {
-		paths = append(paths, filepath.Join(prefix, "sandboxed-agents.cmd"), filepath.Join(prefix, "sandboxed-agents.ps1"))
+		paths = append(paths, filepath.Join(prefix, "sandboxed-agents"), filepath.Join(prefix, "sandboxed-agents.cmd"), filepath.Join(prefix, "sandboxed-agents.ps1"))
 	}
 	for _, protected := range paths {
 		workspace := filepath.Join(root, "alias-"+filepath.Base(protected))
@@ -116,7 +106,10 @@ func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
 	}
 	fakes := testutil.NewFakePrograms(t)
 	for i, workspace := range workspaces {
-		command = exec.Command("node", link, "-test.run=^TestCLIProcess$", "--", "up", "agent01", workspace)
+		command = exec.Command(link, "-test.run=^TestCLIProcess$", "--", "up", "agent01", workspace)
+		if runtime.GOOS == "windows" {
+			command = exec.Command("cmd.exe", "/d", "/c", link, "-test.run=^TestCLIProcess$", "--", "up", "agent01", workspace)
+		}
 		command.Env = append(os.Environ(), "SANDBOXED_AGENTS_CLI_FIXTURE="+fixture)
 		var stdout, stderr bytes.Buffer
 		command.Stdout, command.Stderr = &stdout, &stderr
@@ -131,13 +124,8 @@ func TestInstalledNpmLauncherProtectsItsLaunchLinkBeforePodman(t *testing.T) {
 }
 
 func TestUpProtectsNpmLaunchLinkEntryAndTarget(t *testing.T) {
-	root := workspaceFixture(t)
+	root, fixture := npmWorkspaceFixture(t)
 	fakes := testutil.NewFakePrograms(t)
-	fixture := "linux-preflight"
-	if runtime.GOOS == "windows" {
-		configureWindowsWorkspacePaths(t, root)
-		fixture = "windows"
-	}
 	packageDir := filepath.Join(root, "package")
 	binDir := filepath.Join(root, "bin")
 	for _, dir := range []string{packageDir, binDir} {
@@ -173,13 +161,8 @@ func TestUpProtectsNpmLaunchLinkEntryAndTarget(t *testing.T) {
 func TestUpRejectsInvalidNpmProtectedPathMetadataBeforePodman(t *testing.T) {
 	for _, value := range []string{"", "null", "{}", "[\"relative\"]"} {
 		t.Run(value, func(t *testing.T) {
-			root := workspaceFixture(t)
+			root, fixture := npmWorkspaceFixture(t)
 			fakes := testutil.NewFakePrograms(t)
-			fixture := "linux-preflight"
-			if runtime.GOOS == "windows" {
-				configureWindowsWorkspacePaths(t, root)
-				fixture = "windows"
-			}
 			t.Setenv("SANDBOXED_AGENTS_NPM_PATHS", value)
 			stdout, stderr, status := runCLI(t, fixture, "up", "agent01", root)
 			if status == 0 || stdout != "" || !strings.Contains(stderr, "SANDBOXED_AGENTS_NPM_PATHS") {
@@ -225,6 +208,40 @@ func TestUpProtectsNpmLaunchLinkReachedThroughBindMount(t *testing.T) {
 	}
 	if len(fakes.Calls("podman")) != 0 {
 		t.Fatal("aliased npm launch link called Podman")
+	}
+	assertNoSSH(t, fakes)
+}
+
+func npmWorkspaceFixture(t *testing.T) (string, string) {
+	t.Helper()
+	root := workspaceFixture(t)
+	fixture := "linux-preflight"
+	if runtime.GOOS == "windows" {
+		configureWindowsWorkspacePaths(t, root)
+		fixture = "windows"
+	}
+	return root, fixture
+}
+
+func TestNpmGuardKeepsLinuxSSHLinkEntryBehavior(t *testing.T) {
+	fakes := linuxHost(t)
+	root := workspaceFixture(t)
+	home := filepath.Join(root, "home")
+	ssh := filepath.Join(root, "outside-ssh")
+	for _, dir := range []string{home, ssh} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(ssh, filepath.Join(home, ".ssh")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	responses := append(upObjectResponses(nil, false, nil, nil), make([]testutil.Response, 5)...)
+	fakes.Script("podman", responses...)
+	stdout, stderr, status := runCLI(t, "linux-preflight", "up", "agent01", home)
+	if status != 0 || stderr != "" || !strings.Contains(stdout, "Sandbox agent01 is running") {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 	assertNoSSH(t, fakes)
 }

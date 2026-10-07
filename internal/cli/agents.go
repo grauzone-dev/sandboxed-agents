@@ -14,13 +14,11 @@ func agentCommand(subcommand string, group *string, run process.Runner, catalog 
 	ctx := context.Background()
 	var request *sandbox.AgentCommand
 	var help Handler
-	if subcommand == "enable" || subcommand == "update" || subcommand == "disable" {
+	if subcommand == "enable" || subcommand == "update" {
 		help = func(invocation *Invocation) error {
 			text := agentEnableHelp
 			if subcommand == "update" {
 				text = agentUpdateHelp
-			} else if subcommand == "disable" {
-				text = agentDisableHelp
 			}
 			_, err := fmt.Fprint(invocation.Stdout, text)
 			return err

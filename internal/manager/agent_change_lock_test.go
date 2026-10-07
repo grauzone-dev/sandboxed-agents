@@ -94,7 +94,7 @@ func TestAgentSessionAttachesWhileAnotherInstallationHoldsTheManagerLock(t *test
 
 func TestAgentMutationGuardsWaitForInstallationsAndSessionCreation(t *testing.T) {
 	for _, holder := range []string{"installation", "session creation"} {
-		for _, args := range [][]string{{"disable", "codex"}, {"update", "agent01", "codex"}, {"update", "agent01", "codex", "--unpin"}, {"enable", "codex", "--version", "2.3.4"}} {
+		for _, args := range agentChangeCommands() {
 			t.Run(holder+"/"+strings.Join(args, " "), func(t *testing.T) {
 				home := pinnedAgentChangeHome(t)
 				terminal := sessionTerminal(t)
@@ -210,7 +210,7 @@ func pinnedAgentChangeHome(t *testing.T) string {
 }
 
 func TestForcedAgentChangeFailuresPreserveInstallationSelectionAndPin(t *testing.T) {
-	for _, args := range [][]string{{"disable", "codex"}, {"update", "agent01", "codex"}, {"update", "agent01", "codex", "--unpin"}, {"enable", "codex", "--version", "2.3.4"}} {
+	for _, args := range agentChangeCommands() {
 		for _, failure := range []struct {
 			name, diagnostic string
 			queries, stops   int

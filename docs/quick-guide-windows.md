@@ -226,7 +226,7 @@ sandboxed-agents check
 sandboxed-agents up agent01
 ```
 
-`up` runs the same preflight (the host check from step 2), then creates the sandbox `agent01` in the controller group `default` on the selected Podman machine and leaves it running. The first `up` on a host builds the base image, which downloads packages and can take a while. `up` prints one line per volume it creates and ends with `Sandbox agent01 is running.`
+`up` runs the same preflight (the host check from step 2), then creates the sandbox `agent01` in the controller group `default` on the selected Podman machine and leaves it running. The first `up` on a host builds the base image, which downloads packages and can take a while. No command removes images that a later rebuild replaces ([Old images](../README.md#old-images)). `up` prints one line per volume it creates and ends with `Sandbox agent01 is running.`
 
 The sandbox has its own workspace at `/workspace`, stored in a volume of the sandbox, not in a Windows directory. To put a project there, open a shell in the sandbox and clone it, for example with `git clone`; Git is installed in the sandbox:
 

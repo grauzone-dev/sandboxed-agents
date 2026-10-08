@@ -95,7 +95,7 @@ sandboxed-agents update agent01 --with none
 
 ## Session guard
 
-Replacing the container ends every process in the old one, agent sessions included. `update` therefore refuses while an [agent session](agents.md#keep-an-agent-running-in-a-session) runs in the sandbox, unless you give `--force`.
+Replacing the container ends every process in the old one, agent sessions included. `update` therefore refuses while an [agent session](agent-management.md#keep-an-agent-running-in-a-session) runs in the sandbox, unless you give `--force`.
 
 The guard is the last check before the change: it comes after the preflight, the recorded configuration, and the builds, and directly before the rename ([What `update` does](#what-update-does)). It is the only point at which `update` asks the manager for agent sessions, and its only manager call before the replacement, so a manager that does not answer is reported there as well, after the builds. The [readiness wait](#readiness-wait) later asks the manager of the new container only for its version. On a running sandbox, `update` asks the manager in the container for the running agent sessions with the session query that `stop` and `restart` use ([Session guard](sandboxes.md#session-guard)).
 

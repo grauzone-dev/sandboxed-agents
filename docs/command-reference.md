@@ -37,7 +37,7 @@ Four commands have a help text: [`up`](#up), [`agents enable`](#agents-enable), 
 
 A sandbox name matches `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`: it starts with a letter or digit and continues with letters, digits, `_`, `.`, and `-`. No name is reserved, so `up`, `list`, and `default` are valid sandbox names. An invalid name is a usage error.
 
-`AGENT` is a name from the agent catalog: `claude`, `codex`, `copilot`, or `opencode` ([Agent catalog](agents.md#agent-catalog)). An unknown agent, integration, workflow, or toolchain name fails before Podman is called, and the message lists the valid names.
+`AGENT` is a name from the agent catalog: `claude`, `codex`, `copilot`, or `opencode` ([Agent catalog](agent-management.md#agent-catalog)). An unknown agent, integration, workflow, or toolchain name fails before Podman is called, and the message lists the valid names.
 
 ### Controller group
 
@@ -113,7 +113,7 @@ An [agent session](#agents-session) keeps an agent running in a sandbox. Every `
 | `agents update NAME AGENT` | while the agent `AGENT` has a running session |
 | `agents enable NAME AGENT` | when it would replace an existing installation, with `--version X` other than the installed version, while the agent `AGENT` has a running session |
 
-A session of another agent does not block the `agents` commands. For the `agents` commands, `--force` does not help when the manager does not answer: they fail at step 7 as every `agents ...` command does ([Protect a running agent session](agents.md#protect-a-running-agent-session), [Session guard](sandboxes.md#session-guard)).
+A session of another agent does not block the `agents` commands. For the `agents` commands, `--force` does not help when the manager does not answer: they fail at step 7 as every `agents ...` command does ([Protect a running agent session](agent-management.md#protect-a-running-agent-session), [Session guard](sandboxes.md#session-guard)).
 
 ## `version`
 
@@ -321,7 +321,7 @@ Usage line: `Usage: sandboxed-agents agents enable`. `--help` prints the help of
 Installs the agent from its npm package into the home volume of the running sandbox and adds it to the sandbox's agent selection. Without `--version`, an agent that is not enabled gets the version that is `latest` at that moment, and no pin; on an agent that is already enabled, the command installs nothing and reports the installed version and the pin.
 
 - `--version X` installs exactly version `X` and pins the agent to it. `X` is an exact version such as `1.2.3`, also with a prerelease or build metadata; tags such as `latest` and ranges such as `^1.2` are refused.
-- `--force` ends a running agent session of `AGENT` before `--version X` replaces the installed version. Where nothing is replaced, it has no effect ([Enable an agent](agents.md#enable-an-agent)).
+- `--force` ends a running agent session of `AGENT` before `--version X` replaces the installed version. Where nothing is replaced, it has no effect ([Enable an agent](agent-management.md#enable-an-agent)).
 
 ## `agents disable`
 
@@ -331,7 +331,7 @@ sandboxed-agents agents disable NAME AGENT [--force]
 
 Usage line: `Usage: sandboxed-agents agents disable`.
 
-Removes the agent's command and its entry in the agent selection, its pin included. The agent's credentials and cached data stay in the home volume, and so do its installed package files; a later `agents enable` installs the `latest` version without a pin. On an agent that is not enabled, it changes nothing and exits zero. `--force` ends a running agent session of the agent first ([Disable an agent](agents.md#disable-an-agent)).
+Removes the agent's command and its entry in the agent selection, its pin included. The agent's credentials and cached data stay in the home volume, and so do its installed package files; a later `agents enable` installs the `latest` version without a pin. On an agent that is not enabled, it changes nothing and exits zero. `--force` ends a running agent session of the agent first ([Disable an agent](agent-management.md#disable-an-agent)).
 
 ## `agents update`
 
@@ -342,7 +342,7 @@ sandboxed-agents agents update --help
 
 Usage line: `Usage: sandboxed-agents agents update`. `--help` prints the help of `agents update`.
 
-Reinstalls the enabled agent: its pinned version when it has a pin, otherwise the version that is `latest` at that moment. `--unpin` removes the pin and installs the `latest` version. `--force` ends a running agent session of the agent before the update. An agent that is not enabled is refused with a message naming `agents enable NAME AGENT` ([Update an agent](agents.md#update-an-agent)).
+Reinstalls the enabled agent: its pinned version when it has a pin, otherwise the version that is `latest` at that moment. `--unpin` removes the pin and installs the `latest` version. `--force` ends a running agent session of the agent before the update. An agent that is not enabled is refused with a message naming `agents enable NAME AGENT` ([Update an agent](agent-management.md#update-an-agent)).
 
 ## `agents login`
 
@@ -361,7 +361,7 @@ Runs one of the agent's login workflows in the running sandbox, as the user `age
 | `codex` | `chatgpt`, `api-key` |
 | `opencode` | `provider` |
 
-The command needs an interactive terminal on standard input and standard output and fails without one (step 8, reported only when the manager answers and the agent is enabled). An agent that is not enabled is refused with a message naming `agents enable NAME AGENT`. The credentials stay in the sandbox's home volume, where every agent of the sandbox can read them; the executable stores no credential on the host. `agents login` exits zero when the workflow ended with status 0 and non-zero otherwise, and does not check the sign-in state afterwards ([Sign in to an agent](agents.md#sign-in-to-an-agent)).
+The command needs an interactive terminal on standard input and standard output and fails without one (step 8, reported only when the manager answers and the agent is enabled). An agent that is not enabled is refused with a message naming `agents enable NAME AGENT`. The credentials stay in the sandbox's home volume, where every agent of the sandbox can read them; the executable stores no credential on the host. `agents login` exits zero when the workflow ended with status 0 and non-zero otherwise, and does not check the sign-in state afterwards ([Sign in to an agent](agent-management.md#sign-in-to-an-agent)).
 
 ## `agents status`
 
@@ -371,7 +371,7 @@ sandboxed-agents agents status NAME AGENT
 
 Usage line: `Usage: sandboxed-agents agents status`.
 
-Reports whether the agent is enabled, its installed version, its sign-in state (`signed in`, `not signed in`, or `unknown`), whether its agent session is running, and its pin. Only `claude` declares a status probe; for the other agents the sign-in state is `unknown`, which says nothing about whether the agent is signed in. It exits zero whenever it can report ([Show an agent's status](agents.md#show-an-agents-status)).
+Reports whether the agent is enabled, its installed version, its sign-in state (`signed in`, `not signed in`, or `unknown`), whether its agent session is running, and its pin. Only `claude` declares a status probe; for the other agents the sign-in state is `unknown`, which says nothing about whether the agent is signed in. It exits zero whenever it can report ([Show an agent's status](agent-management.md#show-an-agents-status)).
 
 ## `agents run`
 
@@ -381,7 +381,7 @@ sandboxed-agents agents run NAME AGENT [ARG...]
 
 Usage line: `Usage: sandboxed-agents agents run`.
 
-Runs the enabled agent once in `/workspace` of the running sandbox and ends when the agent exits. Every `ARG` reaches the agent unchanged, also one that starts with `-`; `agents run` has no options of its own. It allocates no terminal and keeps standard input, standard output, and standard error as three separate streams, so scripts can pipe and redirect them. It exits with the agent's exit status, and with 128 plus the signal number when a signal ends the agent ([Run an agent](agents.md#run-an-agent)).
+Runs the enabled agent once in `/workspace` of the running sandbox and ends when the agent exits. Every `ARG` reaches the agent unchanged, also one that starts with `-`; `agents run` has no options of its own. It allocates no terminal and keeps standard input, standard output, and standard error as three separate streams, so scripts can pipe and redirect them. It exits with the agent's exit status, and with 128 plus the signal number when a signal ends the agent ([Run an agent](agent-management.md#run-an-agent)).
 
 ## `agents session`
 
@@ -394,7 +394,7 @@ Usage line: `Usage: sandboxed-agents agents session`. `--help` prints the help o
 
 Starts a persistent agent session for the enabled agent, a tmux session that runs the agent in `/workspace`, and attaches your terminal to it, or attaches to the agent's session when one is running. Detaching with Ctrl-b d, the default tmux binding, or closing the terminal leaves the agent running; the same command attaches again, also from another terminal. The session ends when the agent exits.
 
-Starting or attaching needs an interactive terminal on standard input and standard output and fails without one, starting no session and attaching to none. Starting a session without a terminal is not part of the first version. `--stop` ends the agent's session, and with it the agent, and needs no terminal; when no session runs or the agent is not enabled, it reports that nothing was to do and exits zero ([Keep an agent running in a session](agents.md#keep-an-agent-running-in-a-session)).
+Starting or attaching needs an interactive terminal on standard input and standard output and fails without one, starting no session and attaching to none. Starting a session without a terminal is not part of the first version. `--stop` ends the agent's session, and with it the agent, and needs no terminal; when no session runs or the agent is not enabled, it reports that nothing was to do and exits zero ([Keep an agent running in a session](agent-management.md#keep-an-agent-running-in-a-session)).
 
 ## `integrations login`
 
@@ -437,7 +437,7 @@ The topic pages describe each command in full, with its refusals and the Podman 
 - [Check a sandbox](check.md): `check NAME`.
 - [Images](images.md): toolchains and `build`.
 - [Update a sandbox](updates.md): `update`.
-- [Agents](agents.md): every `agents` command.
+- [Agents](agent-management.md): every `agents` command.
 - [Integrations](integrations.md): every `integrations` command.
 - [Shell and SSH access](ssh.md): `shell`, `ssh-config`, `fingerprint`, and VS Code Remote SSH.
 - [Releases](releases.md), [Development](development.md), and [Live suite](live-suite.md): release files, building and testing, and the live test gate.

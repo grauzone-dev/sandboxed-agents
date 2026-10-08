@@ -4,7 +4,7 @@
 
 It is one executable on the host. It creates, starts, stops, updates, and removes sandboxes, installs agents into them, signs agents and integrations in, and sets up SSH access for editors on request. In this version it delivers:
 
-- the agents GitHub Copilot CLI (`copilot`), Claude Code (`claude`), Codex CLI (`codex`), and OpenCode (`opencode`), installed from npm into the sandbox ([Agents](docs/agents.md));
+- the agents GitHub Copilot CLI (`copilot`), Claude Code (`claude`), Codex CLI (`codex`), and OpenCode (`opencode`), installed from npm into the sandbox ([Agents](docs/agent-management.md));
 - the integrations Git, GitHub, Azure, and Azure DevOps ([Integrations](docs/integrations.md));
 - the optional toolchains `azure`, `dotnet`, `native`, and `playwright`, built into a sandbox's image ([Images](docs/images.md));
 - persistent agent sessions that you detach from and reattach to, and opt-in SSH access for `ssh`, VS Code Remote SSH, and other desktop UIs ([Shell and SSH access](docs/ssh.md)).
@@ -79,7 +79,7 @@ Topic pages:
 - [Check a sandbox](docs/check.md): the report of `check NAME`.
 - [Images](docs/images.md): toolchains and `build`.
 - [Update a sandbox](docs/updates.md): `update NAME`, `update --all`, and recovery of an interrupted update.
-- [Agents](docs/agents.md): the agent catalog, enabling, signing in, runs, and agent sessions.
+- [Agents](docs/agent-management.md): the agent catalog, enabling, signing in, runs, and agent sessions.
 - [Integrations](docs/integrations.md): Git, GitHub, Azure, and Azure DevOps.
 - [Shell and SSH access](docs/ssh.md): `shell`, the SSH setup, and VS Code Remote SSH.
 - [Releases](docs/releases.md): release files, attestations, and the npm and NuGet packages.

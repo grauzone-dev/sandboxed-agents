@@ -127,6 +127,12 @@ func referenceSyntaxOptions(t *testing.T, command, section string) []string {
 	return slices.Compact(options)
 }
 
+// referenceProbeCandidates collects every string literal that looks like a
+// command word or an option from the packages that define the CLI parser.
+// These are only candidates: probing the executable decides which of them it
+// actually recognizes. The scanned directories are an assumption; when parser
+// definitions move to another package, add its directory here, or options
+// defined there are never probed.
 func referenceProbeCandidates(t *testing.T) ([]string, []string) {
 	t.Helper()
 	var words, options []string
@@ -195,22 +201,16 @@ func referenceOptionAccepted(t *testing.T, command, option string) bool {
 	} else {
 		args = append(args, option)
 	}
-	switch option {
-	case "--memory", "--shm-size":
-		args = append(args, "8g")
-	case "--cpus", "--pids-limit":
-		args = append(args, "4")
-	case "--port":
-		args = append(args, "2222")
-	case "--with":
-		args = append(args, "none")
-	case "--agents":
-		args = append(args, "codex")
-	case "--version":
-		args = append(args, "1.2.3")
-	case "--name", "--email":
-		args = append(args, "reference@example.test")
-	}
 	_, stderr, _ := runCLI(t, "ssh-ports-free", args...)
-	return !strings.Contains(stderr, "Usage:")
+	if !strings.Contains(stderr, "Usage:") {
+		return true
+	}
+	// A usage error does not mean the option is unknown: a recognized option
+	// given without its value fails with a different message. Comparing with
+	// the error for an option the parser cannot know, after replacing the
+	// option's name, tells the two apart without a table of option values.
+	unknown := "--reference-unknown-option"
+	args[len(args)-1] = unknown
+	_, unknownError, _ := runCLI(t, "ssh-ports-free", args...)
+	return strings.ReplaceAll(stderr, option, unknown) != unknownError
 }

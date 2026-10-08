@@ -73,7 +73,7 @@ func TestLiveSuiteRefusesDefaultAndInvalidGroupsBeforePodman(t *testing.T) {
 			if err := json.Unmarshal(data, &record); err != nil {
 				t.Fatal(err)
 			}
-			if record["commit"] != commit || record["result"] != "fail" || record["image_part_ran"] != false || record["platform"] != "linux" || record["schema_version"] != float64(1) {
+			if record["commit"] != commit || record["result"] != "fail" || record["image_part_ran"] != false || record["platform"] != "linux" || record["schema_version"] != float64(2) {
 				t.Fatalf("record=%s", data)
 			}
 		})
@@ -168,46 +168,8 @@ func TestLiveRunReachesPodmanWithoutRebuildingSharedImages(t *testing.T) {
 	if summary.Commit != commit || summary.Result != "pass" || summary.ImagePartSelected || summary.ImagePartRan || summary.Kind != "live-suite" {
 		t.Fatalf("summary=%+v", summary)
 	}
-	if !reflect.DeepEqual(summary.Checks, []livesuite.Check{{Name: "build-host", Result: "pass"}, {Name: "version", Result: "pass"}, {Name: "list", Result: "pass"}}) {
+	if !reflect.DeepEqual(reachedChecks(summary), []livesuite.Check{{Name: "build-host", Result: "pass"}, {Name: "version", Result: "pass"}, {Name: "list", Result: "pass"}}) {
 		t.Fatalf("checks=%v", summary.Checks)
-	}
-}
-
-func TestSelectedImagePartRebuildsOnceAndRecordsItsOutcome(t *testing.T) {
-	for _, status := range []int{0, 42} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			config := fixtureConfig(t)
-			config.Images = true
-			var diagnostic bytes.Buffer
-			config.Stderr = &diagnostic
-			config.Host = platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
-			fakes := testutil.NewFakePrograms(t)
-			fakes.Script("podman", testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "[]"}, testutil.Response{Stdout: "podman version 5.0.0\n"}, testutil.Response{ExitCode: status}, testutil.Response{Stdout: "[]"})
-			err := livesuite.Run(context.Background(), config)
-			if (err == nil) != (status == 0) {
-				t.Fatalf("error=%v status=%d stderr=%q calls=%v", err, status, diagnostic.String(), fakes.Calls("podman"))
-			}
-			builds := 0
-			for _, call := range fakes.Calls("podman") {
-				if len(call.Args) > 0 && call.Args[0] == "build" {
-					builds++
-				}
-			}
-			if builds != 1 {
-				t.Fatalf("builds=%d calls=%v", builds, fakes.Calls("podman"))
-			}
-			summary := readSummary(t, config, "windows-11")
-			want := "pass"
-			if status != 0 {
-				want = "fail"
-			}
-			if summary.Result != want || summary.ImagePartRan != (status == 0) || !summary.ImagePartSelected || summary.Platform != "windows-11" || summary.ImageCoverageComplete {
-				t.Fatalf("summary=%+v", summary)
-			}
-			if last := summary.Checks[len(summary.Checks)-1]; last.Name != "images" || last.Result != want {
-				t.Fatalf("check=%+v", last)
-			}
-		})
 	}
 }
 
@@ -258,7 +220,7 @@ func TestRejectedRunReplacesAnEarlierPassingSummary(t *testing.T) {
 	if err := livesuite.Run(context.Background(), config); err == nil {
 		t.Fatal("default accepted")
 	}
-	if summary := readSummary(t, config, nativeSummaryPlatform); summary.Result != "fail" || len(summary.Checks) != 0 {
+	if summary := readSummary(t, config, nativeSummaryPlatform); summary.Result != "fail" || len(reachedChecks(summary)) != 0 {
 		t.Fatalf("stale summary=%+v", summary)
 	}
 	if len(fakes.Calls("podman")) != 2 {
@@ -320,7 +282,7 @@ func TestMismatchedExecutableCannotProducePassingValidation(t *testing.T) {
 		t.Fatal("mismatched binary passed")
 	}
 	summary := readSummary(t, config, nativeSummaryPlatform)
-	if summary.Commit != config.Commit || summary.Result != "fail" || !reflect.DeepEqual(summary.Checks, []livesuite.Check{{Name: "build-host", Result: "pass"}, {Name: "version", Result: "fail"}}) {
+	if summary.Commit != config.Commit || summary.Result != "fail" || !reflect.DeepEqual(reachedChecks(summary), []livesuite.Check{{Name: "build-host", Result: "pass"}, {Name: "version", Result: "fail"}}) {
 		t.Fatalf("summary=%+v", summary)
 	}
 	if len(fakes.Calls("podman")) != 0 {
@@ -368,7 +330,7 @@ func TestDefaultRunBuildsTheCommitBeforeItReachesPodman(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary := readSummary(t, config, nativeSummaryPlatform)
-	if summary.Result != "pass" || len(summary.Checks) != 3 || summary.Checks[0].Name != "build-host" {
+	if summary.Result != "pass" || len(reachedChecks(summary)) != 3 || reachedChecks(summary)[0].Name != "build-host" {
 		t.Fatalf("summary=%+v", summary)
 	}
 	if len(fakes.Calls("podman")) != 2 {
@@ -417,4 +379,14 @@ func TestWindowsOutputOnAnotherDriveStillRuns(t *testing.T) {
 	if summary := readSummary(t, config, "windows-11"); summary.Result != "pass" {
 		t.Fatalf("summary=%+v", summary)
 	}
+}
+
+func reachedChecks(summary livesuite.Summary) []livesuite.Check {
+	var checks []livesuite.Check
+	for _, check := range summary.Checks {
+		if check.Result != "not-run" {
+			checks = append(checks, check)
+		}
+	}
+	return checks
 }

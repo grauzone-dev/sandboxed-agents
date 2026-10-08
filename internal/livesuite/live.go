@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
 type Config struct {
@@ -70,7 +72,7 @@ func Run(ctx context.Context, config Config) (result error) {
 	default:
 		return errors.New(unsupportedHostMessage)
 	}
-	summary := Summary{SchemaVersion: 1, Kind: "live-suite", Commit: config.Commit, Platform: platformName, Result: "fail", ImagePartSelected: config.Images, Checks: []Check{}}
+	summary := Summary{SchemaVersion: 2, Kind: "live-suite", Commit: config.Commit, Platform: platformName, Result: "fail", ImagePartSelected: config.Images, Checks: imageChecksNotRun()}
 	path := filepath.Join(config.OutputDirectory, "live-suite-"+platformName+".json")
 	if err := writeSummary(path, summary); err != nil {
 		return err
@@ -115,6 +117,12 @@ func Run(ctx context.Context, config Config) (result error) {
 		if err != nil {
 			outcome = "fail"
 		}
+		for i := range summary.Checks {
+			if summary.Checks[i].Name == name {
+				summary.Checks[i].Result = outcome
+				return err
+			}
+		}
 		summary.Checks = append(summary.Checks, Check{Name: name, Result: outcome})
 		return err
 	}
@@ -137,6 +145,17 @@ func Run(ctx context.Context, config Config) (result error) {
 		return err
 	}
 	environment := withGroup(os.Environ(), group)
+	if host.OS == "windows" {
+		environment = slices.DeleteFunc(environment, func(value string) bool {
+			key, _, _ := strings.Cut(value, "=")
+			switch strings.ToUpper(key) {
+			case "CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY":
+				return true
+			default:
+				return false
+			}
+		})
+	}
 	invoke := func(args []string, stdout io.Writer) error {
 		status, err := run(ctx, process.Request{Name: executable, Args: args, Env: environment, Streams: process.Streams{Stdout: stdout, Stderr: config.Stderr}})
 		if err != nil {
@@ -170,14 +189,12 @@ func Run(ctx context.Context, config Config) (result error) {
 	}
 	if config.Images {
 		if err := check("images", func() error {
-			if err := invoke([]string{"build"}, config.Stdout); err != nil {
-				return errors.New(imagesFailureMessage)
-			}
-			return nil
+			assetHash := strings.TrimPrefix(strings.Split(strings.TrimSpace(version.String()), "\n")[1], "assets ")
+			return runImages(ctx, config, run, executable, group, assetHash, check, func() { summary.ImagePartRan = true })
 		}); err != nil {
 			return err
 		}
-		summary.ImagePartRan = true
+		summary.ImageCoverageComplete = true
 	}
 	if config.Lifecycle {
 		return check("lifecycle", func() error {
@@ -185,6 +202,23 @@ func Run(ctx context.Context, config Config) (result error) {
 		})
 	}
 	return nil
+}
+
+func imageChecksNotRun() []Check {
+	checks := []Check{
+		{Name: "images/base/up", Result: "not-run"},
+		{Name: "images/base/contents", Result: "not-run"},
+		{Name: "images/base/host-keys", Result: "not-run"},
+		{Name: "images/base/rebuild", Result: "not-run"},
+	}
+	for _, definition := range toolchains.Catalog() {
+		if definition.Delivered {
+			for _, step := range []string{"up", "smoke", "rebuild"} {
+				checks = append(checks, Check{Name: "images/" + definition.Name + "/" + step, Result: "not-run"})
+			}
+		}
+	}
+	return checks
 }
 
 func withGroup(environment []string, group string) []string {

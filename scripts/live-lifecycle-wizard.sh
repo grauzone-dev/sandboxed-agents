@@ -211,7 +211,7 @@ pause "The Linux run passed. Press Enter to continue"
 
 stage "Windows follow-up"
 open_url "https://github.com/grauzone-dev/sandboxed-agents/issues/24"
-say "Windows 11 stays pending: this wizard does not run it, and no Windows result exists until the suite passes on a Windows 11 host. Run it later in PowerShell from the repository root of a clean checkout of the same commit:"
+say "This wizard produces no Windows 11 result for this run. To record Windows 11 for the same commit, run the suite separately in PowerShell from the repository root of a clean checkout of that commit:"
 step '$env:SANDBOXED_AGENTS_GROUP = "live-lifecycle-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss"); go run ./tools/live -opt-in -lifecycle'
 pause "Press Enter once you have noted the Windows command for later"
 
@@ -219,7 +219,7 @@ stage "Results and cleanup"
 say "The redacted Linux summary of this run:"
 cat .scratch/live/live-suite-linux.json
 say "To share the result, copy only this JSON into the conversation. The wizard posts and uploads nothing."
-note "This summary validates no release: image_coverage_complete stays false and Windows 11 is pending. The run deleted only what it created; the base image that it built or reused stays on the host."
+note "This summary validates no release: image_coverage_complete stays false, and a Windows 11 result for this commit needs its own run. The run deleted only what it created; the base image that it built or reused stays on the host."
 pause "Press Enter to finish"
 
 finish

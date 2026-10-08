@@ -34,7 +34,7 @@ $env:SANDBOXED_AGENTS_GROUP = 'live'
 go run ./tools/live -opt-in -images -lifecycle
 ```
 
-On Linux, a wizard walks you through a lifecycle run: it checks the prerequisites, runs `go run ./tools/live -opt-in -lifecycle` in a new controller group, shows the PowerShell command for the pending Windows 11 run, and prints the Linux summary. Run it from the repository root:
+On Linux, a wizard walks you through a lifecycle run: it checks the prerequisites, runs `go run ./tools/live -opt-in -lifecycle` in a new controller group, shows the PowerShell command for a separate Windows 11 run of the same commit, and prints the Linux summary. Run it from the repository root:
 
 ```sh
 bash scripts/live-lifecycle-wizard.sh

@@ -243,7 +243,7 @@ Deletes the container of the sandbox, stopping it first when it runs, and remove
 - `--volumes` also deletes the sandbox's volumes that carry the current owner, including the home volume with the agents, credentials, and other files stored in it. A volume with a missing or different owner is never deleted ([Owner conflicts](#owner-conflicts)).
 - `--force` removes a running sandbox although agent sessions run in it or the manager does not answer, and ends those sessions ([Running agent sessions and `--force`](#running-agent-sessions-and---force)).
 
-A bound workspace directory is never deleted. On a sandbox of which only volumes remain, `remove NAME` deletes nothing, names `remove NAME --volumes`, and exits zero ([Remove a sandbox](sandboxes.md#remove-a-sandbox)).
+A bound workspace directory is never deleted. On a sandbox of which only volumes remain, `remove NAME` deletes no volume, removes the host side of an SSH setup that is still installed, names `remove NAME --volumes`, and exits zero ([Remove a sandbox](sandboxes.md#remove-a-sandbox)).
 
 ## `update`
 

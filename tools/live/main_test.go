@@ -58,7 +58,7 @@ func runTool(t *testing.T, args ...string) (int, string, string) {
 func TestToolSkipsLiveSuiteWithoutOptIn(t *testing.T) {
 	fakes := testutil.NewFakePrograms(t)
 	output := filepath.Join(t.TempDir(), "records")
-	status, stdout, stderr := runTool(t, "-images", "-output", output)
+	status, stdout, stderr := runTool(t, "-images", "-lifecycle", "-output", output)
 	if status != 0 || !strings.Contains(stdout, "skipped") || stderr != "" {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}

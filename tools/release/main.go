@@ -55,7 +55,7 @@ func buildPreview() error {
 		return err
 	}
 	defer os.RemoveAll(work)
-	artifactNames := []string{release.LinuxExecutable, release.WindowsExecutable, release.ChecksumFilename, npmpackage.Filename(*tag)}
+	artifactNames := []string{release.LinuxExecutable, release.WindowsExecutable, release.ChecksumFilename, npmpackage.Filename(*tag), release.NuGetFilename(*tag)}
 	var bundle []byte
 	for _, pass := range []string{"first", "second"} {
 		dir := filepath.Join(work, pass)
@@ -115,8 +115,7 @@ func buildPreview() error {
 			return err
 		}
 	}
-	names := append(artifactNames[:], release.NuGetFilename(*tag))
-	for _, name := range names {
+	for _, name := range artifactNames {
 		first, err := os.ReadFile(filepath.Join(work, "first", name))
 		if err != nil {
 			return err
@@ -129,7 +128,7 @@ func buildPreview() error {
 			return fmt.Errorf("repeated builds differ: %s", name)
 		}
 	}
-	return writeArtifacts(filepath.Join(work, "first"), *output, names)
+	return writeArtifacts(filepath.Join(work, "first"), *output, artifactNames)
 }
 
 func checkOutput(output string) error {
@@ -153,7 +152,7 @@ func checkOutput(output string) error {
 	return nil
 }
 
-func writeArtifacts(source, output string, names []string) error {
+func writeArtifacts(source, output string, artifactNames []string) error {
 	if err := checkOutput(output); err != nil {
 		return err
 	}
@@ -169,7 +168,7 @@ func writeArtifacts(source, output string, names []string) error {
 	if err := os.Chmod(stage, 0755); err != nil {
 		return err
 	}
-	for _, name := range names {
+	for _, name := range artifactNames {
 		contents, err := os.ReadFile(filepath.Join(source, name))
 		if err != nil {
 			return err

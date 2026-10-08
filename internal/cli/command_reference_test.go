@@ -20,7 +20,18 @@ func TestCommandReferenceMatchesCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the command reference must document the shipped CLI: %v", err)
 	}
-	entries := referenceEntries(t, string(document))
+	text := strings.ReplaceAll(string(document), "\r\n", "\n")
+	for _, ending := range []struct{ name, value string }{{"LF", "\n"}, {"CRLF", "\r\n"}} {
+		t.Run(ending.name, func(t *testing.T) {
+			assertCommandReferenceMatchesCLI(t, strings.ReplaceAll(text, "\n", ending.value))
+		})
+	}
+}
+
+func assertCommandReferenceMatchesCLI(t *testing.T, document string) {
+	t.Helper()
+	document = strings.ReplaceAll(document, "\r\n", "\n")
+	entries := referenceEntries(t, document)
 	words, options := referenceProbeCandidates(t)
 	fakes := testutil.NewFakePrograms(t)
 	fakes.Script("podman", testutil.Response{RepeatForArgs: []string{"--version"}, ExitCode: 99, Stderr: "offline reference probe\n"})

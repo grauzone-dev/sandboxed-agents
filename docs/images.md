@@ -147,7 +147,7 @@ Playwright and its browsers lie under `/opt`, outside the workspace, home, and S
 
 `update NAME --with SET` changes the toolchain set of an existing sandbox and keeps its volumes ([Change the toolchain set](updates.md#change-the-toolchain-set)).
 
-Each smoke check is meant to run as `agent` inside a sandbox created from the image. No command of the executable runs it. The [image part of the live suite](live-suite.md#image-part) runs each toolchain's smoke check through `sandboxed-agents shell` without a terminal, as UID and GID 1000, in a sandbox created with that toolchain alone. No toolchain image has been built or run against real Podman, and no live run of the image part is recorded yet.
+Each smoke check is meant to run as `agent` inside a sandbox created from the image. No command of the executable runs it. The [image part of the live suite](live-suite.md#image-part) runs each toolchain's smoke check through `sandboxed-agents shell` without a terminal, as UID and GID 1000, in a sandbox created with that toolchain alone, and first checks that the image defines the account `agent` with UID and GID 1000. No toolchain image has been built or run against real Podman, and no live run of the image part is recorded yet.
 
 ### Azure versions
 

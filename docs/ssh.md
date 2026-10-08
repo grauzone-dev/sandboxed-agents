@@ -41,13 +41,13 @@ When the standard input of `shell` is not a terminal, for example a pipe or a fi
 printf 'pwd\nid -u\n' | sandboxed-agents shell agent01
 ```
 
-A missing terminal is therefore never an error for `shell`. This version has no command that runs an arbitrary shell command in a sandbox; [`agents run`](agents.md#run-an-agent) runs only agents from the catalog.
+A missing terminal is therefore never an error for `shell`. This version has no command that runs an arbitrary shell command in a sandbox; [`agents run`](agent-management.md#run-an-agent) runs only agents from the catalog.
 
 ### Exit status
 
 `shell` exits with the exit status of `podman exec`. When the shell starts, that is the shell's own exit status: `exit 7` in the shell makes `shell` exit with status 7. When Podman cannot run the shell, its own exit statuses apply, such as 125 for an error in Podman itself ([podman-exec(1), Exit Status](https://docs.podman.io/en/latest/markdown/podman-exec.1.html#exit-status)).
 
-`shell` and [`agents run`](agents.md#run-an-agent) are the commands of this version that pass through another program's exit status. When `shell` refuses before it opens the shell, it exits with status 1, which a shell can also return. A non-zero status alone therefore does not tell whether the shell ran.
+`shell` and [`agents run`](agent-management.md#run-an-agent) are the commands of this version that pass through another program's exit status. When `shell` refuses before it opens the shell, it exits with status 1, which a shell can also return. A non-zero status alone therefore does not tell whether the shell ran.
 
 ### Command line
 
@@ -289,7 +289,7 @@ When a query exits non-zero, for example because your SSH configuration contains
 
 `ssh-config NAME --install` needs a running sandbox and a manager that answers. It runs its checks in the [order of checks](#order-of-checks-for-ssh-config), then installs in this order:
 
-1. At step 7 of the order of checks, it checks that the manager answers, with the same `sandboxed-agents-manager version` call as `agents enable` ([How the request reaches the manager](agents.md#how-the-request-reaches-the-manager)).
+1. At step 7 of the order of checks, it checks that the manager answers, with the same `sandboxed-agents-manager version` call as `agents enable` ([How the request reaches the manager](agent-management.md#how-the-request-reaches-the-manager)).
 2. It reads the host key through the manager with `ssh host-key --wait` ([Pinned host key](#pinned-host-key)).
 3. With the SSH setup installed, it compares the pin line with the pin and stops there: on a match it prints that nothing changed and exits with status 0; on a mismatch it fails.
 4. Without an SSH setup, it runs the [conflict check](#host-entry-conflicts) and reads the managed configuration and your SSH configuration.

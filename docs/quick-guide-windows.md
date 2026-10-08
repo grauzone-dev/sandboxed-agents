@@ -352,5 +352,5 @@ These pages give details beyond this guide. You do not need them to follow it.
 - [Host prerequisites](host-prerequisites.md)
 - [Releases](releases.md)
 - [Sandboxes](sandboxes.md)
-- [Agents](agents.md)
+- [Agents](agent-management.md)
 - [Shell and SSH access](ssh.md)

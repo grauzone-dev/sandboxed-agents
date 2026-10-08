@@ -15,6 +15,7 @@ $expected = $checksumLines[0].Substring(0, 64)
 if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $expected) {
     throw ('{0} does not match its checksum in SHA256SUMS. Nothing was changed. Download and extract the package again.' -f $source)
 }
+Get-CommandPathOwnership $InstallDirectory | Out-Null
 if (-not $NoPathUpdate) {
     $originalPath = Get-CommandUserPath
 }

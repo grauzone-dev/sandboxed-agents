@@ -5,6 +5,7 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'command-path.ps1')
 $InstallDirectory = Resolve-CommandInstallDirectory $InstallDirectory -NoPathUpdate:$NoPathUpdate
+Get-CommandPathOwnership $InstallDirectory | Out-Null
 if (-not $NoPathUpdate) {
     $originalPath = Get-CommandUserPath
 }

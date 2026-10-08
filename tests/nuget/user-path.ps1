@@ -77,7 +77,7 @@ if ($existed) {
     $originalKind = $key.GetValueKind('Path')
 }
 Add-Type -Path (Join-Path $PackageDirectory 'environment-notification.cs')
-$notifications = [SandboxAgents.Tests.EnvironmentNotification]::new()
+$notifications = [SandboxedAgents.Tests.EnvironmentNotification]::new()
 try {
     $raw = ' C:\Keep Mixed CASE ;%USERPROFILE%\bin;;C:\Other\;.;bin;C:bin;'
     $kind = [Microsoft.Win32.RegistryValueKind]::String

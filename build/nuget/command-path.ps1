@@ -60,7 +60,7 @@ function Set-CommandUserPath([hashtable]$Original, [string]$Value) {
     } finally {
         $key.Dispose()
     }
-    Send-CommandEnvironmentNotification
+    [SandboxedAgentsEnvironmentNotification]::Broadcast()
 }
 
 function Initialize-CommandEnvironmentNotification {
@@ -89,12 +89,12 @@ public static class SandboxedAgentsEnvironmentNotification
     }
 }
 
-function Send-CommandEnvironmentNotification {
-    [SandboxedAgentsEnvironmentNotification]::Broadcast()
+function Get-CommandPathMarker([string]$Directory) {
+    return Join-Path $Directory '.sandboxed-agents-path.json'
 }
 
 function Get-CommandPathOwnership([string]$Directory) {
-    $marker = Join-Path $Directory '.sandboxed-agents-path.json'
+    $marker = Get-CommandPathMarker $Directory
     if (-not (Test-Path -LiteralPath $marker)) { return $null }
     try {
         $ownership = [IO.File]::ReadAllText($marker) | ConvertFrom-Json -AsHashtable
@@ -119,7 +119,7 @@ function Add-CommandUserPath([hashtable]$Original, [string]$Directory) {
     }
     $value = $Directory
     if ($Original.Value.Length -gt 0) { $value = $Original.Value + ';' + $Directory }
-    $marker = Join-Path $Directory '.sandboxed-agents-path.json'
+    $marker = Get-CommandPathMarker $Directory
     $previousMarker = $null
     if ($null -ne $ownership) { $previousMarker = [IO.File]::ReadAllText($marker) }
     [IO.File]::WriteAllText($marker, (@{ entry = $Directory } | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
@@ -146,5 +146,5 @@ function Remove-CommandUserPath([hashtable]$Original, [string]$Directory) {
             break
         }
     }
-    Remove-Item -LiteralPath (Join-Path $Directory '.sandboxed-agents-path.json') -Force
+    Remove-Item -LiteralPath (Get-CommandPathMarker $Directory) -Force
 }

@@ -20,6 +20,7 @@ import (
 type Config struct {
 	OptIn           bool
 	Images          bool
+	Lifecycle       bool
 	Commit          string
 	Repository      string
 	OutputDirectory string
@@ -177,6 +178,11 @@ func Run(ctx context.Context, config Config) (result error) {
 			return err
 		}
 		summary.ImagePartRan = true
+	}
+	if config.Lifecycle {
+		return check("lifecycle", func() error {
+			return runLifecycle(ctx, config, run, executable, group, check)
+		})
 	}
 	return nil
 }

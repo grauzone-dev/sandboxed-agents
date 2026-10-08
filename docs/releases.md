@@ -1,10 +1,10 @@
 # Releases
 
-Pushing a tag `vX.Y.Z-preview.YYYYMMDD.N` publishes a GitHub prerelease. X, Y, Z, and N are numbers without leading zeros; the date is any eight digits, not checked as a calendar date. Other tags publish nothing. Stable releases, the npm package, and publishing to the npm and NuGet registries come with later Stories.
+Pushing a tag `vX.Y.Z-preview.YYYYMMDD.N` publishes a GitHub prerelease. X, Y, Z, and N are numbers without leading zeros; the date is any eight digits, not checked as a calendar date. Other tags publish nothing. Stable releases and publication to the npm and NuGet registries come with later Stories.
 
-A prerelease holds `sandboxed-agents-linux-amd64`, `sandboxed-agents-windows-amd64.exe`, `SHA256SUMS`, and the NuGet package `SandboxedAgents.X.Y.Z-preview.YYYYMMDD.N.nupkg`, whose version is the tag without the `v`. `SHA256SUMS` covers the two binaries. `version` prints the full tag, including the `v`, and the embedded build assets hash, which both binaries share.
+A prerelease holds five files: `sandboxed-agents-linux-amd64`, `sandboxed-agents-windows-amd64.exe`, `SHA256SUMS`, the npm package `sandboxed-agents-X.Y.Z-preview.YYYYMMDD.N.tgz` ([npm package](#npm-package)), and the NuGet package `SandboxedAgents.X.Y.Z-preview.YYYYMMDD.N.nupkg` ([Install from the NuGet package](#install-from-the-nuget-package)). Both package file names carry the tag without the `v`. `SHA256SUMS` covers the two binaries. `version` prints the full tag, including the `v`, and the embedded build assets hash, which both binaries share.
 
-Every release file is attested: each file of a prerelease carries SLSA build provenance signed through GitHub Actions for this repository. This holds for previews published since attestations were added; earlier previews such as `v1.0.0-preview.20261003.1` have none, so only their checksums can be verified. Previews published before the NuGet package was added do not contain it.
+Every release file is attested: the workflow creates SLSA build provenance, signed through GitHub Actions for this repository, for each file of a prerelease. This holds for previews published since attestations were added; earlier previews such as `v1.0.0-preview.20261003.1` have none, so only their checksums can be verified. A preview holds only the files its commit's release tool produced: earlier previews lack one or both packages, and `v1.0.0-preview.20261007.3`, for example, holds the NuGet package but no npm package.
 
 ## npm package
 
@@ -36,7 +36,7 @@ From the repository root:
 go run ./tools/release -tag v1.0.0-preview.20261003.1 -output .scratch/preview
 ```
 
-The output directory must be absent or empty. `-check-tag` only validates the tag. Otherwise the tool builds both binaries and the package twice, the binaries through `tools/build`, and writes the four files only if both builds are byte-identical, including `SHA256SUMS`. The package's entries have a fixed order and fixed timestamps, so one commit and tag always yield the same package.
+The output directory must be absent or empty. `-check-tag` only validates the tag. Otherwise the tool builds both binaries twice through `tools/build`, packs the npm package and the NuGet package from each build, and writes the five files only if both builds are byte-identical, including `SHA256SUMS` and both packages. Both packages are packed deterministically, the NuGet package with a fixed entry order and fixed timestamps, so the same commit and tag yield the same packages.
 
 ## Verify a download
 
@@ -44,6 +44,8 @@ The output directory must be absent or empty. `-check-tag` only validates the ta
 gh release download v1.0.0-preview.20261003.1 -R grauzone-dev/sandboxed-agents
 sha256sum -c SHA256SUMS
 ```
+
+`SHA256SUMS` lists only the two binaries, not the `.tgz` or the `.nupkg`. Verify the packages, like every release file of an attested preview, with `gh attestation verify FILE -R grauzone-dev/sandboxed-agents`.
 
 ## Install from the NuGet package
 
@@ -73,10 +75,10 @@ A preview is validated on its commit by three gates: the offline suite, the [liv
 
 ## What is verified where
 
-On Linux or Windows amd64, the release tool runs the native binary's `version`; it checks the cross-compiled binary only for the embedded build assets. The workflow runs the release tool and the offline suite on Linux and on Windows, so each binary's `version` runs natively, and publishes only if both runners produced identical release files, including the package, and `version` output.
+On Linux or Windows amd64, the release tool runs the native binary's `version`; it checks the cross-compiled binary only for the embedded build assets. The workflow runs the release tool and the offline suite on Linux and on Windows, so each binary's `version` runs natively, and publishes only if both runners produced identical release files, including both packages, and `version` output.
 
 The offline suite covers the launcher, its platform check, its checksum checks at installation and on every run, and the forwarding of arguments, standard streams, and exit status, on Linux also for a binary ended by a signal, as well as the workspace guards for the launcher paths. It runs without network, Podman, or credentials.
 
 Attestations are created and checked only in the workflow, because signing and verification depend on GitHub; the release tool and the offline suite do neither. Before creating the release, the workflow verifies each release file against the attestation bundle it just produced. After publishing, it downloads the release files, verifies each against the attestations stored for the repository, and checks that a modified copy of each file fails verification.
 
-The offline suite runs both installer scripts ([NuGet installer tests](development.md#nuget-installer-tests)). Only its native Windows job changes the user `PATH` in the registry and runs the scripts without administrator rights; on other operating systems the tests cover only runs with `-NoPathUpdate` and the `;` refusal. The package's attestation exists only for a package that the workflow built and published for a pushed tag, so it can be checked only on such a prerelease. Installing from the package on a clean machine is part of the manual checklist (#64).
+The offline suite runs both installer scripts ([NuGet installer tests](development.md#nuget-installer-tests)). Only its native Windows job changes the user `PATH` in the registry and runs the scripts without administrator rights; on other operating systems the tests cover only runs with `-NoPathUpdate` and the `;` refusal. A package's attestation exists only for a package that the workflow built and published for a pushed tag, so it can be checked only on such a prerelease. Installing from either package on a clean machine is part of the manual checklist (#64).

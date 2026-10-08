@@ -195,7 +195,7 @@ stage "Linux host prerequisites"
 open_url "https://github.com/grauzone-dev/sandboxed-agents/blob/main/docs/host-prerequisites.md"
 say "This wizard needs Linux amd64, Go 1.27 or newer, git, and Podman 4.4.0 or newer set up as on the opened page, in a clean checkout at the repository root. It builds the executable and runs its host check next; if any step fails, the wizard stops before any sandbox exists."
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { warn "This wizard runs only on Linux amd64. On Windows 11, use the PowerShell command from docs/live-suite.md instead."; exit 1; }
-[[ "$PWD" == "$(git rev-parse --show-toplevel 2>/dev/null || true)" ]] || { warn "Run this wizard from the repository root: bash scripts/live-lifecycle-wizard.sh"; exit 1; }
+[[ "$(pwd -P)" == "$(git rev-parse --show-toplevel 2>/dev/null || true)" ]] || { warn "Run this wizard from the repository root: bash scripts/live-lifecycle-wizard.sh"; exit 1; }
 go version
 podman --version
 go run ./tools/build

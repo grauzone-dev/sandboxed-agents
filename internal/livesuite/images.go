@@ -33,13 +33,13 @@ type liveImageCase struct {
 	after           liveImageRecord
 }
 
-func runImages(ctx context.Context, config Config, run process.Runner, executable, group, assetHash string, check func(string, func() error) error, rebuilt func()) (result error) {
+func runImages(ctx context.Context, config Config, run process.Runner, executable, group, assetHash string, check func(string, func() error) error, markImagePartRan func()) (result error) {
 	probeRun := func(current context.Context, request process.Request) (int, error) {
 		environment := request.Env
 		if environment == nil {
 			environment = os.Environ()
 		}
-		request.Env = scrubLiveImageRemoteEnvironment(environment)
+		request.Env = scrubPodmanRemoteEnvironment(environment)
 		return run(current, request)
 	}
 	var podman process.Runner
@@ -101,6 +101,19 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 		}))
 	}()
 	suffix := strings.ToLower(rand.Text())
+	start := func(item *liveImageCase, selection ...string) error {
+		return check("images/"+item.kind+"/up", func() error {
+			if err := invoke(ctx, append([]string{"up", item.name}, selection...), nil, config.Stdout); err != nil {
+				return err
+			}
+			var err error
+			item.before, err = readLiveImage(ctx, podman, item.tag, item.tag, group, true)
+			if err != nil {
+				return err
+			}
+			return verifyLiveImageSandbox(ctx, podman, group, item, item.before.ID)
+		})
+	}
 	var cases []*liveImageCase
 	for _, definition := range toolchains.Catalog() {
 		if !definition.Delivered {
@@ -113,17 +126,7 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 		item := &liveImageCase{kind: definition.Name, name: "images-" + definition.Name + "-" + suffix, tag: images.Tag(assetHash, set)}
 		cases = append(cases, item)
 		attempted = append(attempted, item)
-		if err := check("images/"+item.kind+"/up", func() error {
-			if err := invoke(ctx, []string{"up", item.name, "--with", definition.Name}, nil, config.Stdout); err != nil {
-				return err
-			}
-			var err error
-			item.before, err = readLiveImage(ctx, podman, item.tag, item.tag, group, true)
-			if err != nil {
-				return err
-			}
-			return verifyLiveImageSandbox(ctx, podman, group, item, item.before.ID)
-		}); err != nil {
+		if err := start(item, "--with", definition.Name); err != nil {
 			return err
 		}
 		if err := check("images/"+item.kind+"/smoke", func() error {
@@ -138,17 +141,7 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 	base := &liveImageCase{kind: "base", name: "images-base-" + suffix, tag: images.BaseTag(assetHash)}
 	cases = append(cases, base)
 	attempted = append(attempted, base)
-	if err := check("images/base/up", func() error {
-		if err := invoke(ctx, []string{"up", base.name}, nil, config.Stdout); err != nil {
-			return err
-		}
-		var err error
-		base.before, err = readLiveImage(ctx, podman, base.tag, base.tag, group, true)
-		if err != nil {
-			return err
-		}
-		return verifyLiveImageSandbox(ctx, podman, group, base, base.before.ID)
-	}); err != nil {
+	if err := start(base); err != nil {
 		return err
 	}
 	if err := check("images/base/contents", func() error {
@@ -157,7 +150,7 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 		return err
 	}
 	if err := check("images/base/host-keys", func() error {
-		read := func(item *liveImageCase) (map[string]string, error) {
+		readHostKeys := func(item *liveImageCase) (map[string]string, error) {
 			if err := verifyLiveImageSandbox(ctx, podman, group, item, item.before.ID); err != nil {
 				return nil, err
 			}
@@ -179,16 +172,16 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 			}
 			return keys, nil
 		}
-		left, err := read(base)
+		baseKeys, err := readHostKeys(base)
 		if err != nil {
 			return err
 		}
-		right, err := read(cases[0])
+		toolchainKeys, err := readHostKeys(cases[0])
 		if err != nil {
 			return err
 		}
-		for _, key := range left {
-			for _, other := range right {
+		for _, key := range baseKeys {
+			for _, other := range toolchainKeys {
 				if key == other {
 					return errors.New(imageHostKeysSharedMessage)
 				}
@@ -209,7 +202,7 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 		if err := invoke(ctx, []string{"build"}, nil, io.MultiWriter(&output, liveImageOutput(config.Stdout))); err != nil {
 			return err
 		}
-		rebuilt()
+		markImagePartRan()
 		text := strings.Join(strings.Fields(strings.ToLower(output.String())), " ")
 		if !strings.Contains(text, "existing sandboxes keep their current image until you update them") || !strings.Contains(text, "list marks them as outdated") {
 			return errors.New(imageRebuildNoteMessage)
@@ -271,7 +264,7 @@ func liveImageOutput(output io.Writer) io.Writer {
 
 func liveImageEnvironment(original []string, group, directory string) []string {
 	var result []string
-	for _, value := range withGroup(scrubLiveImageRemoteEnvironment(original), group) {
+	for _, value := range withGroup(scrubPodmanRemoteEnvironment(original), group) {
 		key, _, _ := strings.Cut(value, "=")
 		switch strings.ToUpper(key) {
 		case "TMPDIR", "TMP", "TEMP":
@@ -391,17 +384,4 @@ func liveImageSandboxExists(ctx context.Context, run process.Runner, group, name
 		}
 	}
 	return false, nil
-}
-
-func scrubLiveImageRemoteEnvironment(environment []string) []string {
-	result := make([]string, 0, len(environment))
-	for _, value := range environment {
-		key, _, _ := strings.Cut(value, "=")
-		switch strings.ToUpper(key) {
-		case "CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY":
-		default:
-			result = append(result, value)
-		}
-	}
-	return result
 }

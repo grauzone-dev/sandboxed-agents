@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/controllergroup"
@@ -145,16 +144,8 @@ func Run(ctx context.Context, config Config) (result error) {
 		return err
 	}
 	environment := withGroup(os.Environ(), group)
-	if host.OS == "windows" {
-		environment = slices.DeleteFunc(environment, func(value string) bool {
-			key, _, _ := strings.Cut(value, "=")
-			switch strings.ToUpper(key) {
-			case "CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY":
-				return true
-			default:
-				return false
-			}
-		})
+	if host.OS == "windows" && config.Images {
+		environment = scrubPodmanRemoteEnvironment(environment)
 	}
 	invoke := func(args []string, stdout io.Writer) error {
 		status, err := run(ctx, process.Request{Name: executable, Args: args, Env: environment, Streams: process.Streams{Stdout: stdout, Stderr: config.Stderr}})
@@ -167,6 +158,7 @@ func Run(ctx context.Context, config Config) (result error) {
 		return nil
 	}
 	var version bytes.Buffer
+	var assetHash string
 	if err := check("version", func() error {
 		if err := invoke([]string{"version"}, &version); err != nil {
 			return errors.New(versionFailureMessage)
@@ -175,6 +167,7 @@ func Run(ctx context.Context, config Config) (result error) {
 		if len(lines) != 2 || lines[0] != "sandboxed-agents "+config.Commit || !assetLinePattern.MatchString(lines[1]) {
 			return errors.New(versionMismatchMessage)
 		}
+		assetHash = strings.TrimPrefix(lines[1], "assets ")
 		return nil
 	}); err != nil {
 		return err
@@ -189,7 +182,6 @@ func Run(ctx context.Context, config Config) (result error) {
 	}
 	if config.Images {
 		if err := check("images", func() error {
-			assetHash := strings.TrimPrefix(strings.Split(strings.TrimSpace(version.String()), "\n")[1], "assets ")
 			return runImages(ctx, config, run, executable, group, assetHash, check, func() { summary.ImagePartRan = true })
 		}); err != nil {
 			return err
@@ -230,6 +222,19 @@ func withGroup(environment []string, group string) []string {
 		}
 	}
 	return append(result, controllergroup.GroupEnvironment+"="+group)
+}
+
+func scrubPodmanRemoteEnvironment(environment []string) []string {
+	result := make([]string, 0, len(environment))
+	for _, value := range environment {
+		key, _, _ := strings.Cut(value, "=")
+		switch strings.ToUpper(key) {
+		case "CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY":
+		default:
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func writeSummary(path string, summary Summary) error {

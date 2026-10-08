@@ -236,15 +236,7 @@ func newLivePodman(ctx context.Context, config Config, run process.Runner) (proc
 			if environment == nil {
 				environment = os.Environ()
 			}
-			request.Env = make([]string, 0, len(environment))
-			for _, value := range environment {
-				key, _, _ := strings.Cut(value, "=")
-				switch strings.ToUpper(key) {
-				case "CONTAINER_CONNECTION", "CONTAINER_HOST", "CONTAINER_SSHKEY":
-				default:
-					request.Env = append(request.Env, value)
-				}
-			}
+			request.Env = scrubPodmanRemoteEnvironment(environment)
 		}
 		return run(ctx, request)
 	}

@@ -95,6 +95,60 @@ func TestNuGetInstallerUpgradesAndRemovalKeepsUnrelatedFiles(t *testing.T) {
 	}
 }
 
+func TestNuGetRemovalPreservesPreexistingUserPathEntry(t *testing.T) {
+	for _, installed := range []bool{false, true} {
+		t.Run(fmt.Sprint(installed), func(t *testing.T) {
+			pwsh, packageDir, fake := installerFixture(t, []byte("release"))
+			installDir := filepath.Join(installerTempDir(t), "shared tools")
+			raw := "%USERPROFILE%\\bin;;" + strings.ToUpper(installDir) + string(os.PathSeparator)
+			registry := fixtureUserPath(t, packageDir, raw)
+			if installed {
+				if output, err := runInstaller(t, pwsh, packageDir, "install-command.ps1", "-InstallDirectory", installDir); err != nil {
+					t.Fatalf("install with existing PATH entry: %v\n%s", err, output)
+				}
+			}
+			for range 2 {
+				if output, err := runInstaller(t, pwsh, packageDir, "remove-command.ps1", "-InstallDirectory", installDir); err != nil {
+					t.Fatalf("remove with existing PATH entry: %v\n%s", err, output)
+				}
+				actual, err := os.ReadFile(registry)
+				if err != nil || string(actual) != raw {
+					t.Fatalf("preexisting user PATH changed: got %q, %v; want %q", actual, err, raw)
+				}
+			}
+			if calls := fake.Calls("podman"); len(calls) != 0 {
+				t.Fatalf("installation lifecycle called Podman: %v", calls)
+			}
+		})
+	}
+}
+
+func fixtureUserPath(t *testing.T, packageDir, raw string) string {
+	t.Helper()
+	registry := filepath.Join(packageDir, "test-user-path")
+	if err := os.WriteFile(registry, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(packageDir, "command-path.ps1")
+	script, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := strings.ReplaceAll(registry, "'", "''")
+	adapter := fmt.Sprintf(`
+function Get-CommandUserPath {
+    return @{ Value = [IO.File]::ReadAllText('%s'); Kind = [Microsoft.Win32.RegistryValueKind]::String }
+}
+function Set-CommandUserPath([hashtable]$Original, [string]$Value) {
+    [IO.File]::WriteAllText('%s', $Value)
+}
+`, quoted, quoted)
+	if err := os.WriteFile(path, append(script, []byte(adapter)...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
 func writeInstallerBinary(t *testing.T, packageDir string, binary []byte) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(packageDir, "sandboxed-agents-windows-amd64.exe"), binary, 0700); err != nil {
@@ -248,6 +302,13 @@ func TestNuGetWindowsInstallerPreservesRawUserPathWithoutAdministratorRights(t *
 	for _, kind := range []string{"String", "ExpandString", "Absent"} {
 		t.Run(kind, func(t *testing.T) {
 			pwsh, packageDir, fake := installerFixture(t, binary)
+			receiver, err := os.ReadFile(filepath.Join("..", "..", "tests", "nuget", "environment-notification.cs"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(packageDir, "environment-notification.cs"), receiver, 0600); err != nil {
+				t.Fatal(err)
+			}
 			script, err := filepath.Abs(filepath.Join("..", "..", "tests", "nuget", "run-user-path.ps1"))
 			if err != nil {
 				t.Fatal(err)

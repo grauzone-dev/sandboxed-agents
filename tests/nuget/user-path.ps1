@@ -57,6 +57,17 @@ function Assert-Version([string]$Directory, [string]$Expected) {
     }
 }
 
+function Assert-PathOwnership([string]$Directory, [string]$Entry = '') {
+    $marker = Join-Path $Directory '.sandboxed-agents-path.json'
+    if (-not $Entry) {
+        if (Test-Path -LiteralPath $marker) { throw 'PATH ownership marker remains without an owned entry.' }
+        return
+    }
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { throw 'Added PATH entry has no ownership marker.' }
+    $ownership = [IO.File]::ReadAllText($marker) | ConvertFrom-Json -AsHashtable
+    if ($ownership.Count -ne 1 -or $ownership.entry -cne $Entry) { throw 'PATH ownership marker does not identify the exact added entry.' }
+}
+
 $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment', $true)
 $existed = @($key.GetValueNames()) -contains 'Path'
 $original = $null
@@ -65,6 +76,8 @@ if ($existed) {
     $original = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
     $originalKind = $key.GetValueKind('Path')
 }
+Add-Type -Path (Join-Path $PackageDirectory 'environment-notification.cs')
+$notifications = [SandboxAgents.Tests.EnvironmentNotification]::new()
 try {
     $raw = ' C:\Keep Mixed CASE ;%USERPROFILE%\bin;;C:\Other\;.;bin;C:bin;'
     $kind = [Microsoft.Win32.RegistryValueKind]::String
@@ -81,18 +94,26 @@ try {
     [IO.Directory]::CreateDirectory($defaultDirectory) | Out-Null
     $outside = Join-Path $env:LOCALAPPDATA 'untouched.txt'
     [IO.File]::WriteAllText($outside, 'outside installation')
+    $notificationCount = $notifications.Count
     Invoke-Installer 'install-command.ps1' -WorkingDirectory $defaultDirectory
+    if ($notifications.Count -le $notificationCount) { throw 'Adding a user PATH entry did not broadcast the environment change.' }
     Assert-Path $expected $kind
+    Assert-PathOwnership $defaultDirectory $defaultDirectory
     Assert-Version $defaultDirectory 'sandboxed-agents v1.0.0-preview.20261007.1'
+    $notificationCount = $notifications.Count
     Invoke-Installer 'install-command.ps1' -WorkingDirectory $defaultDirectory
+    if ($notifications.Count -ne $notificationCount) { throw 'Repeated installation broadcast without changing the user PATH.' }
     Assert-Path $expected $kind
+    Assert-PathOwnership $defaultDirectory $defaultDirectory
 
     $source = Join-Path $PackageDirectory 'sandboxed-agents-windows-amd64.exe'
     Copy-Item -LiteralPath $UpgradeBinary -Destination $source -Force
     $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText((Join-Path $PackageDirectory 'SHA256SUMS'), "$hash  sandboxed-agents-windows-amd64.exe`n")
     Invoke-Installer 'install-command.ps1' -WorkingDirectory $defaultDirectory
+    if ($notifications.Count -ne $notificationCount) { throw 'Upgrade broadcast without changing the user PATH.' }
     Assert-Path $expected $kind
+    Assert-PathOwnership $defaultDirectory $defaultDirectory
     Assert-Version $defaultDirectory 'sandboxed-agents v1.0.0-preview.20261007.2'
 
     [IO.File]::WriteAllText($source, 'tampered')
@@ -106,8 +127,11 @@ try {
 
     $unrelated = Join-Path $defaultDirectory 'keep.txt'
     [IO.File]::WriteAllText($unrelated, 'unrelated file')
+    $notificationCount = $notifications.Count
     Invoke-Installer 'remove-command.ps1' -WorkingDirectory $defaultDirectory
+    if ($notifications.Count -le $notificationCount) { throw 'Removing an owned user PATH entry did not broadcast the environment change.' }
     Assert-Path $raw $kind
+    Assert-PathOwnership $defaultDirectory
     if (Test-Path -LiteralPath (Join-Path $defaultDirectory 'sandboxed-agents.exe')) { throw 'Removal left the command installed.' }
     if ([IO.File]::ReadAllText($unrelated) -cne 'unrelated file') { throw 'Removal changed an unrelated file.' }
     Invoke-Installer 'remove-command.ps1' -WorkingDirectory $defaultDirectory
@@ -129,12 +153,15 @@ try {
     $key.SetValue('Path', $expandableRaw, $kind)
     Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom)
     $expandableInstalled = $expandableRaw
-    $expandableRemoved = $raw
+    $expandableRemoved = $expandableRaw
     if ($kind -eq [Microsoft.Win32.RegistryValueKind]::String) {
         $expandableInstalled += ';' + $custom
         $expandableRemoved = $expandableRaw
     }
     Assert-Path $expandableInstalled $kind
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $expandableRemoved $kind
+    Assert-PathOwnership $custom
     Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
     Assert-Path $expandableRemoved $kind
     $key.SetValue('Path', $raw, $kind)
@@ -143,15 +170,50 @@ try {
     $existingRaw = $existingEntry
     if ($raw) { $existingRaw = $raw + ';' + $existingEntry }
     $key.SetValue('Path', $existingRaw, $kind)
+    $notificationCount = $notifications.Count
     Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom)
     Assert-Path $existingRaw $kind
+    Assert-PathOwnership $custom
     Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $existingRaw $kind
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $existingRaw $kind
+    if ($notifications.Count -ne $notificationCount) { throw 'A pre-existing PATH entry caused a broadcast without a registry change.' }
+    $key.SetValue('Path', $raw, $kind)
     Assert-Path $raw $kind
 
+    $notificationCount = $notifications.Count
     Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
     Assert-Path $raw $kind
+    Assert-PathOwnership $custom
     Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
     Assert-Path $raw $kind
+    Assert-PathOwnership $custom
+    if ($notifications.Count -ne $notificationCount) { throw 'No-PATH operations broadcast an environment change.' }
+
+    Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $customExpected $kind
+    Assert-PathOwnership $custom $custom
+    Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
+    Assert-Path $customExpected $kind
+    Assert-PathOwnership $custom $custom
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
+    Assert-Path $customExpected $kind
+    Assert-PathOwnership $custom $custom
+    if (Test-Path -LiteralPath (Join-Path $custom 'sandboxed-agents.exe')) { throw 'No-PATH removal left the command installed.' }
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $raw $kind
+    Assert-PathOwnership $custom
+
+    Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom)
+    $duplicatePath = $customExpected + ';' + $custom
+    $key.SetValue('Path', $duplicatePath, $kind)
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $customExpected $kind
+    Assert-PathOwnership $custom
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom)
+    Assert-Path $customExpected $kind
+    $key.SetValue('Path', $raw, $kind)
 
     Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
     $key.SetValue('Path', 7, [Microsoft.Win32.RegistryValueKind]::DWord)
@@ -174,11 +236,26 @@ try {
     Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $separatorDirectory, '-NoPathUpdate')
     Assert-Path $raw $kind
 
+    Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
+    $malformedMarker = Join-Path $custom '.sandboxed-agents-path.json'
+    [IO.File]::WriteAllText($malformedMarker, 'invalid ownership')
+    Invoke-Installer 'install-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate') -Fails
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate') -Fails
+    Assert-Version $custom 'sandboxed-agents v1.0.0-preview.20261007.2'
+    Assert-Path $raw $kind
+    if ([IO.File]::ReadAllText($malformedMarker) -cne 'invalid ownership') { throw 'Malformed ownership marker was modified.' }
+    Remove-Item -LiteralPath $malformedMarker
+    Invoke-Installer 'remove-command.ps1' @('-InstallDirectory', $custom, '-NoPathUpdate')
+
     if ([IO.File]::ReadAllText($outside) -cne 'outside installation') { throw 'Installation changed an outside file.' }
     $expectedFiles = @('Programs\sandboxed-agents\keep.txt', 'untouched.txt')
     $actualFiles = @(Get-ChildItem -LiteralPath $env:LOCALAPPDATA -File -Recurse | ForEach-Object { [IO.Path]::GetRelativePath($env:LOCALAPPDATA, $_.FullName) } | Sort-Object)
     if (($actualFiles -join '|') -cne ($expectedFiles -join '|')) { throw "Installation changed files outside its directory: $($actualFiles -join ', ')." }
 } finally {
-    if ($existed) { $key.SetValue('Path', $original, $originalKind) } else { $key.DeleteValue('Path', $false) }
-    $key.Dispose()
+    try {
+        if ($existed) { $key.SetValue('Path', $original, $originalKind) } else { $key.DeleteValue('Path', $false) }
+    } finally {
+        $key.Dispose()
+        $notifications.Dispose()
+    }
 }

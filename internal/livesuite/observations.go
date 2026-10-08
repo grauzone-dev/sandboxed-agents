@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
 type observationMount struct {
@@ -25,9 +26,10 @@ type observationMount struct {
 }
 
 type observationContainer struct {
-	Name  string
-	Image string
-	State struct {
+	Name   string
+	Image  string
+	Config struct{ Labels map[string]string }
+	State  struct {
 		Running bool
 		Pid     int
 	}
@@ -85,7 +87,7 @@ func newSandboxObserver(ctx context.Context, config Config, run process.Runner, 
 				return err
 			}
 			var records []observationContainer
-			if json.Unmarshal(output, &records) != nil || len(records) != 1 || records[0].Name != container || !records[0].State.Running || records[0].State.Pid < 1 || records[0].Image == "" {
+			if json.Unmarshal(output, &records) != nil || len(records) != 1 || records[0].Name != container || !records[0].State.Running || records[0].State.Pid < 1 || records[0].Image == "" || records[0].Config.Labels[sandbox.OwnerLabel] != group || records[0].Config.Labels[sandbox.NameLabel] != name {
 				return errors.New("container-observation")
 			}
 			record = records[0]
@@ -151,7 +153,6 @@ func newSandboxObserver(ctx context.Context, config Config, run process.Runner, 
 		}
 		var result error
 		for _, item := range checks {
-			item := item
 			result = errors.Join(result, check(phase+"/"+item.name, func() error {
 				if !item.pass {
 					return errors.New(item.name)
@@ -169,6 +170,7 @@ func newSandboxObserver(ctx context.Context, config Config, run process.Runner, 
 		}
 		kernel.UserNamespace = ""
 		agent.UserNamespace = ""
+		sort.Slice(record.Mounts, func(i, j int) bool { return record.Mounts[i].Destination < record.Mounts[j].Destination })
 		observed := sandboxObservation{Mounts: record.Mounts, Kernel: kernel, Agent: agent, UIDMap: host.UIDMap, GIDMap: host.GIDMap, HostUID: host.UID, HostGID: host.GID, RootUID: rootUID, RootGID: rootGID}
 		if baseline == nil {
 			baseline = &observed
@@ -331,6 +333,5 @@ func verifyObservationMounts(mounts []observationMount, container string) error 
 		}
 		delete(want, mount.Destination)
 	}
-	sort.Slice(mounts, func(i, j int) bool { return mounts[i].Destination < mounts[j].Destination })
 	return nil
 }

@@ -13,7 +13,12 @@ import (
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
-	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
+)
+
+const (
+	liveProbePrefix       = "sandboxed-agents-live-probe."
+	liveProbeGroupLabel   = "io.github.sandboxed-agents.live-suite-group"
+	liveProbeSandboxLabel = "io.github.sandboxed-agents.live-suite-sandbox-name"
 )
 
 func observeGateway(ctx context.Context, config Config, run process.Runner, group, name, image, container, gateway string) (result error) {
@@ -26,7 +31,8 @@ func observeGateway(ctx context.Context, config Config, run process.Runner, grou
 		return fmt.Errorf("gateway-nonce: %w", err)
 	}
 	token := hex.EncodeToString(nonce)
-	hostName, controlName := container+"-gateway-host", container+"-gateway-control"
+	probePrefix := liveProbePrefix + group + "." + name
+	hostName, controlName := probePrefix+"-gateway-host", probePrefix+"-gateway-control"
 	var created []string
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
@@ -54,7 +60,7 @@ func observeGateway(ctx context.Context, config Config, run process.Runner, grou
 				Name   string
 				Config struct{ Labels map[string]string }
 			}
-			if json.Unmarshal(data, &records) != nil || len(records) != 1 || records[0].Name != probeName || records[0].Config.Labels[sandbox.OwnerLabel] != group || records[0].Config.Labels[sandbox.NameLabel] != name {
+			if json.Unmarshal(data, &records) != nil || len(records) != 1 || records[0].Name != probeName || records[0].Config.Labels[liveProbeGroupLabel] != group || records[0].Config.Labels[liveProbeSandboxLabel] != name {
 				result = errors.Join(result, errors.New("gateway-probe-owner-conflict"))
 				continue
 			}
@@ -67,7 +73,7 @@ func observeGateway(ctx context.Context, config Config, run process.Runner, grou
 		}
 	}()
 	create := func(probeName, network, script string, arguments ...string) error {
-		args := []string{"run", "--detach", "--pull=never", "--name", probeName, "--label", sandbox.OwnerLabel + "=" + group, "--label", sandbox.NameLabel + "=" + name, "--network=" + network, "--user=1000:1000", "--cap-drop=all", "--security-opt=no-new-privileges", "--memory=128m", "--pids-limit=32", "--entrypoint=node", image, "-e", script}
+		args := []string{"run", "--detach", "--pull=never", "--name", probeName, "--label", liveProbeGroupLabel + "=" + group, "--label", liveProbeSandboxLabel + "=" + name, "--network=" + network, "--user=1000:1000", "--cap-drop=all", "--security-opt=no-new-privileges", "--memory=128m", "--pids-limit=32", "--entrypoint=node", image, "-e", script}
 		args = append(args, arguments...)
 		created = append(created, probeName)
 		_, err := readObservation(ctx, run, "podman", args, config.Stderr)

@@ -61,7 +61,7 @@ func TestLiveLifecycleRecordsAnUpFailureWithoutBuildingSharedImages(t *testing.T
 }
 
 func TestLiveLifecycleRefusesAnOccupiedControllerGroupBeforeUp(t *testing.T) {
-	for _, object := range []string{"container", "volume", "foreign-prefix"} {
+	for _, object := range []string{"container", "volume", "foreign-prefix", "probe-owner", "probe-prefix"} {
 		t.Run(object, func(t *testing.T) {
 			t.Setenv("SANDBOXED_AGENTS_GROUP", "live")
 			config := lifecycleConfig(t)
@@ -75,11 +75,19 @@ func TestLiveLifecycleRefusesAnOccupiedControllerGroupBeforeUp(t *testing.T) {
 							fmt.Fprintln(request.Streams.Stdout, `[{"Names":["sandboxed-agents.live.existing"],"Labels":{"io.github.sandboxed-agents.owner":"live"}}]`)
 						} else if object == "foreign-prefix" {
 							fmt.Fprintln(request.Streams.Stdout, `[{"Names":["sandboxed-agents.live.foreign"],"Labels":{}}]`)
+						} else if object == "probe-owner" {
+							fmt.Fprintln(request.Streams.Stdout, `[{"Names":["renamed-probe"],"Labels":{"io.github.sandboxed-agents.live-suite-group":"live"}}]`)
+						} else if object == "probe-prefix" {
+							fmt.Fprintln(request.Streams.Stdout, `[{"Names":["sandboxed-agents-live-probe.live.foreign-gateway-host"],"Labels":{}}]`)
 						} else {
 							fmt.Fprintln(request.Streams.Stdout, "[]")
 						}
 					case "volume":
-						fmt.Fprintln(request.Streams.Stdout, `[{"Name":"sandboxed-agents.live.existing.workspace","Labels":{"io.github.sandboxed-agents.owner":"live"}}]`)
+						if object == "volume" {
+							fmt.Fprintln(request.Streams.Stdout, `[{"Name":"sandboxed-agents.live.existing.workspace","Labels":{"io.github.sandboxed-agents.owner":"live"}}]`)
+						} else {
+							fmt.Fprintln(request.Streams.Stdout, "[]")
+						}
 					}
 					return 0, nil
 				}

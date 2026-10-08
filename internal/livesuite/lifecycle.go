@@ -15,6 +15,7 @@ import (
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
 func runLifecycle(ctx context.Context, config Config, run process.Runner, executable, group string, check func(string, func() error) error) (result error) {
@@ -113,10 +114,10 @@ func runLifecycle(ctx context.Context, config Config, run process.Runner, execut
 	if err := check("lifecycle/start", func() error { return invoke(ctx, group, []string{"start", name}, config.Stdout) }); err != nil {
 		return err
 	}
-	if err := state("restarted", "running"); err != nil {
+	if err := state("started-again", "running"); err != nil {
 		return err
 	}
-	if err := observe(check, "lifecycle/restarted"); err != nil {
+	if err := observe(check, "lifecycle/started-again"); err != nil {
 		return err
 	}
 	if err := check("lifecycle/remove-keep-volumes", func() error { return invoke(ctx, group, []string{"remove", name}, config.Stdout) }); err != nil {
@@ -199,7 +200,7 @@ func readLifecycleVolumes(ctx context.Context, run process.Runner, group, name s
 	}
 	volumes := make([]lifecycleVolume, 0, 3)
 	for _, record := range records {
-		if !slices.Contains(names, record.Name) || record.CreatedAt == "" || record.Mountpoint == "" || record.Labels["io.github.sandboxed-agents.owner"] != group {
+		if !slices.Contains(names, record.Name) || record.CreatedAt == "" || record.Mountpoint == "" || record.Labels[sandbox.OwnerLabel] != group {
 			return nil, errors.New(invalidVolumeInventoryMessage)
 		}
 		volumes = append(volumes, record.lifecycleVolume)
@@ -289,11 +290,11 @@ func requireEmptyGroup(ctx context.Context, run process.Runner, group string) er
 		if len(container.Names) == 0 || slices.Contains(container.Names, "") {
 			return errors.New(invalidContainerInventoryMessage)
 		}
-		if container.Labels["io.github.sandboxed-agents.owner"] == group {
+		if container.Labels[sandbox.OwnerLabel] == group || container.Labels[liveProbeGroupLabel] == group {
 			return errors.New(groupNotEmptyMessage)
 		}
 		for _, name := range container.Names {
-			if strings.HasPrefix(name, "sandboxed-agents."+group+".") || strings.HasPrefix(name, "sandboxed-agents-backup."+group+".") {
+			if strings.HasPrefix(name, "sandboxed-agents."+group+".") || strings.HasPrefix(name, "sandboxed-agents-backup."+group+".") || strings.HasPrefix(name, liveProbePrefix+group+".") {
 				return errors.New(groupNotEmptyMessage)
 			}
 		}
@@ -312,7 +313,7 @@ func requireEmptyGroup(ctx context.Context, run process.Runner, group string) er
 		if volume.Name == "" {
 			return errors.New(invalidVolumeInventoryMessage)
 		}
-		if volume.Labels["io.github.sandboxed-agents.owner"] == group || strings.HasPrefix(volume.Name, "sandboxed-agents."+group+".") {
+		if volume.Labels[sandbox.OwnerLabel] == group || strings.HasPrefix(volume.Name, "sandboxed-agents."+group+".") {
 			return errors.New(groupNotEmptyMessage)
 		}
 	}

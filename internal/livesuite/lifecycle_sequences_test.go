@@ -17,7 +17,7 @@ func TestLiveRunRejectsIncorrectLifecycleStatesAndReplacedVolumes(t *testing.T) 
 			config := liveObservationConfig(t, "linux", fixture)
 			failedCheck := map[string]string{
 				"stop":            "lifecycle/stopped/list-stopped",
-				"start":           "lifecycle/restarted/list-running",
+				"start":           "lifecycle/started-again/list-running",
 				"default-group":   "lifecycle/created/default-group-absent",
 				"volume-replaced": "lifecycle/removed/volumes-preserved",
 			}[failure]

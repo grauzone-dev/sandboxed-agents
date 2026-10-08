@@ -3,8 +3,11 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace SandboxAgents.Tests {
+namespace SandboxedAgents.Tests {
     public sealed class EnvironmentNotification : IDisposable {
+        const uint WM_SETTINGCHANGE = 0x001a;
+        const uint WM_DESTROY = 0x0002;
+        const uint WM_CLOSE = 0x0010;
         delegate IntPtr WindowProc(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         struct WindowClass {
@@ -64,15 +67,15 @@ namespace SandboxAgents.Tests {
         }
 
         IntPtr Receive(IntPtr handle, uint message, UIntPtr wParam, IntPtr lParam) {
-            if (message == 0x001a && Marshal.PtrToStringUni(lParam) == "Environment") {
+            if (message == WM_SETTINGCHANGE && Marshal.PtrToStringUni(lParam) == "Environment") {
                 Interlocked.Increment(ref count);
             }
-            if (message == 0x0002) PostQuitMessage(0);
+            if (message == WM_DESTROY) PostQuitMessage(0);
             return DefWindowProcW(handle, message, wParam, lParam);
         }
 
         void Pump() {
-            string name = "SandboxAgentsNotificationTest-" + Guid.NewGuid().ToString("N");
+            string name = "SandboxedAgentsNotificationTest-" + Guid.NewGuid().ToString("N");
             IntPtr instance = GetModuleHandleW(null);
             ushort atom = 0;
             try {
@@ -96,7 +99,7 @@ namespace SandboxAgents.Tests {
         }
 
         public void Dispose() {
-            if (window != IntPtr.Zero) PostMessageW(window, 0x0010, UIntPtr.Zero, IntPtr.Zero);
+            if (window != IntPtr.Zero) PostMessageW(window, WM_CLOSE, UIntPtr.Zero, IntPtr.Zero);
             if (!thread.Join(TimeSpan.FromSeconds(5))) throw new TimeoutException("Notification receiver did not stop.");
             ready.Dispose();
             if (failure != null) throw new InvalidOperationException("Notification receiver failed.", failure);

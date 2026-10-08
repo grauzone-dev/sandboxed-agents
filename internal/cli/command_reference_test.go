@@ -101,7 +101,7 @@ func assertCommandReferenceMatchesCLI(t *testing.T, document string) {
 
 func referenceEntries(t *testing.T, document string) map[string]string {
 	t.Helper()
-	headings := regexp.MustCompile("(?m)^## `([a-z][a-z -]*)`$").FindAllStringSubmatchIndex(document, -1)
+	headings := regexp.MustCompile("(?m)^## `([^`\r\n]+)`$").FindAllStringSubmatchIndex(document, -1)
 	entries := make(map[string]string)
 	for i, heading := range headings {
 		name := document[heading[2]:heading[3]]
@@ -130,7 +130,7 @@ func referenceSyntaxOptions(t *testing.T, command, section string) []string {
 	if !ok || !strings.Contains(syntax, "sandboxed-agents "+command) {
 		t.Fatalf("%s has no complete command syntax", command)
 	}
-	options := regexp.MustCompile(`--[a-z][a-z-]*`).FindAllString(syntax, -1)
+	options := regexp.MustCompile(`--[^\s\[\]=|]+`).FindAllString(syntax, -1)
 	if strings.Contains(section, "`--help`") {
 		options = append(options, "--help")
 	}
@@ -148,7 +148,7 @@ func referenceProbeCandidates(t *testing.T) ([]string, []string) {
 	t.Helper()
 	var words, options []string
 	wordPattern := regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	optionPattern := regexp.MustCompile(`^--[a-z][a-z-]*=?$`)
+	optionPattern := regexp.MustCompile(`^--[^\s\[\]=|]+=?$`)
 	for _, directory := range []string{".", "../sandbox", "../integrations"} {
 		files, err := filepath.Glob(filepath.Join(directory, "*.go"))
 		if err != nil {

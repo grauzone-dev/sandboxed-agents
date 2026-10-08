@@ -1,6 +1,7 @@
 package livesuite
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grauzone-dev/sandboxed-agents/internal/agentcatalog"
 	"github.com/grauzone-dev/sandboxed-agents/internal/platform"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
 func TestSandboxObservationsRefuseHostBinds(t *testing.T) {
@@ -23,6 +26,92 @@ func TestSandboxObservationsRefuseHostBinds(t *testing.T) {
 	observe := newSandboxObserver(context.Background(), Config{Host: platform.Host{OS: "linux"}}, run, "live", "sample", "")
 	if err := observe(func(_ string, action func() error) error { return action() }, "created"); err == nil {
 		t.Fatal("host bind passed the isolation observation")
+	}
+}
+
+func TestGatewayProbesNeverAppearAsSandboxes(t *testing.T) {
+	fixture := newObservationFixture()
+	if err := observeGateway(context.Background(), Config{}, fixture.run, "live", "sample", "sha256:fixture", "sandboxed-agents.live.sample", "10.0.2.2"); err != nil {
+		t.Fatal(err)
+	}
+	type probeRecord struct {
+		Names  []string
+		Labels map[string]string
+	}
+	probes := []probeRecord{}
+	for _, request := range fixture.requests {
+		if request.Args[0] != "run" {
+			continue
+		}
+		record := probeRecord{Labels: map[string]string{}}
+		for index, arg := range request.Args {
+			if arg == "--name" {
+				record.Names = []string{request.Args[index+1]}
+			}
+			if arg == "--label" {
+				key, value, _ := strings.Cut(request.Args[index+1], "=")
+				record.Labels[key] = value
+			}
+		}
+		probes = append(probes, record)
+	}
+	if len(probes) != 2 {
+		t.Fatalf("probe creations=%d", len(probes))
+	}
+	run := func(_ context.Context, request process.Request) (int, error) {
+		write := func(value any) (int, error) { return 0, json.NewEncoder(request.Streams.Stdout).Encode(value) }
+		switch request.Args[0] {
+		case "ps":
+			return write(probes)
+		case "volume":
+			return write([]any{})
+		case "container":
+			for _, record := range probes {
+				if record.Names[0] == request.Args[2] {
+					return write([]any{map[string]any{"Name": record.Names[0], "Image": "sha256:fixture", "Config": map[string]any{"Labels": record.Labels}, "State": map[string]any{"Running": false}}})
+				}
+			}
+		case "image":
+			return 1, nil
+		}
+		return 99, fmt.Errorf("unexpected list query %v", request.Args)
+	}
+	var output bytes.Buffer
+	if err := sandbox.List(context.Background(), "live", strings.Repeat("a", 64), run, &output, agentcatalog.Embedded()); err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.Split(strings.TrimSpace(output.String()), "\n")) != 1 {
+		t.Fatalf("leaked gateway probes appeared as sandboxes:\n%s", output.String())
+	}
+}
+
+func TestGatewayProbesUseAnIndependentOwnershipNamespace(t *testing.T) {
+	fixture := newObservationFixture()
+	if err := observeGateway(context.Background(), Config{}, fixture.run, "live", "sample", "sha256:fixture", "sandboxed-agents.live.sample", "10.0.2.2"); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, request := range fixture.requests {
+		if request.Args[0] != "run" {
+			continue
+		}
+		labels := map[string]string{}
+		for index, arg := range request.Args {
+			if arg == "--name" {
+				names = append(names, request.Args[index+1])
+			}
+			if arg == "--label" {
+				key, value, _ := strings.Cut(request.Args[index+1], "=")
+				labels[key] = value
+			}
+		}
+		wantLabels := map[string]string{"io.github.sandboxed-agents.live-suite-group": "live", "io.github.sandboxed-agents.live-suite-sandbox-name": "sample"}
+		if !reflect.DeepEqual(labels, wantLabels) {
+			t.Fatalf("probe ownership labels=%v", labels)
+		}
+	}
+	if !reflect.DeepEqual(names, []string{"sandboxed-agents-live-probe.live.sample-gateway-host", "sandboxed-agents-live-probe.live.sample-gateway-control"}) {
+		t.Fatalf("probe names=%v", names)
 	}
 }
 
@@ -49,7 +138,42 @@ func TestSandboxObservationsRequireKernelFacts(t *testing.T) {
 	}
 }
 
-const validObservationContainer = `[{"Name":"sandboxed-agents.live.sample","Image":"sha256:fixture","State":{"Running":true,"Pid":4321},"Mounts":[{"Type":"volume","Name":"sandboxed-agents.live.sample.workspace","Source":"/volumes/workspace","Destination":"/workspace","RW":true},{"Type":"volume","Name":"sandboxed-agents.live.sample.home","Source":"/volumes/home","Destination":"/home/agent","RW":true},{"Type":"volume","Name":"sandboxed-agents.live.sample.ssh","Source":"/volumes/ssh","Destination":"/etc/ssh","RW":true}]}]`
+const validObservationContainer = `[{"Name":"sandboxed-agents.live.sample","Image":"sha256:fixture","Config":{"Labels":{"io.github.sandboxed-agents.owner":"live","io.github.sandboxed-agents.sandbox-name":"sample"}},"State":{"Running":true,"Pid":4321},"Mounts":[{"Type":"volume","Name":"sandboxed-agents.live.sample.workspace","Source":"/volumes/workspace","Destination":"/workspace","RW":true},{"Type":"volume","Name":"sandboxed-agents.live.sample.home","Source":"/volumes/home","Destination":"/home/agent","RW":true},{"Type":"volume","Name":"sandboxed-agents.live.sample.ssh","Source":"/volumes/ssh","Destination":"/etc/ssh","RW":true}]}]`
+
+func TestSandboxObservationsRequireActualContainerOwnershipLabels(t *testing.T) {
+	for _, item := range []struct{ name, label, value string }{
+		{"wrong-owner", "io.github.sandboxed-agents.owner", "foreign"},
+		{"missing-owner", "io.github.sandboxed-agents.owner", ""},
+		{"wrong-sandbox-name", "io.github.sandboxed-agents.sandbox-name", "other"},
+		{"missing-sandbox-name", "io.github.sandboxed-agents.sandbox-name", ""},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			fixture := newObservationFixture()
+			var records []map[string]any
+			if err := json.Unmarshal([]byte(fixture.container), &records); err != nil {
+				t.Fatal(err)
+			}
+			labels := records[0]["Config"].(map[string]any)["Labels"].(map[string]any)
+			if item.value == "" {
+				delete(labels, item.label)
+			} else {
+				labels[item.label] = item.value
+			}
+			data, err := json.Marshal(records)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.container = string(data)
+			var checks []Check
+			if err := fixtureObserver(fixture)(recordingCheck(&checks), "created"); err == nil {
+				t.Fatal("incorrect container ownership labels passed")
+			}
+			if !containsCheck(checks, "created/mounts-three-named-volumes-no-binds-or-sockets", "fail") {
+				t.Fatal(checks)
+			}
+		})
+	}
+}
 
 const validHostObservation = `host-uid 1000
 host-gid 1000
@@ -117,7 +241,7 @@ func (fixture *observationFixture) run(_ context.Context, request process.Reques
 		if owner == "" {
 			owner = "live"
 		}
-		return write([]any{map[string]any{"Name": args[2], "Config": map[string]any{"Labels": map[string]string{"io.github.sandboxed-agents.owner": owner, "io.github.sandboxed-agents.sandbox-name": fixture.sandboxName}}}})
+		return write([]any{map[string]any{"Name": args[2], "Config": map[string]any{"Labels": map[string]string{"io.github.sandboxed-agents.live-suite-group": owner, "io.github.sandboxed-agents.live-suite-sandbox-name": fixture.sandboxName}}}})
 	}
 	if len(args) > 1 && args[0] == "container" && args[1] == "inspect" {
 		fmt.Fprint(request.Streams.Stdout, fixture.container)
@@ -229,7 +353,7 @@ func (f *liveObservationFixture) run(ctx context.Context, request process.Reques
 		case "ps":
 			items := []any{}
 			for name := range f.probes {
-				items = append(items, map[string]any{"Names": []string{name}, "Labels": map[string]string{"io.github.sandboxed-agents.owner": "live"}})
+				items = append(items, map[string]any{"Names": []string{name}, "Labels": map[string]string{"io.github.sandboxed-agents.live-suite-group": "live"}})
 			}
 			if f.state == "running" || f.state == "stopped" {
 				items = append(items, map[string]any{"Names": []string{"sandboxed-agents.live." + f.name}, "Labels": map[string]string{"io.github.sandboxed-agents.owner": "live"}})
@@ -328,7 +452,7 @@ func TestLiveRunRecordsObservedIsolationAcrossTheLifecycle(t *testing.T) {
 			if summary.Result != "pass" || fixture.phase != 3 || fixture.state != "" || fixture.volumes || len(fixture.probes) != 0 {
 				t.Fatalf("summary=%+v phase=%d state=%s volumes=%t probes=%v", summary, fixture.phase, fixture.state, fixture.volumes, fixture.probes)
 			}
-			for _, phase := range []string{"created", "restarted", "adopted"} {
+			for _, phase := range []string{"created", "started-again", "adopted"} {
 				for _, name := range []string{"root-maps-to-subordinate-ids", "agent-uid-1000-gid-1000-maps-to-host-user", "start-uid-0-gid-0", "manager-exec-uid-0-gid-0", "shell-uid-1000-gid-1000", "no-new-privileges", "memory-limit-256m", "cpu-limit-1", "process-limit-128", "shm-limit-16m", "mounts-three-named-volumes-no-binds-or-sockets", "gateway-host-access-blocked-with-positive-control"} {
 					if !containsCheck(summary.Checks, "lifecycle/"+phase+"/"+name, "pass") {
 						t.Fatalf("missing observation %s/%s", phase, name)
@@ -433,7 +557,7 @@ func TestSandboxObservationsRepeatIndependentChecksAndCleanupGatewayProbes(t *te
 	fixture := newObservationFixture()
 	observe := fixtureObserver(fixture)
 	var checks []Check
-	for _, phase := range []string{"created", "restarted", "adopted"} {
+	for _, phase := range []string{"created", "started-again", "adopted"} {
 		if err := observe(recordingCheck(&checks), phase); err != nil {
 			t.Fatal(err)
 		}
@@ -459,7 +583,7 @@ func TestSandboxObservationsRepeatIndependentChecksAndCleanupGatewayProbes(t *te
 			}
 		}
 	}
-	wantRemovals := []string{"sandboxed-agents.live.sample-gateway-control", "sandboxed-agents.live.sample-gateway-host", "sandboxed-agents.live.sample-gateway-control", "sandboxed-agents.live.sample-gateway-host", "sandboxed-agents.live.sample-gateway-control", "sandboxed-agents.live.sample-gateway-host"}
+	wantRemovals := []string{"sandboxed-agents-live-probe.live.sample-gateway-control", "sandboxed-agents-live-probe.live.sample-gateway-host", "sandboxed-agents-live-probe.live.sample-gateway-control", "sandboxed-agents-live-probe.live.sample-gateway-host", "sandboxed-agents-live-probe.live.sample-gateway-control", "sandboxed-agents-live-probe.live.sample-gateway-host"}
 	if !reflect.DeepEqual(removals, wantRemovals) {
 		t.Fatalf("probe cleanup=%v", removals)
 	}
@@ -572,7 +696,7 @@ func TestSandboxObservationsRejectChangedVolumeSourcesAfterReuse(t *testing.T) {
 	}
 }
 
-func TestSandboxObservationsRejectChangedUserNamespaceAfterRestart(t *testing.T) {
+func TestSandboxObservationsRejectChangedUserNamespaceAfterStart(t *testing.T) {
 	fixture := newObservationFixture()
 	observe := fixtureObserver(fixture)
 	var checks []Check
@@ -582,10 +706,10 @@ func TestSandboxObservationsRejectChangedUserNamespaceAfterRestart(t *testing.T)
 	fixture.host = strings.ReplaceAll(fixture.host, "uid-map 0 100000 1000", "uid-map 0 100001 1000")
 	fixture.host = strings.ReplaceAll(fixture.host, "uid-map 1001 101000 64535", "uid-map 1001 101001 64534")
 	fixture.host = strings.ReplaceAll(fixture.host, "start-host-uid 100000", "start-host-uid 100001")
-	if err := observe(recordingCheck(&checks), "restarted"); err == nil {
+	if err := observe(recordingCheck(&checks), "started-again"); err == nil {
 		t.Fatal("changed namespace passed")
 	}
-	if last := checks[len(checks)-1]; last.Name != "restarted/observations-match-created" || last.Result != "fail" {
+	if last := checks[len(checks)-1]; last.Name != "started-again/observations-match-created" || last.Result != "fail" {
 		t.Fatal(checks)
 	}
 }

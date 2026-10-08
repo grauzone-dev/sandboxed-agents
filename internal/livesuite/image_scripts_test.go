@@ -67,17 +67,44 @@ func TestAzureSmokeRequiresTheDevOpsExtension(t *testing.T) {
 	}
 }
 
+func TestSmokeChecksTheAgentAccountsConfiguredIdentity(t *testing.T) {
+	for _, wrong := range []string{"-u", "-g"} {
+		t.Run(wrong, func(t *testing.T) {
+			config := configWithExecutedSmokePrograms(t, "dotnet", map[string]string{
+				"id": fmt.Sprintf(`if [ "$1" = "%s" ] && [ "${2:-}" = agent ]; then
+  echo 2000
+else
+  case "$1" in -u|-g) echo 1000;; -un) echo agent;; *) exit 1;; esac
+fi
+`, wrong),
+				"dotnet": "printf '%s\\n' '8.0.100 [/usr/share/dotnet/sdk]' '9.0.100 [/usr/share/dotnet/sdk]' '10.0.100 [/usr/share/dotnet/sdk]'\n",
+			})
+			if err := livesuite.Run(context.Background(), config); err == nil {
+				t.Fatal("incorrect agent account identity passed its smoke check")
+			}
+			if summary := readSummary(t, config, "linux"); !hasCheck(summary, "images/dotnet/smoke", "fail") {
+				t.Fatalf("summary=%+v", summary)
+			}
+		})
+	}
+}
+
 func configWithExecutedSmoke(t *testing.T, kind, command, script string) livesuite.Config {
+	t.Helper()
+	return configWithExecutedSmokePrograms(t, kind, map[string]string{
+		"id":    "case \"$1\" in -u|-g) echo 1000;; -un) echo agent;; *) exit 1;; esac\n",
+		command: script,
+	})
+}
+
+func configWithExecutedSmokePrograms(t *testing.T, kind string, programs map[string]string) livesuite.Config {
 	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("execute in-sandbox Bash scripts on Linux; orchestration tests cover both host platforms")
 	}
 	config, fixture := newImageCoverageFixture(t, "linux")
 	directory := t.TempDir()
-	for name, body := range map[string]string{
-		"id":    "case \"$1\" in -u|-g) echo 1000;; -un) echo agent;; *) exit 1;; esac\n",
-		command: script,
-	} {
+	for name, body := range programs {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("#!/bin/sh\n"+body), 0700); err != nil {
 			t.Fatal(err)
 		}

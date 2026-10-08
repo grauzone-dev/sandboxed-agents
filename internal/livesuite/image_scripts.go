@@ -8,20 +8,20 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
 )
 
-const imageIdentityScript = "set -euo pipefail\ntest \"$(id -u)\" = 1000\ntest \"$(id -g)\" = 1000\ntest \"$(id -un)\" = agent\n"
+const imageIdentityScript = "set -euo pipefail\ntest \"$(id -u)\" = 1000\ntest \"$(id -g)\" = 1000\ntest \"$(id -un)\" = agent\ntest \"$(id -u agent)\" = 1000\ntest \"$(id -g agent)\" = 1000\n"
 
 func smokeCheckScript(definition toolchains.Definition) string {
 	script := imageIdentityScript + definition.SmokeCheck + "\n"
 	switch definition.Name {
 	case "dotnet":
-		script = imageIdentityScript + `sdks=$(dotnet --list-sdks)
+		script = imageIdentityScript + "sdks=$(" + definition.SmokeCheck + ")\n" + `
 printf '%s\n' "$sdks"
 for series in 8 9 10; do
   printf '%s\n' "$sdks" | grep -Eq "^${series}[.]0[.][0-9]+[[:space:]]+\\["
 done
 `
 	case "azure":
-		script = imageIdentityScript + `az version | node -e '
+		script = imageIdentityScript + definition.SmokeCheck + ` | node -e '
 let text="";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data",part=>text+=part);

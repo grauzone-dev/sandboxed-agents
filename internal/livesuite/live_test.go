@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -378,6 +379,39 @@ func TestWindowsOutputOnAnotherDriveStillRuns(t *testing.T) {
 	}
 	if summary := readSummary(t, config, "windows-11"); summary.Result != "pass" {
 		t.Fatalf("summary=%+v", summary)
+	}
+}
+
+func TestWindowsRunWithoutImagesPreservesCLIConnectionSettings(t *testing.T) {
+	config := fixtureConfig(t)
+	config.Host = platform.Host{OS: "windows", Architecture: "amd64", WindowsMajor: 10, WindowsBuild: 22631, WindowsWorkstation: true}
+	for _, key := range []string{"CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY"} {
+		t.Setenv(key, "existing-setting")
+	}
+	var calls int
+	config.Run = func(_ context.Context, request process.Request) (int, error) {
+		switch request.Name {
+		case "git", "go":
+			return 0, nil
+		default:
+			calls++
+			for _, key := range []string{"CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY"} {
+				if !slices.Contains(request.Env, key+"=existing-setting") {
+					t.Fatalf("CLI %v lost %s without image coverage selected", request.Args, key)
+				}
+			}
+			if request.Args[0] == "version" {
+				_, err := fmt.Fprintf(request.Streams.Stdout, "sandboxed-agents %s\nassets %s\n", commit, strings.Repeat("a", 64))
+				return 0, err
+			}
+			return 0, nil
+		}
+	}
+	if err := livesuite.Run(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("CLI calls=%d", calls)
 	}
 }
 

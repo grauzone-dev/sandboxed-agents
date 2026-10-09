@@ -89,6 +89,9 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 			return errors.New(sshStateOccupiedMessage)
 		}
 		originalConfig, err = readOptionalSSHFile(userConfig)
+		if err != nil {
+			return err
+		}
 		managedPath := filepath.ToSlash(filepath.Join(root, "config"))
 		for _, line := range strings.Split(string(originalConfig), "\n") {
 			fields := strings.Fields(line)
@@ -103,7 +106,7 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 				return errors.New(sshStateOccupiedMessage)
 			}
 		}
-		return err
+		return nil
 	}); err != nil {
 		return err
 	}

@@ -47,8 +47,11 @@ func TestRestrictSSHAccessSecuresCurrentOwnedKeyWithoutWriteOwner(t *testing.T) 
 	// The descriptor includes the unchanged owner, protected inheritance and
 	// exactly one full-control ACE for that account, with no other trustees.
 	want := owner + "D:P(A;;FA;;;" + strings.TrimPrefix(owner, "O:") + ")"
-	if got := replacementSecurity(t, path); got != want {
-		t.Fatalf("restricted key security = %q, want %q", got, want)
+	// Windows may retain SE_DACL_AUTO_INHERITED alongside SE_DACL_PROTECTED.
+	// Both forms require protection and the same single current-owner ACE.
+	wantAutoInherited := owner + "D:PAI(A;;FA;;;" + strings.TrimPrefix(owner, "O:") + ")"
+	if got := replacementSecurity(t, path); got != want && got != wantAutoInherited {
+		t.Fatalf("restricted key security = %q, want %q or %q", got, want, wantAutoInherited)
 	}
 	assertReplacementContent(t, path, "private key fixture\n")
 }

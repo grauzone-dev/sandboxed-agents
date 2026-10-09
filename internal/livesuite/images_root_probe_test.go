@@ -316,7 +316,7 @@ const fs={readdirSync(directory,options){
   if(directory==='/home/agent/.ssh'&&readable!=='true') throw Object.assign(new Error('EACCES'),{code:'EACCES'});
   return realfs.readdirSync(path.join(root,directory),options);
 }};
-vm.runInNewContext(script,{require(name){if(name==='node:fs') return fs;return require(name);},process},{timeout:10000});`
+vm.runInNewContext(script,{require(name){if(name==='node:fs') return fs;if(name==='node:path') return path.posix;return require(name);},process},{timeout:10000});`
 				cmd := exec.Command("node", "-e", bootstrap, args[len(args)-1], directory, test.errorPath, test.errorCode, strconv.FormatBool(readable))
 				cmd.Stdout = io.Discard
 				cmd.Stderr = io.Discard

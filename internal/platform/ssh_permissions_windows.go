@@ -72,7 +72,29 @@ func RestrictSSHAccess(path string) (err error) {
 	if err != nil {
 		return err
 	}
-	status, _, _ := advapi.NewProc("SetNamedSecurityInfoW").Call(uintptr(unsafe.Pointer(name)), sshFileObject, sshOwnerInformation|sshDACLInformation|sshProtectedDACLInformation, uintptr(owner), 0, uintptr(acl), 0)
+	var existingOwner *syscall.SID
+	var existingDescriptor unsafe.Pointer
+	status, _, _ := advapi.NewProc("GetNamedSecurityInfoW").Call(uintptr(unsafe.Pointer(name)), sshFileObject, sshOwnerInformation, uintptr(unsafe.Pointer(&existingOwner)), 0, 0, 0, uintptr(unsafe.Pointer(&existingDescriptor)))
+	if status != 0 {
+		return syscall.Errno(status)
+	}
+	defer syscall.LocalFree(syscall.Handle(existingDescriptor))
+	if existingOwner == nil {
+		return errors.New("SSH path has no owner")
+	}
+	existingSID, err := existingOwner.String()
+	if err != nil {
+		return err
+	}
+	information := uintptr(sshDACLInformation | sshProtectedDACLInformation)
+	if existingSID == sid {
+		// Ownership already matches. Requesting it again requires WRITE_OWNER,
+		// which native OpenSSH-created private keys do not grant to their owner.
+		owner = nil
+	} else {
+		information |= sshOwnerInformation
+	}
+	status, _, _ = advapi.NewProc("SetNamedSecurityInfoW").Call(uintptr(unsafe.Pointer(name)), sshFileObject, information, uintptr(owner), 0, uintptr(acl), 0)
 	if status != 0 {
 		return syscall.Errno(status)
 	}

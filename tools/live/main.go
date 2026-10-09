@@ -28,6 +28,7 @@ func execute(args []string, stdout, stderr io.Writer) error {
 	optIn := flags.Bool("opt-in", false, flagOptInHelp)
 	images := flags.Bool("images", false, flagImagesHelp)
 	lifecycle := flags.Bool("lifecycle", false, flagLifecycleHelp)
+	ssh := flags.Bool("ssh", false, flagSSHHelp)
 	output := flags.String("output", ".scratch/live", flagOutputHelp)
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -38,7 +39,7 @@ func execute(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	config := livesuite.Config{OptIn: *optIn, Images: *images, Lifecycle: *lifecycle, OutputDirectory: *output, Host: platform.CurrentHost(), Stdout: stdout, Stderr: stderr}
+	config := livesuite.Config{OptIn: *optIn, Images: *images, Lifecycle: *lifecycle, SSH: *ssh, OutputDirectory: *output, Host: platform.CurrentHost(), Stdout: stdout, Stderr: stderr}
 	if !*optIn {
 		return livesuite.Run(context.Background(), config)
 	}

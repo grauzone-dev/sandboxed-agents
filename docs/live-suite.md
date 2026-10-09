@@ -2,7 +2,7 @@
 
 The live suite is the second release gate. It drives the executable against real Podman on Linux and on Windows 11, in a controller group of its own, and records the result as a redacted summary file. The maintainer uploads the summaries to a preview's GitHub prerelease. The first gate is the offline suite ([Development](development.md#test)), and the third is the manual checklist (#64).
 
-> **Limitation: no run validates a release yet.** This version delivers the harness, the image part (#29), and the lifecycle part (#24). The harness builds the executable for the commit, checks that the executable reports that commit in `version`, and checks that `list` reaches real Podman. When it is selected, the image part creates one sandbox per toolchain and one without toolchains, runs the smoke checks and the base image checks in them, calls `build` once, and checks that every image was rebuilt ([Image part](#image-part)). When it is selected, the lifecycle part takes one sandbox through `up`, `list`, `stop`, `start`, and `remove` and observes its isolation on the running container ([Lifecycle part](#lifecycle-part)). No live run of the image part is recorded yet. The live coverage of the other Features comes with #35, #68, and #55. A release needs a passing run of the complete suite, including the full image coverage, on Linux and on Windows 11.
+> **Limitation: no run validates a release yet.** This version delivers the harness, the image part (#29), the lifecycle part (#24), and the SSH part (#35). The harness builds the executable for the commit, checks that the executable reports that commit in `version`, and checks that `list` reaches real Podman. When it is selected, the image part creates one sandbox per toolchain and one without toolchains, runs the smoke checks and the base image checks in them, calls `build` once, and checks that every image was rebuilt ([Image part](#image-part)). When it is selected, the lifecycle part takes one sandbox through `up`, `list`, `stop`, `start`, and `remove` and observes its isolation on the running container ([Lifecycle part](#lifecycle-part)). When it is selected, the SSH part connects to one sandbox over host OpenSSH before and after `stop` and `start` ([SSH part](#ssh-part)). No live run of the image part and no live run of the SSH part, on Linux or on Windows 11, is recorded yet. The live coverage of the other Features comes with #68 and #55. A release needs a passing run of the complete suite, including the full image coverage, on Linux and on Windows 11.
 
 ## Requirements
 
@@ -10,15 +10,16 @@ The live suite is the second release gate. It drives the executable against real
 - Go 1.27 or newer and `git` on `PATH`.
 - The prerequisites of the executable itself, Podman and OpenSSH, set up as described in [Host prerequisites](host-prerequisites.md).
 - A clean checkout of the commit you want to validate, left unchanged while the run lasts.
-- For the image part and for the lifecycle part, a controller group in which Podman reports no container and no volume, neither owned by the group nor named with its prefix. On Linux, both parts need the local Podman service, with `CONTAINER_HOST` and `CONTAINER_CONNECTION` not set; on Windows 11, they use the selected Podman machine ([Target](#target)).
+- For the image part, the lifecycle part, and the SSH part, a controller group in which Podman reports no container and no volume, neither owned by the group nor named with its prefix. On Linux, these parts need the local Podman service, with `CONTAINER_HOST` and `CONTAINER_CONNECTION` not set; on Windows 11, they use the selected Podman machine ([Target](#target)).
 - For the lifecycle part, on Linux, `sh`, `awk`, and `id` to read the host-side facts ([Observations](#observations)). On Windows 11, it reads those facts inside the selected Podman machine through `podman machine ssh`.
+- For the SSH part, the host's own OpenSSH client `ssh` on `PATH`, and a controller group that holds no SSH setup yet. On Windows 11, the client must be OpenSSH for Windows, and the suite must run in a standard account without membership in the Administrators group ([SSH part](#ssh-part)).
 - For the image part, enough disk space for the base image and the four toolchain images, twice: `build` rebuilds them while the images they replace stay on the host.
 
 The suite needs no `sudo`, no administrator rights, and no credentials, and it signs in nowhere. It may use the network: `build`, and `up` when an image is missing, pull the Debian image and download packages, and the agent coverage (#68) will need npm.
 
 ## Run the suite
 
-The suite runs only with `-opt-in`. Without it, `go run ./tools/live` prints that the live suite was skipped and exits with status 0, also when `-images`, `-lifecycle`, or `-output` is given. It calls neither `git` nor Podman and writes no summary. `go test ./...` and the `Offline suite` workflow never start the live suite.
+The suite runs only with `-opt-in`. Without it, `go run ./tools/live` prints that the live suite was skipped and exits with status 0, also when `-images`, `-lifecycle`, `-ssh`, or `-output` is given. It calls neither `git` nor Podman and writes no summary. `go test ./...` and the `Offline suite` workflow never start the live suite.
 
 The suite runs in a dedicated controller group, selected with `SANDBOXED_AGENTS_GROUP` ([Controller groups](sandboxes.md#controller-groups)). It refuses the group `default`, whether set explicitly or because the variable is not set, as well as any name that does not match `^[a-z0-9][a-z0-9-]*$`. Both refusals exit non-zero before Podman is called. The suite passes its group to every command of the executable it runs, with one exception: the lifecycle part also runs `list` in the `default` group to check that its sandbox does not appear there. `list` only reads.
 
@@ -26,14 +27,14 @@ On Linux, from the repository root:
 
 ```sh
 export SANDBOXED_AGENTS_GROUP=live
-go run ./tools/live -opt-in -images -lifecycle
+go run ./tools/live -opt-in -images -lifecycle -ssh
 ```
 
 On Windows 11, in PowerShell, from the repository root:
 
 ```powershell
 $env:SANDBOXED_AGENTS_GROUP = 'live'
-go run ./tools/live -opt-in -images -lifecycle
+go run ./tools/live -opt-in -images -lifecycle -ssh
 ```
 
 On Linux, a wizard walks you through a lifecycle run: it checks the prerequisites, runs `go run ./tools/live -opt-in -lifecycle` in a new controller group, shows the PowerShell command for a separate Windows 11 run of the same commit, and prints the Linux summary. Run it from the repository root:
@@ -51,9 +52,10 @@ Options:
 - `-opt-in` runs the suite against real Podman.
 - `-images` also runs the image part (see [Image part](#image-part)). A run that validates a preview must select it.
 - `-lifecycle` also runs the lifecycle part (see [Lifecycle part](#lifecycle-part)). It issues no `build`. A run that validates a preview must select it.
+- `-ssh` also runs the SSH part (see [SSH part](#ssh-part)). It issues no `build`, and it changes the host's SSH files for the sandbox's lifetime: it installs and removes an SSH setup in the suite's group. A run that validates a preview must select it. Without it, the check `ssh` stays `not-run`.
 - `-output <directory>` sets the directory for the summary, relative to the current directory. The default is `.scratch/live`, which Git ignores. The directory may also lie inside the checkout without being ignored: the check of the checkout leaves out exactly the summary file this run writes. Any other file in that directory, such as a summary copied from the other platform, still counts as a change and makes the run refuse.
 
-An unknown option or an extra argument exits non-zero before anything runs. The suite waits at most one hour for a run. When that deadline passes or you interrupt the run with Ctrl+C, it leaves a failing summary. The image part and the lifecycle part then still try to remove their sandboxes and volumes, each within a limit of its own ([Image part cleanup](#image-part-cleanup), [Cleanup](#cleanup)). Apart from that, the suite does not ensure that processes started by the build, or work Podman has already begun, have stopped or been undone.
+An unknown option or an extra argument exits non-zero before anything runs. The suite waits at most one hour for a run. When that deadline passes or you interrupt the run with Ctrl+C, it leaves a failing summary. The image part, the lifecycle part, and the SSH part then still try to remove their sandboxes and volumes, each within a limit of its own ([Image part cleanup](#image-part-cleanup), [Cleanup](#cleanup), [SSH part cleanup](#ssh-part-cleanup)). Apart from that, the suite does not ensure that processes started by the build, or work Podman has already begun, have stopped or been undone.
 
 ### What a run does
 
@@ -65,9 +67,10 @@ An unknown option or an extra argument exits non-zero before anything runs. The 
 6. `version`: it runs the built executable's `version` and checks that the output names the commit as the version, followed by an asset hash.
 7. `list`: it runs `list`, which shows that the executable reaches real Podman. `list` only reads. On Windows 11 with `-images`, the suite runs `version` and `list` without `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `CONTAINER_SSHKEY` in their environment; without `-images`, it passes these variables on unchanged.
 8. `images`: with `-images`, it runs the image part. Its own checks are recorded as they run, its cleanup after them, and the check `images` last. The image part counts as ran once its `build` has exited with status 0. A failed image part ends the run, so the lifecycle part does not run after it.
-9. `lifecycle`: with `-lifecycle`, it runs the lifecycle part, after the image part when both are selected. The lifecycle part's own checks are recorded as they run, its cleanup after them, and the check `lifecycle` last.
+9. `lifecycle`: with `-lifecycle`, it runs the lifecycle part, after the image part when both are selected. The lifecycle part's own checks are recorded as they run, its cleanup after them, and the check `lifecycle` last. A failed lifecycle part ends the run, so the SSH part does not run after it.
+10. `ssh`: with `-ssh`, it runs the SSH part, after the image part and the lifecycle part when they are selected. The SSH part's own checks are recorded as they run, and its cleanup runs inside the part when the part ends. The fixed entry `ssh` starts as `not-run` and takes the outcome of the part as a whole, cleanup included, after the cleanup has finished.
 
-Without `-images` and `-lifecycle`, a run creates no container, no volume, no image, and no SSH setup. The image part, the lifecycle part, and the live coverage of later Stories create sandboxes only in the suite's group, named with the prefix `sandboxed-agents.GROUP.` and owned by that group, so they cannot touch a sandbox of another group.
+Without `-images`, `-lifecycle`, and `-ssh`, a run creates no container, no volume, no image, and no SSH setup. The image part, the lifecycle part, the SSH part, and the live coverage of later Stories create sandboxes only in the suite's group, named with the prefix `sandboxed-agents.GROUP.` and owned by that group, so they cannot touch a sandbox of another group.
 
 The console shows the output of `git`, the build, Podman, and the executable, including paths and other host details. Keep that output to yourself; the summary file is the only result to share.
 
@@ -123,7 +126,7 @@ The part removes no image, and neither does `build` ([Build images](images.md#bu
 
 ### Lifecycle part
 
-The lifecycle part runs the sandbox lifecycle against real Podman and observes on the running container that the sandbox's isolation takes effect. It never calls `build`. When the base image for the executable is missing, the first `up` builds it, as `up` always does. That image is shared by every controller group on the host ([Image part](#image-part)), and the run leaves it in place. No agent session runs, so no command needs `--force`, and the run makes no SSH setup.
+The lifecycle part runs the sandbox lifecycle against real Podman and observes on the running container that the sandbox's isolation takes effect. It never calls `build`. When the base image for the executable is missing, the first `up` builds it, as `up` always does. That image is shared by every controller group on the host ([Image part](#image-part)), and the run leaves it in place. No agent session runs, so no command needs `--force`, and the run makes no SSH setup; the SSH part covers that ([SSH part](#ssh-part)).
 
 #### Target
 
@@ -176,7 +179,7 @@ The control must receive the nonce from the gateway address immediately before a
 
 After each round, within a separate limit of 15 seconds, the run removes the observation containers it started. For each name it checks that the container exists and that Podman reports exactly that name with the suite's group in `io.github.sandboxed-agents.live-suite-group` and the sandbox's name in `io.github.sandboxed-agents.live-suite-sandbox-name`. Only then does it run `podman stop --time 2` and `podman rm`, without `--force`. A container of that name with other labels is left in place and fails the check.
 
-What the observations do not show: they cover only the sandbox the suite creates, on the platform of the run. They do not attest the configuration of containers that were created or changed outside the executable (ADR-0006). The manager observation shows the identity that a root `podman exec` gives the manager executable, not a session query of the executable itself. The UID 1000 observation shows the account and the mapping that a shell or agent would get; logging in over SSH is covered by #35. The gateway observation tests one TCP connection to the one IPv4 gateway address and does not show that every other route to the host is closed, including routes over IPv6.
+What the observations do not show: they cover only the sandbox the suite creates, on the platform of the run. They do not attest the configuration of containers that were created or changed outside the executable (ADR-0006). The manager observation shows the identity that a root `podman exec` gives the manager executable, not a session query of the executable itself. The UID 1000 observation shows the account and the mapping that a shell or agent would get; logging in over SSH is covered by the SSH part. The gateway observation tests one TCP connection to the one IPv4 gateway address and does not show that every other route to the host is closed, including routes over IPv6.
 
 #### Cleanup
 
@@ -184,9 +187,42 @@ Once `lifecycle/group-empty` has passed, the part always ends with `lifecycle/cl
 
 The cleanup deletes only what the run created through the executable: the sandbox and its three volumes. It never deletes an object of the group that it did not create, such as a foreign container that holds the name of an observation container. Such an object, and a leftover observation container, fail the check. The base image stays, and so does the empty [lifecycle lock](updates.md#lifecycle-lock) file that every lifecycle command leaves in the group's host state. When the cleanup fails, inspect the group with `list` in that group and remove what is left with `remove NAME --volumes`, or with Podman for objects that the executable does not own.
 
-### Later coverage
+### SSH part
 
-Because the suite's group is not `default`, the SSH host entry of a sandbox `NAME` will be named `NAME.GROUP` (`agent01.live` in the group `live`), and the managed SSH configuration and keys will lie in the host state of the suite's group. This keeps the SSH setup of the suite apart from that of the `default` group. It applies once the live coverage of the SSH setup exists; the harness makes no SSH setup.
+The SSH part runs the SSH setup of one sandbox against real Podman and host OpenSSH ([SSH setup](ssh.md)). It is the only part that changes host SSH files, and it never calls `build`. Because the suite's group is not `default`, the SSH host entry of a sandbox `NAME` is `NAME.GROUP` (`agent01.live` in the group `live`), and the managed SSH configuration and keys lie in the host state of the suite's group. This keeps the SSH setup of the suite apart from that of the `default` group. When the base image for the executable is missing, `up` builds it, as it always does ([Image part](#image-part)).
+
+#### SSH part steps
+
+Each step is recorded as a check. A failed step ends the part; only the cleanup runs after it.
+
+1. `ssh/standard-account`: on Windows 11 only, the check runs a read-only PowerShell query of the current Windows identity. It fails when the identity's groups contain the Administrators SID `S-1-5-32-544`, which an administrator's filtered token still holds, so elevation alone is not the test. A query that fails or prints anything else also fails the check. The part then creates no sandbox.
+2. `ssh/client`: `ssh -V` must exit with status 0 and report an OpenSSH client. On Windows 11 the report must start with `OpenSSH_for_Windows_`, so the `ssh` that comes first on `PATH` must be OpenSSH for Windows, not the client of Git for Windows or another build. On Linux it must start with `OpenSSH_`.
+3. `ssh/target`: the part fixes the Podman it uses by the same rules as the lifecycle part ([Target](#target)).
+4. `ssh/group-empty`: Podman reports no container and no volume of the suite's group, by the same rules as `lifecycle/group-empty` ([Steps](#steps)).
+5. `ssh/host-clean`: the `ssh` directory in the group's host state is missing or empty, so the group holds no SSH setup, and the user's SSH configuration holds no `Include` line that points to the group's managed configuration. The check fails on either, before `up` and without changing a file. The part records the content of the user's SSH configuration (`~/.ssh/config` on Linux, `%USERPROFILE%\.ssh\config` on Windows 11; a missing file counts as empty).
+6. `ssh/up`: `up NAME --with none --ssh-config --memory 256m --cpus 1 --pids-limit 128 --shm-size 16m` with a new random name. It issues no explicit `build`.
+7. `ssh/created/loopback`: `podman container inspect` reports the container under its name, running, with the suite's group as its owner label and the sandbox's name as its sandbox name label, and with exactly one binding for `22/tcp`, on the host address `127.0.0.1` and a port from 1 to 65535. A wildcard address, an IPv6 address, a missing address, a second binding, or a foreign owner fails the check.
+8. `ssh/created/config`: `ssh -G NAME.GROUP` evaluates the effective configuration without connecting. Its single values must be the host name `127.0.0.1`, the user `agent`, the port of the binding, `identitiesonly yes`, `identityagent none`, `forwardagent no`, `globalknownhostsfile none`, and `stricthostkeychecking` `yes` or `true`. There must be exactly one `identityfile` and one `userknownhostsfile`, and they must be `id_ed25519` and `known_hosts` in the sandbox's key directory in the group's host state, which shows the dedicated key and the pinned host key. On Windows 11 the paths are compared without regard to case.
+9. `ssh/created/connect`: `ssh -T -o BatchMode=yes -o ConnectTimeout=10 NAME.GROUP id -un` within a limit of 30 seconds. The command must exit with status 0, print `agent`, and write nothing to standard error. The connection therefore needs no prompt, and a warning such as one about key permissions fails the check.
+10. `ssh/stop`, then `ssh/start`: the plain `stop NAME` and `start NAME`. Neither reinstalls the SSH setup, and the suite passes no `--ssh-config` to them. The part records the files of the group's SSH host state, with their content, before `stop`.
+11. `ssh/started-again/setup-unchanged`: the files and their content in the group's SSH host state equal those from before `stop`, so the keys, the pinned host key, and the host entry are unchanged.
+12. `ssh/started-again/loopback`, `ssh/started-again/config`, and `ssh/started-again/connect` repeat steps 7 to 9 on the started sandbox. The binding may have another port; the check reads it again.
+
+The cleanup check `ssh/cleanup` runs when the part ends ([SSH part cleanup](#ssh-part-cleanup)). The fixed entry `ssh` is `not-run` from the start and settles to the outcome of the part as a whole only after that cleanup.
+
+#### SSH part cleanup
+
+Once `ssh/group-empty` and `ssh/host-clean` have passed, the part always ends with `ssh/cleanup`, which has a fresh limit of 90 seconds, also after a failure, after Ctrl+C, or after the deadline of the run. When Podman still reports an object of the suite's group, or the host SSH files differ from what `ssh/host-clean` recorded, the part runs `remove NAME --volumes` once, without `--force`. It then checks that Podman reports no container and no volume of the suite's group, that the group's `ssh` host state directory holds no file, and that the user's SSH configuration equals its recorded content, so that no `Include` line of the group is left behind. The check fails if any of these does not hold.
+
+On Windows 11, every Podman call of the part is bound to the selected machine, and the part refuses a command of the executable when the selection has changed, as in the other parts. The base image and the empty [lifecycle lock](updates.md#lifecycle-lock) file stay.
+
+#### What the SSH part does not show
+
+- It shows one connection per phase from the host's OpenSSH to one sandbox on the loopback address. It does not show editor or desktop UI integration, connections from other hosts, IPv6, or an agent session over SSH.
+- `ssh -G` shows what OpenSSH resolves for the host entry from the user's and the system-wide configuration. It does not show that the key file's permissions satisfy OpenSSH; the connection step does.
+- The cleanup check compares the user's SSH configuration byte for byte with its state before `up`. It does not detect changes to other files in `.ssh`.
+- A run on Windows 11 with an administrator account is refused, not run, so it provides no coverage for that account type.
+- No live SSH evidence exists yet on either platform; only offline tests ran ([Verification](#verification)).
 
 ## Validation records
 
@@ -223,11 +259,11 @@ Each element of `checks` has two fields:
 
 Schema version 2 of the live-suite record differs from version 1 only in the value `not-run` of a check's `result`; the nine fields are the same. The manual-checklist record stays at version 1, and its checks are `pass` or `fail`.
 
-A live-suite record starts with sixteen fixed checks of the image part, each recorded as `not-run` before anything runs: `images/base/up`, `images/base/contents`, `images/base/host-keys`, and `images/base/rebuild`, then `up`, `smoke`, and `rebuild` for each toolchain in the order `dotnet`, `playwright`, `azure`, `native`, for example `images/dotnet/smoke`. When the image part reaches one of them, the run replaces that entry's `not-run` with the outcome, so the summary names each toolchain's `up`, smoke check, and rebuild, and the base image checks, also when they did not run. Every other check is added when the run reaches it. A check that runs again, such as `images/temporary-contexts`, keeps its place and takes the outcome of its last run.
+A live-suite record starts with sixteen fixed checks of the image part, each recorded as `not-run` before anything runs: `images/base/up`, `images/base/contents`, `images/base/host-keys`, and `images/base/rebuild`, then `up`, `smoke`, and `rebuild` for each toolchain in the order `dotnet`, `playwright`, `azure`, `native`, for example `images/dotnet/smoke`. When the image part reaches one of them, the run replaces that entry's `not-run` with the outcome, so the summary names each toolchain's `up`, smoke check, and rebuild, and the base image checks, also when they did not run. The seventeenth fixed check, `ssh`, follows them in the array, also `not-run` before anything runs. It stays `not-run` unless the run selected `-ssh` and reached the part, and then takes the outcome of the part as a whole once the part's cleanup has finished. The position of a check in `checks` does not establish the order in which the run executed it. Every other check is added when the run reaches it. A check that runs again, such as `images/temporary-contexts`, keeps its place and takes the outcome of its last run.
 
-After the sixteen fixed checks come `build-host`, `version`, and `list`, in that order. With `-images` follow the checks of the image part as the run reaches them, `images/target`, `images/group-empty`, `images/temporary-contexts`, `images/layers-before`, `images/build`, `images/layers-after`, `images/outdated`, and `images/cleanup` ([Image part steps](#image-part-steps)), and then `images` for the part as a whole. With `-lifecycle` follow the identifiers of the lifecycle part. These are fixed identifiers that start with `lifecycle/` for its steps and observations, listed in [Lifecycle part](#lifecycle-part), for example `lifecycle/up` and `lifecycle/created/no-new-privileges`, followed by `lifecycle/cleanup` and by `lifecycle` for the part as a whole. An identifier names what was checked, such as a phase and the expected state or observation, and never holds an observed value. The format has no field for the lifecycle part: whether a run selected it shows only in `checks`, and a record of a run without `-lifecycle` holds no `lifecycle` identifier. A reader of the records, the stable release check included, does not depend on these names ([Reading a record](#reading-a-record)). Apart from the sixteen fixed checks, `checks` lists the checks the run reached. A run that stops before building, for example because of its controller group, has only the sixteen fixed checks, all `not-run`. The live coverage Stories add identifiers of their own; a new identifier does not change `schema_version`. The checklist items of the manual record are defined by #64. A record holds only the fields listed for its kind. A change to the set of fields or to their meaning raises `schema_version`.
+After the seventeen fixed checks come `build-host`, `version`, and `list`, in that order. With `-images` follow the checks of the image part as the run reaches them, `images/target`, `images/group-empty`, `images/temporary-contexts`, `images/layers-before`, `images/build`, `images/layers-after`, `images/outdated`, and `images/cleanup` ([Image part steps](#image-part-steps)), and then `images` for the part as a whole. With `-lifecycle` follow the identifiers of the lifecycle part. These are fixed identifiers that start with `lifecycle/` for its steps and observations, listed in [Lifecycle part](#lifecycle-part), for example `lifecycle/up` and `lifecycle/created/no-new-privileges`, followed by `lifecycle/cleanup` and by `lifecycle` for the part as a whole. With `-ssh` follow the identifiers of the SSH part, which start with `ssh/` ([SSH part steps](#ssh-part-steps)), for example `ssh/up` and `ssh/created/connect`, then `ssh/cleanup`; the fixed check `ssh` settles to the outcome of the part as a whole after the cleanup. An identifier names what was checked, such as a phase and the expected state or observation, and never holds an observed value. The format has no field for the lifecycle part or for the SSH part: whether a run selected them shows only in `checks`, and a record of a run without `-lifecycle` holds no `lifecycle` identifier. A run without `-ssh` holds the check `ssh` as `not-run` and no other `ssh/` identifier. The schema stays at version 2 with its nine top-level fields. A reader of the records, the stable release check included, does not depend on these names ([Reading a record](#reading-a-record)). Apart from the seventeen fixed checks, `checks` lists the checks the run reached. A run that stops before building, for example because of its controller group, has only the seventeen fixed checks, all `not-run`. The live coverage Stories add identifiers of their own; a new identifier does not change `schema_version`. The checklist items of the manual record are defined by #64. A record holds only the fields listed for its kind. A change to the set of fields or to their meaning raises `schema_version`.
 
-`result` is `pass` only when the run finished and no check failed; otherwise it is `fail`. A passing run without `-images` keeps the sixteen fixed checks as `not-run`.
+`result` is `pass` only when the run finished and no check failed; otherwise it is `fail`. A passing run without `-images` keeps the sixteen image checks as `not-run`, and a passing run without `-ssh` keeps `ssh` as `not-run`.
 
 `image_part_ran` is `true` once the image part's `build` has exited with status 0, also when a later check of the image part fails. It is `false` when `-images` was not given, when the run stopped before that `build`, and when that `build` failed, including its preflight; in that last case `result` is `fail`.
 
@@ -244,9 +280,9 @@ A reader decides from the fields alone. It never interprets a check name or the 
 - `image_part_ran` is `true`;
 - `image_coverage_complete` is `true`.
 
-It rejects every other live-suite record, including one with a missing or an additional field and one of schema version 1, which earlier harnesses wrote. A manual-checklist record is accepted only when `schema_version` is `1`, `kind` is `manual-checklist`, `commit` is the commit of the release, and `result` is `pass`.
+It rejects every other live-suite record, including one with a missing or an additional field and one of schema version 1, which earlier harnesses wrote. These fields do not show whether the run selected `-ssh`, so the release check cannot tell a record with a passing SSH part from one without it; the maintainer must select `-ssh` ([Upload the records](#upload-the-records)). A manual-checklist record is accepted only when `schema_version` is `1`, `kind` is `manual-checklist`, `commit` is the commit of the release, and `result` is `pass`.
 
-A passing summary of a Linux run without `-images` and without `-lifecycle` looks like this; the checks are shown one per line here. The release check rejects it, because `image_part_ran` and `image_coverage_complete` are `false`.
+A passing summary of a Linux run without `-images`, `-lifecycle`, and `-ssh` looks like this; the checks are shown one per line here. The release check rejects it, because `image_part_ran` and `image_coverage_complete` are `false`.
 
 ```json
 {
@@ -275,6 +311,7 @@ A passing summary of a Linux run without `-images` and without `-lifecycle` look
     { "name": "images/native/up", "result": "not-run" },
     { "name": "images/native/smoke", "result": "not-run" },
     { "name": "images/native/rebuild", "result": "not-run" },
+    { "name": "ssh", "result": "not-run" },
     { "name": "build-host", "result": "pass" },
     { "name": "version", "result": "pass" },
     { "name": "list", "result": "pass" }
@@ -314,14 +351,15 @@ These refusals and failures exit non-zero and leave a failing summary:
 - a failed build, a failed `version`, or a version that does not name the commit;
 - a failed `list`;
 - in the image part: a remote or unexpected Podman on Linux, a Windows machine selection that changed during the run, a suite group that already holds a container or volume, a failed `up`, `shell`, `build`, `list`, or `remove`, an image or container that Podman reports differently than expected, a failed smoke check or base image check, an SSH host key in the image or shared by two sandboxes, an SSH host key file or a read error found by the root-level probe, a probe name that is already taken, a leftover probe container that cannot be proven to be the probe or that its removal leaves behind, a toolchain image without the base image's layers, an image that was not rebuilt or that the rebuild removed, a missing reminder in the output of `build`, a toolchain sandbox that `list` does not mark as outdated, a temporary build context left behind, or a failed cleanup;
-- in the lifecycle part: a remote or unexpected Podman on Linux, a Windows machine selection that changed during the run, a suite group that already holds a container or volume, a container or volume inventory that cannot be read, a failed lifecycle command, a state in `list` other than the expected one, the sandbox shown in the `default` group, a mount other than the three named volumes, an isolation observation that is not in effect or that differs from the first one, a failed gateway control, changed volumes, an observation container that cannot be removed, or a failed cleanup.
+- in the lifecycle part: a remote or unexpected Podman on Linux, a Windows machine selection that changed during the run, a suite group that already holds a container or volume, a container or volume inventory that cannot be read, a failed lifecycle command, a state in `list` other than the expected one, the sandbox shown in the `default` group, a mount other than the three named volumes, an isolation observation that is not in effect or that differs from the first one, a failed gateway control, changed volumes, an observation container that cannot be removed, or a failed cleanup;
+- in the SSH part: a Windows administrator account or a failed account query, a host `ssh` that is not OpenSSH (on Windows 11, not OpenSSH for Windows), a remote or unexpected Podman on Linux, a Windows machine selection that changed during the run, a suite group that already holds a container or volume, a group that already holds SSH host state, a failed `up`, `stop`, or `start`, a loopback binding that is missing, repeated, not on `127.0.0.1`, or owned by another group, an effective SSH configuration that differs from the expected one, an SSH connection that fails, does not print `agent`, or writes a diagnostic, an SSH setup that changed during `stop` and `start`, or a failed cleanup, including SSH files or an `Include` line left on the host.
 
 When `git` cannot report the commit or the repository root, when it reports a commit that is not a full 40-character SHA, or when the operating system is neither Linux nor Windows, the suite cannot write a valid record. It then exits non-zero with a message and writes no summary.
 
 ## Upload the records
 
 1. Push the preview tag and wait for the prerelease ([Releases](releases.md)).
-2. On a Linux host and on a Windows 11 host, check out the preview's commit and run the suite with `-opt-in -images -lifecycle`.
+2. On a Linux host and on a Windows 11 host, check out the preview's commit and run the suite with `-opt-in -images -lifecycle -ssh`. On Windows 11, use a standard account for the SSH part.
 3. Copy both summaries and the manual-checklist record into `.scratch/live` on one machine, keeping their file names.
 4. Upload them to the preview's prerelease:
 
@@ -331,13 +369,13 @@ When `git` cannot report the commit or the repository root, when it reports a co
 
    `--clobber` replaces the records of an earlier attempt.
 
-Upload only the JSON files, never console output. Every record must name the prerelease's commit. A failing record is not a validation, and until the live coverage of #35, #68, and #55 exists, neither is a passing one (see the limitation at the top of this page). The stable release check (#67) reads these files from the prerelease.
+Upload only the JSON files, never console output. Every record must name the prerelease's commit. A failing record is not a validation, and until the live coverage of #68 and #55 exists, and a passing SSH part has been run live on both platforms, neither is a passing one (see the limitation at the top of this page). The stable release check (#67) reads these files from the prerelease.
 
 ## Verification
 
 The offline tests in `internal/livesuite` and `tools/live` run against the fake programs of the offline suite ([Test seams](development.md#test-seams)). `git` is faked as well, so the tests need no Git checkout. A test run that reaches the build simulates `tools/build` through the injected process runner: the fake builder copies a real CLI fixture executable to the requested output, and the suite then runs that executable's `version`, `list`, and `build` against the fake `podman`. The tests cover:
 
-- a run without `-opt-in`, also with `-images`, `-lifecycle`, and `-output`: exit status 0, the skip message, no Podman call, and no summary;
+- a run without `-opt-in`, also with `-images`, `-lifecycle`, `-ssh`, and `-output`: exit status 0, the skip message, no Podman call, and no summary;
 - the group `default`, set or unset, and invalid names: a non-zero exit, no Podman call, and a failing summary that names the commit and the platform;
 - unknown options, an extra argument, and `-output` without a value: a non-zero exit and no Podman call;
 - unsupported hosts: a non-zero exit and no Podman call;
@@ -406,6 +444,19 @@ The offline tests of the image part, in `internal/livesuite/images_test.go`, als
 
 These tests check the logic of the image part against scripted answers. They do not show that real Podman builds the images, that the smoke checks and base image checks pass in real sandboxes, or that `build` rebuilds the images on a real host.
 
-No offline test reaches real Podman or a real Git checkout. Live runs are recorded separately from the offline result, by the summaries uploaded to a prerelease.
+The offline tests of the SSH part, in `internal/livesuite/ssh_test.go`, also pass an injected process runner to `livesuite.Run`. It answers `git`, the build, the executable, `podman`, `ssh`, and the Windows account query with scripted output and simulates the SSH files in temporary directories, so the tests need neither Podman, OpenSSH, nor a Windows host. They cover:
 
-The maintainer has run the lifecycle part live on both target platforms, with `-opt-in -lifecycle` and without `-images`, at commit `db0264dfa35fda39056871fb6c4f2ea64a9a6e7e`: on Linux amd64 with Go 1.27.0 X:nodwarf5 and Podman 6.1.1, and on Windows 11 Enterprise 10.0.26100 x64 with Go 1.27.0 and Podman 6.1.2 on a rootless WSL 2 Podman machine. Both runs passed all 70 checks, and their redacted records are in [#24](https://github.com/grauzone-dev/sandboxed-agents/issues/24). The records attest the Go implementation of the product and of the live suite at that commit. The later corrections to the Linux wizard's repository-root check and to an npm signal test do not change that implementation. Both records have `image_part_selected`, `image_part_ran`, and `image_coverage_complete` set to `false`, so they validate no release; they also use `schema_version` 1, the format at that commit. These lifecycle-only records do not cover the image part, SSH, `update`, or agent sessions. No live run of the image part (#29) is recorded; the coverage of SSH, `update`, and agent sessions comes with #35, #55, and #68. An earlier harness-only run on Linux with Podman 4.3.1, below the supported minimum of 4.4.0, showed only that the harness reaches real Podman.
+- a complete run with a Linux and with a synthetic Windows 11 host identity: the SSH checks pass, exactly two connections run with the arguments listed in [SSH part steps](#ssh-part-steps), the sandbox, its volumes, and the SSH files are gone, the summary passes, and it holds none of the sandbox name, the SSH state and configuration paths, the machine name, or the scripted key material. On Windows 11, the account check passes;
+- each unsafe loopback binding or configuration on its own: a wildcard, IPv6, or empty address, an extra or missing binding, a foreign owner, an identity agent, an extra identity file, disabled host key checking, and a wrong user;
+- a wrong user name from `id -un`, a diagnostic on standard error, a failing `ssh`, a changed pinned host key during `start`, and a failing connection after `start`: the expected failing check, a failing `ssh`, a passing `ssh/cleanup`, and nothing left behind;
+- on a synthetic Windows 11 host identity, an administrator account, a failing or malformed account query, and a host `ssh` that is not OpenSSH for Windows: a failing `ssh`, and no sandbox created;
+- a run without `-ssh`: no sandbox, and the check `ssh` reported as `not-run`;
+- stale host state, either a file in the group's SSH host state or an `Include` line for the group's managed configuration in the user's SSH configuration: a failing `ssh/host-clean`, no `up`, and the existing files unchanged;
+- a cancellation during the connection: a `remove NAME --volumes` in the cleanup with a live context of at most 90 seconds, a passing `ssh/cleanup`, and nothing left behind;
+- a `remove` that leaves a volume, a key file, or an `Include` line behind, or that exits with a failure: a failing `ssh/cleanup`, a failing `ssh`, and a failing summary.
+
+These tests check the logic of the SSH part against scripted answers. They are scripted boundary tests, not live proof: they do not show that real Podman publishes the port on the loopback address, that real OpenSSH resolves the configuration and connects, that OpenSSH for Windows accepts the key and configuration permissions, or that the Windows account query reports a real account correctly.
+
+No offline test reaches real Podman, real OpenSSH, or a real Git checkout. Live runs are recorded separately from the offline result, by the summaries uploaded to a prerelease.
+
+The maintainer has run the lifecycle part live on both target platforms, with `-opt-in -lifecycle` and without `-images`, at commit `db0264dfa35fda39056871fb6c4f2ea64a9a6e7e`: on Linux amd64 with Go 1.27.0 X:nodwarf5 and Podman 6.1.1, and on Windows 11 Enterprise 10.0.26100 x64 with Go 1.27.0 and Podman 6.1.2 on a rootless WSL 2 Podman machine. Both runs passed all 70 checks, and their redacted records are in [#24](https://github.com/grauzone-dev/sandboxed-agents/issues/24). The records attest the Go implementation of the product and of the live suite at that commit. The later corrections to the Linux wizard's repository-root check and to an npm signal test do not change that implementation. Both records have `image_part_selected`, `image_part_ran`, and `image_coverage_complete` set to `false`, so they validate no release; they also use `schema_version` 1, the format at that commit. These lifecycle-only records do not cover the image part, SSH, `update`, or agent sessions, and they predate the check `ssh`. No live run of the image part (#29) and no live run of the SSH part (#35) is recorded, on Linux or on Windows 11. The coverage of `update` and agent sessions comes with #55 and #68. An earlier harness-only run on Linux with Podman 4.3.1, below the supported minimum of 4.4.0, showed only that the harness reaches real Podman.

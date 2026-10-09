@@ -22,6 +22,7 @@ type Config struct {
 	OptIn           bool
 	Images          bool
 	Lifecycle       bool
+	SSH             bool
 	Commit          string
 	Repository      string
 	OutputDirectory string
@@ -72,6 +73,7 @@ func Run(ctx context.Context, config Config) (result error) {
 		return errors.New(unsupportedHostMessage)
 	}
 	summary := Summary{SchemaVersion: 2, Kind: "live-suite", Commit: config.Commit, Platform: platformName, Result: "fail", ImagePartSelected: config.Images, Checks: imageChecksNotRun()}
+	summary.Checks = append(summary.Checks, Check{Name: "ssh", Result: "not-run"})
 	path := filepath.Join(config.OutputDirectory, "live-suite-"+platformName+".json")
 	if err := writeSummary(path, summary); err != nil {
 		return err
@@ -189,8 +191,15 @@ func Run(ctx context.Context, config Config) (result error) {
 		summary.ImageCoverageComplete = true
 	}
 	if config.Lifecycle {
-		return check("lifecycle", func() error {
+		if err := check("lifecycle", func() error {
 			return runLifecycle(ctx, config, run, executable, group, check)
+		}); err != nil {
+			return err
+		}
+	}
+	if config.SSH {
+		return check("ssh", func() error {
+			return runSSH(ctx, config, run, executable, group, check)
 		})
 	}
 	return nil

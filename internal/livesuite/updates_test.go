@@ -88,7 +88,7 @@ func (f *updateFixture) run(ctx context.Context, request process.Request) (int, 
 				return write([]any{map[string]any{"Id": "sha256:current"}})
 			}
 			if args[1] == "rm" {
-				if args[2] != f.privateImage {
+				if args[len(args)-1] != f.privateImage {
 					f.t.Fatalf("deleted non-private image %v", args)
 				}
 				f.imageRemovals++
@@ -677,5 +677,30 @@ func TestLiveUpdatesRecoverLeftoverOwnedBackupBeforeCLICleanup(t *testing.T) {
 	}
 	if !hasCheck(readSummary(t, f.config, "linux"), "updates/success/cleanup", "pass") {
 		t.Fatal("backup prevented CLI cleanup")
+	}
+}
+
+func TestLiveUpdatesNeverPruneSharedParentsWhenRemovingPrivateImages(t *testing.T) {
+	for _, hostOS := range []string{"linux", "windows"} {
+		t.Run(hostOS, func(t *testing.T) {
+			f := newUpdateFixture(t, hostOS)
+			sharedParentPruned := false
+			f.config.Run = func(ctx context.Context, request process.Request) (int, error) {
+				args := request.Args
+				if request.Name == "podman" && args[0] == "--connection" {
+					args = args[2:]
+				}
+				if request.Name == "podman" && args[0] == "image" && args[1] == "rm" && !slices.Contains(args, "--no-prune") {
+					sharedParentPruned = true
+				}
+				return f.run(ctx, request)
+			}
+			if err := livesuite.Run(context.Background(), f.config); err != nil {
+				t.Fatal(err)
+			}
+			if sharedParentPruned {
+				t.Fatal("private image removal permits pruning shared dangling parents")
+			}
+		})
 	}
 }

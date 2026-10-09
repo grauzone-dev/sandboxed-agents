@@ -177,7 +177,7 @@ func runUpdateScenario(ctx context.Context, config Config, run process.Runner, e
 			if err := verifyPrivateUpdateImage(cleanup, cleanupPodman, privateImage, fixtureMarker); err != nil {
 				return err
 			}
-			_, err := readObservation(cleanup, cleanupPodman, "podman", []string{"image", "rm", privateImage}, nil)
+			_, err := readObservation(cleanup, cleanupPodman, "podman", []string{"image", "rm", "--no-prune", privateImage}, nil)
 			return err
 		}))
 	}()

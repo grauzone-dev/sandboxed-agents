@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/images"
-	"github.com/grauzone-dev/sandboxed-agents/internal/preflight"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 	"github.com/grauzone-dev/sandboxed-agents/internal/toolchains"
@@ -61,16 +60,8 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 	defer func() { result = errors.Join(result, os.RemoveAll(directory)) }()
 	environment := liveImageEnvironment(os.Environ(), group, directory)
 	invoke := func(current context.Context, args []string, input io.Reader, output io.Writer) error {
-		if connection != "" {
-			selected, cancel := context.WithTimeout(current, 30*time.Second)
-			target, err := preflight.SelectWindowsConnection(selected, podman)
-			cancel()
-			if err != nil {
-				return err
-			}
-			if target != connection {
-				return errors.New(changedPodmanTargetMessage)
-			}
+		if err := requireSelectedConnection(current, podman, connection); err != nil {
+			return err
 		}
 		status, err := run(current, process.Request{Name: executable, Args: args, Env: environment, Streams: process.Streams{Stdin: input, Stdout: output, Stderr: config.Stderr}})
 		if err != nil {
@@ -150,6 +141,9 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 		return err
 	}
 	if err := check("images/base/host-keys", func() error {
+		if err := verifyRootImageHostKeys(ctx, config, podman, group, base.name, base.before.ID, connection); err != nil {
+			return err
+		}
 		readHostKeys := func(item *liveImageCase) (map[string]string, error) {
 			if err := verifyLiveImageSandbox(ctx, podman, group, item, item.before.ID); err != nil {
 				return nil, err

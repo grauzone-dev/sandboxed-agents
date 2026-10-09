@@ -33,16 +33,8 @@ func runLifecycle(ctx context.Context, config Config, run process.Runner, execut
 	}
 	name := "lifecycle-" + strings.ToLower(rand.Text())
 	invoke := func(ctx context.Context, selectedGroup string, args []string, output io.Writer) error {
-		if connection != "" {
-			selection, cancel := context.WithTimeout(ctx, 30*time.Second)
-			current, err := preflight.SelectWindowsConnection(selection, podman)
-			cancel()
-			if err != nil {
-				return err
-			}
-			if current != connection {
-				return errors.New(changedPodmanTargetMessage)
-			}
+		if err := requireSelectedConnection(ctx, podman, connection); err != nil {
+			return err
 		}
 		status, err := run(ctx, process.Request{Name: executable, Args: args, Env: withGroup(os.Environ(), selectedGroup), Streams: process.Streams{Stdout: output, Stderr: config.Stderr}})
 		if err != nil {
@@ -212,6 +204,22 @@ func readLifecycleVolumes(ctx context.Context, run process.Runner, group, name s
 		}
 	}
 	return volumes, nil
+}
+
+func requireSelectedConnection(ctx context.Context, run process.Runner, connection string) error {
+	if connection == "" {
+		return nil
+	}
+	selection, cancel := context.WithTimeout(ctx, 30*time.Second)
+	selected, err := preflight.SelectWindowsConnection(selection, run)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if selected != connection {
+		return errors.New(changedPodmanTargetMessage)
+	}
+	return nil
 }
 
 func newLivePodman(ctx context.Context, config Config, run process.Runner) (process.Runner, string, error) {

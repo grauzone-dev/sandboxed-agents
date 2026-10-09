@@ -102,7 +102,7 @@ The `Preview release` workflow (`.github/workflows/release.yml`) runs the same t
 
 ### Live suite
 
-The live suite runs the executable against real Podman and starts only with `go run ./tools/live -opt-in`. `go test ./...` and CI never call real Podman. The offline tests in `internal/livesuite` and `tools/live` cover the harness against the fake programs, and the image part and the lifecycle part against an injected process runner with scripted answers ([Verification](live-suite.md#verification)). [Live suite](live-suite.md) describes how to run it on Linux and on Windows 11, how to select its image part, and the summary it writes. No live run of the image part is recorded yet.
+The live suite runs the executable against real Podman and starts only with `go run ./tools/live -opt-in`. `go test ./...` and CI never call real Podman. The offline tests in `internal/livesuite` and `tools/live` cover the harness against the fake programs, and the image part, the lifecycle part, the SSH part, and the update part against an injected process runner with scripted answers ([Verification](live-suite.md#verification)). [Live suite](live-suite.md) describes how to run it on Linux and on Windows 11, how to select its parts with `-images`, `-lifecycle`, `-ssh`, and `-updates`, and the summary it writes. Live records exist for the lifecycle part and the SSH part; no live run of the image part or of the update part is recorded yet.
 
 ### Test seams
 

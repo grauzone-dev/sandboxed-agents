@@ -128,10 +128,6 @@ func (f *updateFixture) run(ctx context.Context, request process.Request) (int, 
 			return write(map[string]string{"/home/agent": f.data, "/etc/ssh": f.data, "/workspace": f.data})
 		case "container":
 			switch args[1] {
-			case "clone":
-				f.id = "private-original"
-				f.image = args[4]
-				return 0, nil
 			case "exists":
 				if strings.HasPrefix(args[2], "sandboxed-agents-backup.") && f.backup == "" {
 					return 1, nil

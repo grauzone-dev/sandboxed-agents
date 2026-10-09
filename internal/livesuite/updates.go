@@ -23,6 +23,10 @@ import (
 
 var privateImageIDPattern = regexp.MustCompile(`^(sha256:)?[0-9a-f]{64}$`)
 
+func sameImageID(first, second string) bool {
+	return strings.TrimPrefix(first, "sha256:") == strings.TrimPrefix(second, "sha256:")
+}
+
 func verifyPrivateUpdateImage(ctx context.Context, podman process.Runner, id, marker string) error {
 	var records []struct {
 		ID       string
@@ -33,7 +37,7 @@ func verifyPrivateUpdateImage(ctx context.Context, podman process.Runner, id, ma
 	if err := liveJSON(ctx, podman, []string{"image", "inspect", id}, &records); err != nil {
 		return err
 	}
-	if len(records) != 1 || strings.TrimPrefix(records[0].ID, "sha256:") != strings.TrimPrefix(id, "sha256:") {
+	if len(records) != 1 || !sameImageID(records[0].ID, id) {
 		return errors.New("update-private-image-identity")
 	}
 	record := records[0]
@@ -177,7 +181,7 @@ func runUpdateScenario(ctx context.Context, config Config, run process.Runner, e
 			return err
 		}))
 	}()
-	return runSSHScenario(ctx, config, run, executable, group, check, sshScenario{prefix: prefix, afterPhase: afterPhase, beforeRemove: func(ctx context.Context, name string, podman process.Runner, command liveExecutable) error {
+	return runSSHScenario(ctx, config, run, executable, group, check, sshScenario{prefix: prefix, afterPhase: afterPhase, recheckPodmanTarget: true, beforeRemove: func(ctx context.Context, name string, podman process.Runner, command liveExecutable) error {
 		return cleanupUpdateBackup(ctx, config, podman, command, group, name)
 	}, transition: func(ctx context.Context, name string, podman process.Runner, command liveExecutable) error {
 		cleanupPodman = podman
@@ -220,7 +224,7 @@ func runUpdateScenario(ctx context.Context, config Config, run process.Runner, e
 				return err
 			}
 			candidate := strings.TrimSpace(string(output))
-			if !privateImageIDPattern.MatchString(candidate) || strings.TrimPrefix(candidate, "sha256:") == strings.TrimPrefix(currentImage, "sha256:") {
+			if !privateImageIDPattern.MatchString(candidate) || sameImageID(candidate, currentImage) {
 				return errors.New("update-private-image")
 			}
 			privateImage = candidate
@@ -250,7 +254,7 @@ func runUpdateScenario(ctx context.Context, config Config, run process.Runner, e
 							return err
 						}
 						if replacement.ID != baseline.ID {
-							if strings.TrimPrefix(replacement.Image, "sha256:") != strings.TrimPrefix(privateImage, "sha256:") {
+							if !sameImageID(replacement.Image, privateImage) {
 								return errors.New("update-fixture-replacement-owner")
 							}
 							if _, err := readObservation(cleanup, podman, "podman", []string{"rm", "--force", baseline.Name}, nil); err != nil {
@@ -278,7 +282,7 @@ func runUpdateScenario(ctx context.Context, config Config, run process.Runner, e
 			if err != nil {
 				return err
 			}
-			if !original.State.Running || strings.TrimPrefix(original.Image, "sha256:") != strings.TrimPrefix(privateImage, "sha256:") || !sameUpdateConfiguration(baseline, original) {
+			if !original.State.Running || !sameImageID(original.Image, privateImage) || !sameUpdateConfiguration(baseline, original) {
 				return errors.New("update-outdated-fixture")
 			}
 			baseline = original
@@ -369,7 +373,7 @@ func runUpdateScenario(ctx context.Context, config Config, run process.Runner, e
 			if err != nil {
 				return err
 			}
-			if updated.ID == baseline.ID || strings.TrimPrefix(updated.Image, "sha256:") != strings.TrimPrefix(currentImage, "sha256:") || !updated.State.Running || !sameUpdateConfiguration(baseline, updated) {
+			if updated.ID == baseline.ID || !sameImageID(updated.Image, currentImage) || !updated.State.Running || !sameUpdateConfiguration(baseline, updated) {
 				return errors.New("update-configuration-not-preserved")
 			}
 			if err := requireNoUpdateBackup(ctx, podman, group, name); err != nil {
@@ -401,15 +405,12 @@ func updateFixtureCreateArguments(baseline updateContainer, image string) []stri
 }
 
 func cleanupUpdateBackup(ctx context.Context, config Config, podman process.Runner, command liveExecutable, group, name string) error {
-	status, err := podman(ctx, process.Request{Name: "podman", Args: []string{"container", "exists", "sandboxed-agents-backup." + group + "." + name}})
+	exists, err := updateBackupExists(ctx, podman, group, name)
 	if err != nil {
 		return err
 	}
-	if status == 1 {
+	if !exists {
 		return nil
-	}
-	if status != 0 {
-		return errors.New("update-cleanup-backup-inventory")
 	}
 	// Only update understands interrupted update recovery and checks ownership.
 	// A recovered original may report nonzero; observe that the backup is gone.
@@ -437,13 +438,28 @@ func verifyUpdateData(ctx context.Context, podman process.Runner, container, tok
 	return nil
 }
 
-func requireNoUpdateBackup(ctx context.Context, podman process.Runner, group, name string) error {
+func updateBackupExists(ctx context.Context, podman process.Runner, group, name string) (bool, error) {
 	status, err := podman(ctx, process.Request{Name: "podman", Args: []string{"container", "exists", "sandboxed-agents-backup." + group + "." + name}})
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	default:
+		return false, fmt.Errorf("update-backup-inventory-status-%d", status)
+	}
+}
+
+func requireNoUpdateBackup(ctx context.Context, podman process.Runner, group, name string) error {
+	exists, err := updateBackupExists(ctx, podman, group, name)
 	if err != nil {
 		return err
 	}
-	if status != 1 {
-		return fmt.Errorf("update-backup-remains-or-unknown-%d", status)
+	if exists {
+		return errors.New("update-backup-remains")
 	}
 	return nil
 }

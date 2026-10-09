@@ -21,9 +21,12 @@ import (
 )
 
 type sshScenario struct {
-	prefix, afterPhase string
-	transition         func(context.Context, string, process.Runner, liveExecutable) error
-	beforeRemove       func(context.Context, string, process.Runner, liveExecutable) error
+	prefix string
+	// An empty phase leaves a stopped sandbox without a post-transition SSH probe.
+	afterPhase          string
+	recheckPodmanTarget bool
+	transition          func(context.Context, string, process.Runner, liveExecutable) error
+	beforeRemove        func(context.Context, string, process.Runner, liveExecutable) error
 }
 
 func runSSH(ctx context.Context, config Config, run process.Runner, executable, group string, check func(string, func() error) error) error {
@@ -69,7 +72,7 @@ func runSSHScenario(ctx context.Context, config Config, run process.Runner, exec
 	if err := check("ssh/target", func() error {
 		var err error
 		podman, connection, err = newLivePodman(ctx, config, run)
-		if err == nil && strings.HasPrefix(scenario.prefix, "updates/") {
+		if err == nil && scenario.recheckPodmanTarget {
 			bound := podman
 			podman = func(ctx context.Context, request process.Request) (int, error) {
 				if request.Name == "podman" && (len(request.Args) == 0 || request.Args[0] != "machine") {

@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/csv"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -20,19 +20,18 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
-// Groups includes the Administrators SID even in an administrator's filtered
-// UAC token. Testing elevation alone would allow an administrator account.
-const sshStandardAccountScript = `$ErrorActionPreference='Stop'; $identity=[Security.Principal.WindowsIdentity]::GetCurrent(); if ($identity.Groups.Value -contains 'S-1-5-32-544') { exit 1 }; Write-Output 'standard-account'`
-
 func runSSH(ctx context.Context, config Config, run process.Runner, executable, group string, check func(string, func() error) error) (result error) {
 	if config.Host.OS == "windows" {
 		if err := check("ssh/standard-account", func() error {
 			var output bytes.Buffer
-			status, err := run(ctx, process.Request{Name: "powershell.exe", Args: []string{"-NoProfile", "-NonInteractive", "-Command", sshStandardAccountScript}, Streams: process.Streams{Stdout: &output, Stderr: config.Stderr}})
-			if err != nil || status != 0 || strings.TrimSpace(output.String()) != "standard-account" {
+			// Unlike WindowsIdentity.Groups, whoami includes deny-only groups
+			// from an administrator's filtered UAC token. Compare the SID,
+			// not localized group names or attributes.
+			status, err := run(ctx, process.Request{Name: "whoami.exe", Args: []string{"/groups", "/fo", "csv", "/nh"}, Streams: process.Streams{Stdout: &output, Stderr: config.Stderr}})
+			if err != nil || status != 0 {
 				return errors.New(sshStandardAccountMessage)
 			}
-			return nil
+			return verifySSHStandardAccount(output.String())
 		}); err != nil {
 			return err
 		}
@@ -63,21 +62,25 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 	if err := check("ssh/group-empty", func() error { return requireEmptyGroup(ctx, podman, group) }); err != nil {
 		return err
 	}
-	root, err := controllergroup.StateDirectory(config.Host.OS, group)
-	if err != nil {
-		return err
-	}
-	root = filepath.Join(root, "ssh")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	if config.Host.OS == "windows" && os.Getenv("USERPROFILE") != "" {
-		home = os.Getenv("USERPROFILE")
-	}
-	userConfig := filepath.Join(home, ".ssh", "config")
+	var root, userConfig string
 	var originalConfig []byte
 	if err := check("ssh/host-clean", func() error {
+		// Observe the documented host-state layout independently of the
+		// installer: these are the files host OpenSSH must actually consume.
+		var err error
+		root, err = controllergroup.StateDirectory(config.Host.OS, group)
+		if err != nil {
+			return err
+		}
+		root = filepath.Join(root, "ssh")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		if config.Host.OS == "windows" && os.Getenv("USERPROFILE") != "" {
+			home = os.Getenv("USERPROFILE")
+		}
+		userConfig = filepath.Join(home, ".ssh", "config")
 		entries, err := os.ReadDir(root)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -106,18 +109,9 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 	}
 	name := "ssh-" + strings.ToLower(rand.Text())
 	keyDirectory := filepath.Join(root, "sandbox-"+hex.EncodeToString([]byte(name)))
+	command := liveExecutable{run: run, podman: podman, connection: connection, path: executable}
 	invoke := func(ctx context.Context, args ...string) error {
-		if err := requireSelectedConnection(ctx, podman, connection); err != nil {
-			return err
-		}
-		status, err := run(ctx, process.Request{Name: executable, Args: args, Env: withGroup(os.Environ(), group), Streams: process.Streams{Stdout: config.Stdout, Stderr: config.Stderr}})
-		if err != nil {
-			return err
-		}
-		if status != 0 {
-			return fmt.Errorf("%s: exit status %d", args[0], status)
-		}
-		return nil
+		return command.invoke(ctx, process.Request{Args: args, Env: withGroup(os.Environ(), group), Streams: process.Streams{Stdout: config.Stdout, Stderr: config.Stderr}})
 	}
 	hostClean := func() error {
 		entries, err := os.ReadDir(root)
@@ -150,7 +144,7 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 	}); err != nil {
 		return err
 	}
-	connect := func(phase string) error {
+	verifyAccess := func(phase string) error {
 		var port string
 		if err := check("ssh/"+phase+"/loopback", func() error {
 			var err error
@@ -183,11 +177,15 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 			return nil
 		})
 	}
-	if err := connect("created"); err != nil {
+	if err := verifyAccess("created"); err != nil {
 		return err
 	}
-	originalState, err := readSSHState(root)
-	if err != nil {
+	var originalState map[string]string
+	if err := check("ssh/created/setup-snapshot", func() error {
+		var err error
+		originalState, err = readSSHState(root)
+		return err
+	}); err != nil {
 		return err
 	}
 	if err := check("ssh/stop", func() error { return invoke(ctx, "stop", name) }); err != nil {
@@ -208,7 +206,22 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 	}); err != nil {
 		return err
 	}
-	return connect("started-again")
+	return verifyAccess("started-again")
+}
+
+func verifySSHStandardAccount(output string) error {
+	reader := csv.NewReader(strings.NewReader(output))
+	reader.FieldsPerRecord = 4
+	groups, err := reader.ReadAll()
+	if err != nil || len(groups) == 0 {
+		return errors.New(sshStandardAccountMessage)
+	}
+	for _, group := range groups {
+		if !strings.HasPrefix(group[2], "S-1-") || group[2] == "S-1-5-32-544" {
+			return errors.New(sshStandardAccountMessage)
+		}
+	}
+	return nil
 }
 
 func readSSHBinding(ctx context.Context, podman process.Runner, group, name string) (string, error) {

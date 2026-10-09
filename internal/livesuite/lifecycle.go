@@ -32,18 +32,9 @@ func runLifecycle(ctx context.Context, config Config, run process.Runner, execut
 		return err
 	}
 	name := "lifecycle-" + strings.ToLower(rand.Text())
+	command := liveExecutable{run: run, podman: podman, connection: connection, path: executable}
 	invoke := func(ctx context.Context, selectedGroup string, args []string, output io.Writer) error {
-		if err := requireSelectedConnection(ctx, podman, connection); err != nil {
-			return err
-		}
-		status, err := run(ctx, process.Request{Name: executable, Args: args, Env: withGroup(os.Environ(), selectedGroup), Streams: process.Streams{Stdout: output, Stderr: config.Stderr}})
-		if err != nil {
-			return err
-		}
-		if status != 0 {
-			return fmt.Errorf("%s: exit status %d", args[0], status)
-		}
-		return nil
+		return command.invoke(ctx, process.Request{Args: args, Env: withGroup(os.Environ(), selectedGroup), Streams: process.Streams{Stdout: output, Stderr: config.Stderr}})
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)

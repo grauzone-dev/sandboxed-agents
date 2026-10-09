@@ -20,7 +20,21 @@ import (
 	"github.com/grauzone-dev/sandboxed-agents/internal/sandbox"
 )
 
-func runSSH(ctx context.Context, config Config, run process.Runner, executable, group string, check func(string, func() error) error) (result error) {
+type sshScenario struct {
+	prefix, afterPhase string
+	transition         func(context.Context, string, process.Runner, liveExecutable) error
+	beforeRemove       func(context.Context, string, process.Runner, liveExecutable) error
+}
+
+func runSSH(ctx context.Context, config Config, run process.Runner, executable, group string, check func(string, func() error) error) error {
+	return runSSHScenario(ctx, config, run, executable, group, check, sshScenario{prefix: "ssh", afterPhase: "started-again"})
+}
+
+func runSSHScenario(ctx context.Context, config Config, run process.Runner, executable, group string, recordCheck func(string, func() error) error, scenario sshScenario) (result error) {
+	check := func(name string, action func() error) error {
+		return recordCheck(scenario.prefix+strings.TrimPrefix(name, "ssh"), action)
+	}
+
 	if config.Host.OS == "windows" {
 		if err := check("ssh/standard-account", func() error {
 			var output bytes.Buffer
@@ -55,6 +69,17 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 	if err := check("ssh/target", func() error {
 		var err error
 		podman, connection, err = newLivePodman(ctx, config, run)
+		if err == nil && strings.HasPrefix(scenario.prefix, "updates/") {
+			bound := podman
+			podman = func(ctx context.Context, request process.Request) (int, error) {
+				if request.Name == "podman" && (len(request.Args) == 0 || request.Args[0] != "machine") {
+					if err := requireSelectedConnection(ctx, bound, connection); err != nil {
+						return 0, err
+					}
+				}
+				return bound(ctx, request)
+			}
+		}
 		return err
 	}); err != nil {
 		return err
@@ -110,11 +135,11 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 	}); err != nil {
 		return err
 	}
-	name := "ssh-" + strings.ToLower(rand.Text())
+	name := strings.ReplaceAll(scenario.prefix, "/", "-") + "-" + strings.ToLower(rand.Text())
 	keyDirectory := filepath.Join(root, "sandbox-"+hex.EncodeToString([]byte(name)))
 	command := liveExecutable{run: run, podman: podman, connection: connection, path: executable}
 	invoke := func(ctx context.Context, args ...string) error {
-		return command.invoke(ctx, process.Request{Args: args, Env: withGroup(os.Environ(), group), Streams: process.Streams{Stdout: config.Stdout, Stderr: config.Stderr}})
+		return command.invoke(ctx, process.Request{Args: args, Env: liveCommandEnvironment(config, group), Streams: process.Streams{Stdout: config.Stdout, Stderr: config.Stderr}})
 	}
 	hostClean := func() error {
 		entries, err := os.ReadDir(root)
@@ -135,6 +160,11 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 		defer cancel()
 		result = errors.Join(result, check("ssh/cleanup", func() error {
 			if requireEmptyGroup(cleanup, podman, group) != nil || hostClean() != nil {
+				if scenario.beforeRemove != nil {
+					if err := scenario.beforeRemove(cleanup, name, podman, command); err != nil {
+						return err
+					}
+				}
 				if err := invoke(cleanup, "remove", name, "--volumes"); err != nil {
 					return err
 				}
@@ -184,32 +214,50 @@ func runSSH(ctx context.Context, config Config, run process.Runner, executable, 
 		return err
 	}
 	var originalState map[string]string
+	var installedUserConfig []byte
 	if err := check("ssh/created/setup-snapshot", func() error {
 		var err error
 		originalState, err = readSSHState(root)
+		if err != nil {
+			return err
+		}
+		installedUserConfig, err = readOptionalSSHFile(userConfig)
 		return err
 	}); err != nil {
 		return err
 	}
-	if err := check("ssh/stop", func() error { return invoke(ctx, "stop", name) }); err != nil {
-		return err
+	if scenario.transition != nil {
+		if err := scenario.transition(ctx, name, podman, command); err != nil {
+			return err
+		}
+	} else {
+		if err := check("ssh/stop", func() error { return invoke(ctx, "stop", name) }); err != nil {
+			return err
+		}
+		if err := check("ssh/start", func() error { return invoke(ctx, "start", name) }); err != nil {
+			return err
+		}
 	}
-	if err := check("ssh/start", func() error { return invoke(ctx, "start", name) }); err != nil {
-		return err
+	if scenario.afterPhase == "" {
+		return nil
 	}
-	if err := check("ssh/started-again/setup-unchanged", func() error {
+	if err := check("ssh/"+scenario.afterPhase+"/setup-unchanged", func() error {
 		current, err := readSSHState(root)
 		if err != nil {
 			return err
 		}
-		if !maps.Equal(originalState, current) {
+		userState, err := readOptionalSSHFile(userConfig)
+		if err != nil {
+			return err
+		}
+		if !maps.Equal(originalState, current) || !bytes.Equal(installedUserConfig, userState) {
 			return errors.New(sshStateChangedMessage)
 		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	return verifyAccess("started-again")
+	return verifyAccess(scenario.afterPhase)
 }
 
 func verifySSHStandardAccount(output string) error {

@@ -23,6 +23,7 @@ type Config struct {
 	Images          bool
 	Lifecycle       bool
 	SSH             bool
+	Updates         bool
 	Commit          string
 	Repository      string
 	OutputDirectory string
@@ -74,6 +75,7 @@ func Run(ctx context.Context, config Config) (result error) {
 	}
 	summary := Summary{SchemaVersion: 2, Kind: "live-suite", Commit: config.Commit, Platform: platformName, Result: "fail", ImagePartSelected: config.Images, Checks: imageChecksNotRun()}
 	summary.Checks = append(summary.Checks, Check{Name: "ssh", Result: "not-run"})
+	summary.Checks = append(summary.Checks, updatesChecksNotRun()...)
 	path := filepath.Join(config.OutputDirectory, "live-suite-"+platformName+".json")
 	if err := writeSummary(path, summary); err != nil {
 		return err
@@ -146,7 +148,7 @@ func Run(ctx context.Context, config Config) (result error) {
 		return err
 	}
 	environment := withGroup(os.Environ(), group)
-	if host.OS == "windows" && config.Images {
+	if host.OS == "windows" && (config.Images || config.Updates) {
 		environment = scrubPodmanRemoteEnvironment(environment)
 	}
 	invoke := func(args []string, stdout io.Writer) error {
@@ -198,9 +200,14 @@ func Run(ctx context.Context, config Config) (result error) {
 		}
 	}
 	if config.SSH {
-		return check("ssh", func() error {
+		if err := check("ssh", func() error {
 			return runSSH(ctx, config, run, executable, group, check)
-		})
+		}); err != nil {
+			return err
+		}
+	}
+	if config.Updates {
+		return check("updates", func() error { return runUpdates(ctx, config, run, executable, group, assetHash, check) })
 	}
 	return nil
 }

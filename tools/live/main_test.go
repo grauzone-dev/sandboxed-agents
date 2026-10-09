@@ -70,6 +70,21 @@ func TestToolSkipsLiveSuiteWithoutOptIn(t *testing.T) {
 	}
 }
 
+func TestToolSkipsUpdateCoverageWithoutOptIn(t *testing.T) {
+	fakes := testutil.NewFakePrograms(t)
+	output := filepath.Join(t.TempDir(), "records")
+	status, stdout, stderr := runTool(t, "-updates", "-output", output)
+	if status != 0 || !strings.Contains(stdout, "skipped") || stderr != "" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+	if len(fakes.Calls("podman")) != 0 {
+		t.Fatal("unselected live run called Podman")
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("unselected live run wrote summary: %v", err)
+	}
+}
+
 func TestToolRefusesUnsafeGroupsBeforePodman(t *testing.T) {
 	for _, group := range []string{"default", "invalid.group"} {
 		t.Run(group, func(t *testing.T) {

@@ -6,10 +6,52 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
 )
+
+func TestRestrictSSHAccessSecuresCurrentOwnedKeyWithoutWriteOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(path, []byte("private key fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Establish the same current-user ownership as a native ssh-keygen key.
+	if err := RestrictSSHAccess(path); err != nil {
+		t.Fatal(err)
+	}
+	before := replacementSecurity(t, path)
+	owner, _, found := strings.Cut(before, "D:")
+	if !found {
+		t.Fatalf("missing fixture owner or DACL: %q", before)
+	}
+	// OpenSSH's native 0600 creation grants read/write/execute/delete, without
+	// WRITE_OWNER. An owner can still replace the DACL through WRITE_DAC.
+	setFixtureDACL(t, path, owner+"D:P(A;;0x001301bf;;;"+strings.TrimPrefix(owner, "O:")+")")
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := syscall.CreateFile(name, 0x00080000, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err == nil {
+		syscall.CloseHandle(handle)
+		t.Fatal("fixture unexpectedly grants WRITE_OWNER")
+	}
+	if !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		t.Fatalf("opening fixture for WRITE_OWNER: %v", err)
+	}
+	if err := RestrictSSHAccess(path); err != nil {
+		t.Fatalf("restrict current-owned key without WRITE_OWNER: %v", err)
+	}
+	// The descriptor includes the unchanged owner, protected inheritance and
+	// exactly one full-control ACE for that account, with no other trustees.
+	want := owner + "D:P(A;;FA;;;" + strings.TrimPrefix(owner, "O:") + ")"
+	if got := replacementSecurity(t, path); got != want {
+		t.Fatalf("restricted key security = %q, want %q", got, want)
+	}
+	assertReplacementContent(t, path, "private key fixture\n")
+}
 
 func TestReplaceFilePreservingDACLRestoresOriginalAfterPartialFailure(t *testing.T) {
 	source, target := replacementFiles(t)
@@ -198,7 +240,12 @@ func setReplacementFixtureDACL(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, err := syscall.UTF16PtrFromString("O:" + sid + "D:P(A;;FA;;;" + sid + ")(A;;FR;;;BU)")
+	setFixtureDACL(t, path, "O:"+sid+"D:P(A;;FA;;;"+sid+")(A;;FR;;;BU)")
+}
+
+func setFixtureDACL(t *testing.T, path, sddl string) {
+	t.Helper()
+	text, err := syscall.UTF16PtrFromString(sddl)
 	if err != nil {
 		t.Fatal(err)
 	}

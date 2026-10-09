@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,18 +58,9 @@ func runImages(ctx context.Context, config Config, run process.Runner, executabl
 	}
 	defer func() { result = errors.Join(result, os.RemoveAll(directory)) }()
 	environment := liveImageEnvironment(os.Environ(), group, directory)
+	command := liveExecutable{run: run, podman: podman, connection: connection, path: executable}
 	invoke := func(current context.Context, args []string, input io.Reader, output io.Writer) error {
-		if err := requireSelectedConnection(current, podman, connection); err != nil {
-			return err
-		}
-		status, err := run(current, process.Request{Name: executable, Args: args, Env: environment, Streams: process.Streams{Stdin: input, Stdout: output, Stderr: config.Stderr}})
-		if err != nil {
-			return err
-		}
-		if status != 0 {
-			return fmt.Errorf("%s: exit status %d", args[0], status)
-		}
-		return nil
+		return command.invoke(current, process.Request{Args: args, Env: environment, Streams: process.Streams{Stdin: input, Stdout: output, Stderr: config.Stderr}})
 	}
 	var attempted []*liveImageCase
 	defer func() {

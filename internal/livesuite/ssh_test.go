@@ -59,8 +59,8 @@ func (f *sshFixture) run(_ context.Context, request process.Request) (int, error
 	if request.Name == "git" || request.Name == "go" {
 		return 0, nil
 	}
-	if request.Name == "powershell.exe" {
-		fmt.Fprintln(request.Streams.Stdout, "standard-account")
+	if request.Name == "whoami.exe" {
+		fmt.Fprintln(request.Streams.Stdout, `"BUILTIN\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"`)
 		return 0, nil
 	}
 	if request.Name == "ssh" {
@@ -276,19 +276,27 @@ func TestLiveSSHRejectsUnsafeBindingsAndConfiguration(t *testing.T) {
 }
 
 func TestLiveSSHRefusesWindowsAdministratorAndNonWindowsOpenSSH(t *testing.T) {
-	for _, failure := range []string{"administrator", "account-query-failure", "account-query-malformed", "git-openssh"} {
+	for _, failure := range []string{"administrator", "administrator-localized", "account-query-failure", "account-query-malformed", "account-query-empty", "git-openssh"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newSSHFixture(t, "windows")
 			f.config.Run = func(ctx context.Context, request process.Request) (int, error) {
-				if request.Name == "powershell.exe" {
+				if request.Name == "whoami.exe" {
 					if failure == "administrator" {
-						return 1, nil
+						fmt.Fprintln(request.Streams.Stdout, `"BUILTIN\Administrators","Alias","S-1-5-32-544","Mandatory group, Enabled by default, Enabled group"`)
+						return 0, nil
+					}
+					if failure == "administrator-localized" {
+						fmt.Fprintln(request.Streams.Stdout, `"VORDEFINIERT\Administratoren","Alias","S-1-5-32-544","Nur zum Verweigern"`)
+						return 0, nil
 					}
 					if failure == "account-query-failure" {
 						return 0, os.ErrPermission
 					}
 					if failure == "account-query-malformed" {
 						fmt.Fprintln(request.Streams.Stdout, "unknown")
+						return 0, nil
+					}
+					if failure == "account-query-empty" {
 						return 0, nil
 					}
 				}
@@ -308,7 +316,30 @@ func TestLiveSSHRefusesWindowsAdministratorAndNonWindowsOpenSSH(t *testing.T) {
 			if !hasCheck(summary, "ssh", "fail") {
 				t.Fatalf("summary=%+v", summary)
 			}
+			if failure != "git-openssh" && !hasCheck(summary, "ssh/standard-account", "fail") {
+				t.Fatalf("account query was not refused: %+v", summary)
+			}
 		})
+	}
+}
+
+func TestLiveSSHRefusesADenyOnlyWindowsAdministratorToken(t *testing.T) {
+	f := newSSHFixture(t, "windows")
+	f.config.Run = func(ctx context.Context, request process.Request) (int, error) {
+		if request.Name == "whoami.exe" {
+			if !slices.Equal(request.Args, []string{"/groups", "/fo", "csv", "/nh"}) {
+				t.Fatalf("whoami args=%v", request.Args)
+			}
+			fmt.Fprintln(request.Streams.Stdout, `"BUILTIN\Administrators","Alias","S-1-5-32-544","Group used for deny only"`)
+			return 0, nil
+		}
+		return f.run(ctx, request)
+	}
+	if err := livesuite.Run(context.Background(), f.config); err == nil {
+		t.Fatal("filtered administrator token was accepted as a standard account")
+	}
+	if f.name != "" || !hasCheck(readSummary(t, f.config, "windows-11"), "ssh/standard-account", "fail") {
+		t.Fatal("filtered administrator reached sandbox creation")
 	}
 }
 

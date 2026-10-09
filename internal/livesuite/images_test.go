@@ -124,6 +124,8 @@ func (fixture *imageCoverageFixture) run(ctx context.Context, request process.Re
 			args = args[2:]
 		}
 		switch args[0] {
+		case "run":
+			return 0, nil
 		case "info":
 			fmt.Fprint(request.Streams.Stdout, `{"host":{"serviceIsRemote":false}}`)
 		case "ps":

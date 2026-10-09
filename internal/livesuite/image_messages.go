@@ -17,4 +17,8 @@ const (
 	imageBaseLayersMessage            = "a toolchain image does not start with the layers of the base image it was built on"
 	imageContextRetainedMessage       = "a temporary build context of the executable remained in the image part's temporary directory after a build"
 	imageCleanupInventoryMessage      = "podman could not report whether a container or volume of the image part's sandboxes still exists, so the cleanup cannot tell what is left"
+	imageRootProbeNameConflictMessage = "a container already exists under the random name chosen for the root-level image probe, before the probe started: the image part left it untouched; inspect it with podman container inspect and remove or rename it before you run the suite again"
+	imageRootProbeOwnershipMessage    = "a leftover container under the root-level image probe's name cannot be proven to be the probe: its name, controller group label, base sandbox name label, or image differs from what the image part started, or Podman reports no container ID for it, so it was not removed; inspect it with podman container inspect and remove it with Podman once you know what it is"
+	imageRootProbeRetainedMessage     = "podman rm reported success, but the root-level image probe container still exists; remove it with podman rm --force"
+	imageRootProbeInventoryMessage    = "podman container exists returned a status other than 0 or 1, so the image part cannot tell whether the root-level image probe container exists; check the suite's controller group for leftovers"
 )

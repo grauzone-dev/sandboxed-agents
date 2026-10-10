@@ -1,10 +1,11 @@
-# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite command of offline.yml, unchanged,
+# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite command of offline.yml with one input
+# cut, internal/manager removed from the package list (every other package of ./... kept, in the same order),
 # run by a driver that stops the whole go process tree once the original readiness protocol test (observed
 # through DEBUG_55_ORIGINAL_OBSERVE) reports its parent result. The step's status is the driver's verdict
 # on that test, not a suite result: the other packages are stopped, not passed. The file keeps its earlier
 # name so that the temporary files stay the same set. Before the branch ships, remove this workflow and
 # internal/sandbox/readiness_ci_debug_test.go, and restore internal/sandbox/readiness_protocol_test.go.
-name: Issue 55 readiness full loop until protocol
+name: Issue 55 readiness until protocol without internal/manager
 
 on:
   push:
@@ -20,7 +21,7 @@ permissions:
 
 jobs:
   full:
-    name: 55-full-until-protocol (windows-latest)
+    name: 55-until-protocol-without-manager (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 50
     env:
@@ -56,12 +57,14 @@ jobs:
           # protocol test's parent reports pass or fail. The early stop is deliberate and is not a test result: the
           # verdict comes only from the protocol test's parent and leaf events and from the observation file.
           # Exit codes: 0 GREEN, 1 RED, 3 INCOMPLETE, 4 DRIVER-ERROR (any driver failure, including go missing).
+          # -Packages replaces only the package arguments of that go test command (default ./...), for input cuts.
           # Whatever fails, the finally block stops go's process tree; recording failures never block that stop.
           param(
             [Parameter(Mandatory = $true)][string]$Jsonl,
             [Parameter(Mandatory = $true)][string]$Observe,
             [Parameter(Mandatory = $true)][string]$Summary,
-            [int]$WaitMinutes = 30
+            [int]$WaitMinutes = 30,
+            [string]$Packages = './...'
           )
           $ErrorActionPreference = 'Stop'
           $parent = 'TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient'
@@ -212,7 +215,7 @@ jobs:
             if (-not $goCommand) { throw 'go not found on PATH' }
             $info = New-Object System.Diagnostics.ProcessStartInfo
             $info.FileName = $goCommand.Path
-            $info.Arguments = 'test -timeout 40m -json ./...'
+            $info.Arguments = 'test -timeout 40m -json ' + $Packages
             $info.WorkingDirectory = $here
             $info.UseShellExecute = $false
             $info.RedirectStandardOutput = $true
@@ -223,6 +226,7 @@ jobs:
             $script:goStarted = (Get-Date).AddSeconds(-1)
             $script:process = [System.Diagnostics.Process]::Start($info)
             Note 'go-path' $goCommand.Path
+            Note 'go-arguments' $info.Arguments
             Note 'go-pid' $script:process.Id
             Note 'go-start' (Stamp)
 
@@ -270,8 +274,10 @@ jobs:
           }
           exit $exitCode
           PS1
+          # The single input cut: every package of ./... at this tree, in go list order, except ./internal/manager.
+          task_packages='./cmd/sandboxed-agents ./cmd/sandboxed-agents-manager ./internal/agentcatalog ./internal/assets ./internal/buildassets ./internal/buildenv ./internal/cli ./internal/controllergroup ./internal/filelock ./internal/images ./internal/integrations ./internal/livesuite ./internal/npmpackage ./internal/platform ./internal/preflight ./internal/process ./internal/release ./internal/sandbox ./internal/sshkeys ./internal/testutil ./internal/toolchains ./tools/build ./tools/live ./tools/release'
           set +e
-          MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -ExecutionPolicy Bypass -File "$RUNNER_TEMP/issue-55-until-protocol.ps1" -Jsonl .scratch/offline-tests.jsonl -Observe "$DEBUG_55_ORIGINAL_OBSERVE" -Summary "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" -WaitMinutes 30
+          MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -ExecutionPolicy Bypass -File "$RUNNER_TEMP/issue-55-until-protocol.ps1" -Jsonl .scratch/offline-tests.jsonl -Observe "$DEBUG_55_ORIGINAL_OBSERVE" -Summary "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" -WaitMinutes 30 -Packages "$task_packages"
           task_status=$?
           # A driver that cannot run at all (for example a parse error) also exits 1; only a recorded RED counts as RED.
           if [ "$task_status" -eq 1 ] && ! grep -q '^verdict=RED' "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" 2>/dev/null; then
@@ -286,7 +292,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: issue-55-full-until-protocol-windows
+          name: issue-55-until-protocol-without-manager-windows
           path: |
             .scratch/offline-tests.jsonl
             ${{ runner.temp }}/issue-55-original-observe.txt

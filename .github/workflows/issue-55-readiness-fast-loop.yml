@@ -1,9 +1,8 @@
-# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite command of offline.yml with one
-# cut, -run selecting only the original readiness protocol test, which stays observed through
-# DEBUG_55_ORIGINAL_OBSERVE. Every package is still built and its test binary started. The file keeps its
-# earlier name so that the temporary files stay the same set. Before the branch ships, remove this workflow and
+# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite of offline.yml, with the original
+# readiness protocol test observed through DEBUG_55_ORIGINAL_OBSERVE. The file keeps its earlier name so
+# that the temporary files stay the same set. Before the branch ships, remove this workflow and
 # internal/sandbox/readiness_ci_debug_test.go, and restore internal/sandbox/readiness_protocol_test.go.
-name: Issue 55 readiness targeted loop
+name: Issue 55 readiness full loop
 
 on:
   push:
@@ -19,7 +18,7 @@ permissions:
 
 jobs:
   full:
-    name: 55-targeted-loop (windows-latest)
+    name: 55-full-loop (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 50
     env:
@@ -48,7 +47,7 @@ jobs:
         env:
           DEBUG_55_ORIGINAL_OBSERVE: ${{ runner.temp }}\issue-55-original-observe.txt
         run: |
-          go test -timeout "40m" -json -run '^TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient$' ./... | tee .scratch/offline-tests.jsonl
+          go test -timeout "40m" -json ./... | tee .scratch/offline-tests.jsonl
           go vet ./...
       - name: SSH client version, after the suite
         if: always()
@@ -57,7 +56,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: issue-55-targeted-loop-windows
+          name: issue-55-full-loop-windows
           path: |
             .scratch/offline-tests.jsonl
             ${{ runner.temp }}/issue-55-original-observe.txt

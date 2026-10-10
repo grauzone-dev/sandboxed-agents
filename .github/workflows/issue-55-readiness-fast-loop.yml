@@ -1,6 +1,8 @@
-# Temporary #55 diagnosis loop (DEBUG-55): Windows CI failure of the readiness protocol test at 4e16bb9.
-# Remove this workflow and internal/sandbox/readiness_ci_debug_test.go before the branch ships.
-name: Issue 55 readiness fast loop
+# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite of offline.yml, with the original
+# readiness protocol test observed through DEBUG_55_ORIGINAL_OBSERVE. The file keeps its earlier name so
+# that the temporary files stay the same set. Before the branch ships, remove this workflow and
+# internal/sandbox/readiness_ci_debug_test.go, and restore internal/sandbox/readiness_protocol_test.go.
+name: Issue 55 readiness full loop
 
 on:
   push:
@@ -9,25 +11,22 @@ on:
     paths:
       - .github/workflows/issue-55-readiness-fast-loop.yml
       - internal/sandbox/readiness_ci_debug_test.go
+      - internal/sandbox/readiness_protocol_test.go
 
 permissions:
   contents: read
 
 jobs:
-  readiness:
-    name: 55-fast-loop (${{ matrix.client }})
-    strategy:
-      fail-fast: false
-      matrix:
-        client: [git-bash-path, inbox-first]
+  full:
+    name: 55-full-loop (windows-latest)
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 50
     env:
       GOPROXY: 'off'
       GOSUMDB: 'off'
       GOTOOLCHAIN: local
       CGO_ENABLED: '0'
-      CLIENT: ${{ matrix.client }}
+      HOST_OUTPUT: .scratch/sandboxed-agents.exe
     defaults:
       run:
         shell: bash
@@ -39,111 +38,31 @@ jobs:
         with:
           go-version: '1.27.1'
       - name: Build manager and host
-        run: go run ./tools/build -output .scratch/sandboxed-agents.exe
+        run: go run ./tools/build -output "$HOST_OUTPUT"
       - name: SSH client on PATH, without starting it
         run: |
-          if [ "$CLIENT" = inbox-first ]; then export PATH="/c/Windows/System32/OpenSSH:$PATH"; fi
           command -v ssh
           type -a ssh
-      - name: A. Production protocol test, unchanged, three runs
-        id: production
-        continue-on-error: true
+      - name: Test and vet
+        env:
+          DEBUG_55_ORIGINAL_OBSERVE: ${{ runner.temp }}\issue-55-original-observe.txt
         run: |
-          if [ "$CLIENT" = inbox-first ]; then export PATH="/c/Windows/System32/OpenSSH:$PATH"; fi
-          go test ./internal/sandbox -run '^TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient$' -count=3 -v 2>&1 | tee "$RUNNER_TEMP/a-production.txt"
-      - name: SSH client version, after A so that A starts ssh first
+          go test -timeout "40m" -json ./... | tee .scratch/offline-tests.jsonl
+          go vet ./...
+      - name: SSH client version, after the suite
         if: always()
-        run: |
-          if [ "$CLIENT" = inbox-first ]; then export PATH="/c/Windows/System32/OpenSSH:$PATH"; fi
-          ssh -V
-      - name: B. Observed production readiness, idle runner
-        id: observed
-        continue-on-error: true
-        env:
-          DEBUG_55_READINESS: '1'
-          DEBUG_55_OBSERVE_SECONDS: '20'
-        run: |
-          if [ "$CLIENT" = inbox-first ]; then export PATH="/c/Windows/System32/OpenSSH:$PATH"; fi
-          go test ./internal/sandbox -run '^TestDebug55ReadinessOnThisRunner$' -count=1 -v 2>&1 | tee "$RUNNER_TEMP/b-observed.txt"
-      - name: C. Observed production readiness, with other packages' tests running
-        id: loaded
-        continue-on-error: true
-        env:
-          DEBUG_55_READINESS: '1'
-          DEBUG_55_OBSERVE_SECONDS: '20'
-        run: |
-          set +e
-          if [ "$CLIENT" = inbox-first ]; then export PATH="/c/Windows/System32/OpenSSH:$PATH"; fi
-          task_state="$RUNNER_TEMP/c-load-state.txt"
-          task_tree="$RUNNER_TEMP/c-load-tree.ps1"
-          # Prints whether the load's go.exe is alive and the names of all its descendant processes.
-          cat > "$task_tree" <<'PS1'
-          param([int]$Root)
-          $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name)
-          $ids = @($Root)
-          $names = @()
-          do {
-            $new = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId })
-            foreach ($p in $new) { $ids += [int]$p.ProcessId; $names += $p.Name }
-          } while ($new.Count -gt 0)
-          $alive = @($all | Where-Object { $_.ProcessId -eq $Root }).Count -gt 0
-          "alive=$alive descendants=" + (($names | Sort-Object) -join ',')
-          PS1
-          task_load_pid=""
-          task_load_state() {
-            local task_tree_state="no-load-pid"
-            if [ -n "$task_load_pid" ]; then
-              task_tree_state=$(MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -ExecutionPolicy Bypass -File "$task_tree" -Root "$task_load_pid" 2>&1 | tr -d '\r')
-            fi
-            echo "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) $1 pid=${task_load_pid:-none} $task_tree_state" | tee -a "$task_state"
-          }
-          task_cleanup() {
-            if [ -n "$task_load_pid" ]; then
-              MSYS2_ARG_CONV_EXCL='*' taskkill /PID "$task_load_pid" /T /F >> "$RUNNER_TEMP/c-load-taskkill.txt" 2>&1
-              echo "taskkill exit=$?" >> "$RUNNER_TEMP/c-load-taskkill.txt"
-              task_load_state after-cleanup
-              task_load_pid=""
-            fi
-          }
-          trap task_cleanup EXIT
-          trap 'exit 143' INT TERM
-          # Start-Process returns the native PID of go.exe, which taskkill /T needs to end its test binaries too.
-          rm -f "$RUNNER_TEMP/c-load.pid"
-          MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -Command '$p = Start-Process -FilePath go -ArgumentList "test","-count=1","./internal/cli","./internal/livesuite" -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\c-load.txt" -RedirectStandardError "$env:RUNNER_TEMP\c-load-stderr.txt"; Set-Content -Path "$env:RUNNER_TEMP\c-load.pid" -Value $p.Id'
-          echo "load start exit=$?" | tee -a "$task_state"
-          task_load_pid=$(tr -d '\r\n' < "$RUNNER_TEMP/c-load.pid" 2>/dev/null)
-          task_load_state started
-          # Wait up to 120 s until a test binary runs; before that, go test may only be compiling.
-          task_tests_running=false
-          if [ -n "$task_load_pid" ]; then
-            for task_poll in $(seq 1 60); do
-              task_now=$(task_load_state waiting)
-              case "$task_now" in *.test.exe*) task_tests_running=true; break ;; *alive=False*) break ;; esac
-              sleep 2
-            done
-          fi
-          task_load_state before-measurement
-          echo "tests-running-before-measurement=$task_tests_running" | tee -a "$task_state"
-          go test ./internal/sandbox -run '^TestDebug55ReadinessOnThisRunner$' -count=1 -v 2>&1 | tee "$RUNNER_TEMP/c-loaded.txt"
-          task_suite_status=${PIPESTATUS[0]}
-          task_load_state after-measurement
-          task_cleanup
-          exit "$task_suite_status"
-      - name: Upload diagnosis output
+        run: ssh -V
+      - name: Upload test JSON and observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: issue-55-fast-loop-${{ matrix.client }}
-          path: ${{ runner.temp }}/*.txt
+          name: issue-55-full-loop-windows
+          path: |
+            .scratch/offline-tests.jsonl
+            ${{ runner.temp }}/issue-55-original-observe.txt
+          include-hidden-files: true
       - name: Verdict
         if: always()
-        env:
-          PRODUCTION: ${{ steps.production.outcome }}
-          OBSERVED: ${{ steps.observed.outcome }}
-          LOADED: ${{ steps.loaded.outcome }}
         run: |
-          echo "client=$CLIENT production=$PRODUCTION observed=$OBSERVED loaded=$LOADED"
-          grep -h -E -- '--- (PASS|FAIL): TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient/' "$RUNNER_TEMP/a-production.txt" || true
-          grep -h -E 'DEBUG-55 (summary|verdict)' "$RUNNER_TEMP/b-observed.txt" "$RUNNER_TEMP/c-loaded.txt" || true
-          grep -h -v ' waiting ' "$RUNNER_TEMP/c-load-state.txt" || true
-          [ "$PRODUCTION" = success ] && [ "$OBSERVED" = success ] && [ "$LOADED" = success ]
+          grep -h -E '"Test":"TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient/[^"]*","Elapsed"' .scratch/offline-tests.jsonl || true
+          grep -h -E 'DEBUG-55-ORIGINAL .* (mode=|ready=|wait-result=|attempt=[0-9]+ start-ms=)' "$RUNNER_TEMP/issue-55-original-observe.txt" || echo "no observation file"

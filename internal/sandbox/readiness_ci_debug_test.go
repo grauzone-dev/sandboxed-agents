@@ -11,6 +11,10 @@ package sandbox_test
 // valid exchange with the 2 s deadline is this process's first ssh start, and the ssh -V timings come
 // last. The test fails if the valid exchange is not accepted within 2 s, or if either invalid exchange
 // is accepted with any deadline. Output is redacted: no user paths, fingerprints, key blobs, or ports.
+//
+// debug55OriginalObserver, run, result, and debug55ServerConn below observe the original protocol test
+// (readiness_protocol_test.go) in the full suite when DEBUG_55_ORIGINAL_OBSERVE names an output file.
+// Unset, they return platform.Run and the connection unchanged and record nothing.
 
 import (
 	"context"
@@ -139,6 +143,8 @@ type debug55Attempt struct {
 	knownHostsExists    bool
 	knownHostsValid     bool
 	stderr              *debug55Lines
+	remainingMS         int64 // original-test observer only: time left before the deadline when ssh returned
+	observerUS          int64 // original-test observer only: time the observer spent before returning to WaitReady
 }
 
 func TestDebug55ReadinessOnThisRunner(t *testing.T) {
@@ -325,4 +331,164 @@ type debug55Tee struct {
 func (w debug55Tee) Write(p []byte) (int, error) {
 	w.recorder.Write(p)
 	return w.production.Write(p)
+}
+
+var debug55ProcessStart = time.Now()
+
+// debug55Originals maps an observed subtest of the original protocol test to its observer.
+var debug55Originals sync.Map
+
+type debug55Original struct {
+	t        *testing.T
+	clock    *debug55Clock
+	mode     string
+	ready    bool
+	wall     time.Time
+	port     int
+	deadline time.Time
+	attempts []*debug55Attempt
+	waitErr  error
+	done     bool
+}
+
+func debug55OriginalObserver(t *testing.T, mode string, ready bool) *debug55Original {
+	path := os.Getenv("DEBUG_55_ORIGINAL_OBSERVE")
+	if path == "" {
+		return nil
+	}
+	o := &debug55Original{t: t, clock: &debug55Clock{start: time.Now()}, mode: mode, ready: ready, wall: time.Now().UTC()}
+	debug55Originals.Store(t, o)
+	t.Cleanup(func() {
+		debug55Originals.Delete(t)
+		o.write(path)
+	})
+	return o
+}
+
+// debug55ServerConn records the original test server's socket operations for an observed subtest.
+func debug55ServerConn(t *testing.T, conn net.Conn) net.Conn {
+	value, ok := debug55Originals.Load(t)
+	if !ok {
+		return conn
+	}
+	o := value.(*debug55Original)
+	o.clock.mu.Lock()
+	id := 1
+	for _, line := range o.clock.lines {
+		if strings.Contains(line, " accepted") {
+			id++
+		}
+	}
+	o.clock.mu.Unlock()
+	o.clock.add("server conn=%d accepted", id)
+	return debug55Conn{Conn: conn, id: id, clock: o.clock}
+}
+
+// run passes the request to next unchanged and returns its result unchanged; it only tees stderr and,
+// after next returns, reads the probe's known_hosts file and times that read.
+func (o *debug55Original) run(ctx context.Context, request process.Request, next process.Runner) (int, error) {
+	if o == nil {
+		return next(ctx, request)
+	}
+	attempt := &debug55Attempt{startMS: time.Since(o.clock.start).Milliseconds(), stderr: &debug55Lines{clock: o.clock}}
+	o.attempts = append(o.attempts, attempt)
+	for i, arg := range request.Args {
+		if i > 0 && request.Args[i-1] == "-o" && arg == "UserKnownHostsFile=known_hosts" {
+			attempt.constantArgument = true
+		}
+		if i > 0 && request.Args[i-1] == "-p" {
+			o.port, _ = strconv.Atoi(arg)
+		}
+	}
+	attempt.privateDir = strings.HasPrefix(filepath.Base(request.Dir), "sandboxed-agents-readiness-")
+	if deadline, ok := ctx.Deadline(); ok {
+		o.deadline = deadline
+	}
+	request.Streams.Stderr = debug55Tee{request.Streams.Stderr, attempt.stderr}
+	o.clock.add("ssh attempt=%d start", len(o.attempts))
+	started := time.Now()
+	attempt.exit, attempt.runErr = next(ctx, request)
+	attempt.durationMS = time.Since(started).Milliseconds()
+	attempt.ctxErr = ctx.Err()
+	observing := time.Now()
+	if !o.deadline.IsZero() {
+		attempt.remainingMS = o.deadline.Sub(observing).Milliseconds()
+	}
+	o.clock.add("ssh attempt=%d returned exit=%d run-error=%v ctx=%v", len(o.attempts), attempt.exit, attempt.runErr, attempt.ctxErr)
+	host := "[127.0.0.1]:" + strconv.Itoa(o.port)
+	if knownHosts, ok := testutil.KnownHostsFile(request.Dir, request.Args); ok {
+		if data, err := os.ReadFile(knownHosts); err == nil {
+			attempt.knownHostsExists = true
+			for _, line := range strings.Split(string(data), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) >= 3 && fields[0] == host {
+					if _, err := sshkeys.ParsePublicKey([]byte(strings.TrimSpace(line)[len(host):])); err == nil {
+						attempt.knownHostsValid = true
+					}
+				}
+			}
+		}
+	}
+	for _, line := range attempt.stderr.all() {
+		if strings.HasSuffix(line, " "+testutil.SSHNewKeysReceived) {
+			attempt.newkeys = true
+		}
+	}
+	attempt.observerUS = time.Since(observing).Microseconds()
+	return attempt.exit, attempt.runErr
+}
+
+func (o *debug55Original) result(err error) {
+	if o == nil {
+		return
+	}
+	o.waitErr, o.done = err, true
+}
+
+func (o *debug55Original) write(path string) {
+	var out strings.Builder
+	label := fmt.Sprintf("DEBUG-55-ORIGINAL test=%s", o.t.Name())
+	line := func(format string, args ...any) {
+		out.WriteString(label + " " + debug55Redact(fmt.Sprintf(format, args...), o.port) + "\n")
+	}
+	sshPath, _ := exec.LookPath("ssh")
+	ready := o.done && o.waitErr == nil
+	line("mode=%s expected-ready=%t wall-start=%s since-process-start-ms=%d ssh=%s debug-readiness-env-set=%t", o.mode, o.ready, o.wall.Format(time.RFC3339Nano), o.wall.Sub(debug55ProcessStart.UTC()).Milliseconds(), sshPath, os.Getenv("DEBUG_55_READINESS") != "")
+	if o.done {
+		waitErr := "none"
+		if o.waitErr != nil {
+			waitErr = strings.ReplaceAll(o.waitErr.Error(), "\n", " | ")
+		}
+		line("ready=%t matches-test-expectation=%t wait-error=%q", ready, ready == o.ready, waitErr)
+	} else {
+		line("wait-result=missing")
+	}
+	for i, a := range o.attempts {
+		line("attempt=%d start-ms=%d duration-ms=%d exit=%d run-error=%v ctx-at-return=%v remaining-ms-at-return=%d observer-us=%d constant-known-hosts-argument=%t private-dir=%t newkeys=%t known-hosts-exists=%t known-hosts-valid-ed25519=%t stderr-lines=%d",
+			i+1, a.startMS, a.durationMS, a.exit, a.runErr, a.ctxErr, a.remainingMS, a.observerUS, a.constantArgument, a.privateDir, a.newkeys, a.knownHostsExists, a.knownHostsValid, len(a.stderr.all()))
+	}
+	for i, a := range o.attempts {
+		for j, text := range a.stderr.all() {
+			if j == 80 {
+				line("attempt=%d stderr ... %d more lines", i+1, len(a.stderr.all())-80)
+				break
+			}
+			line("attempt=%d stderr %s", i+1, text)
+		}
+	}
+	events := o.clock.snapshot()
+	for i, event := range events {
+		if i == 200 {
+			line("events ... %d more", len(events)-200)
+			break
+		}
+		line("event %s", event)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		o.t.Logf("DEBUG-55-ORIGINAL cannot write the observation file: %v", err)
+		return
+	}
+	defer file.Close()
+	file.WriteString(out.String())
 }

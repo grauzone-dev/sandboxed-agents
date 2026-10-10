@@ -35,6 +35,7 @@ func TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient(t *tes
 		ready bool
 	}{{"valid-exchange", true}, {"corrupted-exchange-signature", false}, {"host-key-without-signature", false}} {
 		t.Run(mode.name, func(t *testing.T) {
+			observer := debug55OriginalObserver(t, mode.name, mode.ready) // DEBUG-55 temporary: nil unless DEBUG_55_ORIGINAL_OBSERVE is set
 			port := startTestSSHServer(t, mode.name)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -43,8 +44,9 @@ func TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient(t *tes
 					fmt.Fprintln(request.Streams.Stdout, "sandboxed-agents-manager 0.1.0")
 					return 0, nil
 				}
-				return platform.Run(ctx, request)
+				return observer.run(ctx, request, platform.Run) // DEBUG-55 temporary: platform.Run unchanged when observer is nil
 			})
+			observer.result(err) // DEBUG-55 temporary
 			if mode.ready && err != nil {
 				t.Fatalf("a completed key exchange was not accepted: %v", err)
 			}
@@ -75,7 +77,7 @@ func startTestSSHServer(t *testing.T, mode string) int {
 			go func() {
 				defer conn.Close()
 				conn.SetDeadline(time.Now().Add(5 * time.Second))
-				serveTestSSHKeyExchange(conn, hostKey, mode)
+				serveTestSSHKeyExchange(debug55ServerConn(t, conn), hostKey, mode) // DEBUG-55 temporary: conn unchanged unless observed
 			}()
 		}
 	}()

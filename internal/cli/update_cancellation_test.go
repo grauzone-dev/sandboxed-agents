@@ -20,7 +20,7 @@ import (
 
 func TestUpdateCanRestoreAStoppedSandboxAfterCallerCancellationDuringReadiness(t *testing.T) {
 	for _, changing := range []bool{false, true} {
-		for _, probe := range []string{"podman", "ssh-keyscan"} {
+		for _, probe := range []string{"podman", "ssh"} {
 			t.Run(fmt.Sprintf("%s/change-toolchains-%t", probe, changing), func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
 				options := sandbox.UpdateOptions{}
@@ -41,7 +41,7 @@ func TestUpdateCanRestoreAStoppedSandboxAfterCallerCancellationDuringReadiness(t
 				}
 				responses = append(responses, testutil.Response{}, testutil.Response{}, testutil.Response{}, testutil.Response{Stdout: "sandboxed-agents-manager v1.2.3\n"}, testutil.Response{}, testutil.Response{})
 				fakes.Script("podman", responses...)
-				fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t)})
+				fakes.Script("ssh", updateReadinessReady(t))
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				var stdout, stderr bytes.Buffer
@@ -55,7 +55,7 @@ func TestUpdateCanRestoreAStoppedSandboxAfterCallerCancellationDuringReadiness(t
 						}
 					}
 					status, err := platform.Run(requestCtx, request)
-					if request.Name == probe && (probe == "ssh-keyscan" || request.Args[0] == "exec") {
+					if request.Name == probe && (probe == "ssh" || request.Args[0] == "exec") {
 						cancel()
 					}
 					return status, err

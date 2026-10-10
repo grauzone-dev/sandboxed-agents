@@ -53,7 +53,9 @@ func updateAllBuildImage(selection string, stale bool) []testutil.Response {
 func scriptUpdateAll(t *testing.T, fakes *testutil.FakePrograms, windows bool, responses []testutil.Response) {
 	t.Helper()
 	scriptUpdate(t, fakes, windows, responses)
-	fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t), RepeatForArgs: []string{"-T", "1", "-t", "ed25519", "-p", "2300", "127.0.0.1"}})
+	ready := updateReadinessReady(t)
+	ready.RepeatForArgs = updateReadinessArgs("2300")
+	fakes.Script("ssh", ready)
 }
 
 func updateAllSandboxChanges(t *testing.T, fakes *testutil.FakePrograms, name string) [][]string {
@@ -177,8 +179,8 @@ func TestUpdateAllLeavesCurrentSandboxesUntouchedAndKeepsStoppedSandboxesStopped
 				}
 			}
 			want := [][]string{{"start", "sandboxed-agents.default.agent01"}, {"rm", "sandboxed-agents-backup.default.agent01"}, {"stop", "sandboxed-agents.default.agent01"}}
-			if !reflect.DeepEqual(stateChanges, want) || len(fakes.Calls("ssh-keyscan")) != 1 {
-				t.Fatalf("state changes=%v SSH probes=%v", stateChanges, fakes.Calls("ssh-keyscan"))
+			if !reflect.DeepEqual(stateChanges, want) || len(updateReadinessProbes(fakes)) != 1 {
+				t.Fatalf("state changes=%v SSH probes=%v", stateChanges, updateReadinessProbes(fakes))
 			}
 			checkSSH()
 			assertUpdateChangesPreserveData(t, fakes)
@@ -258,8 +260,8 @@ func TestUpdateAllBuildFailureLeavesEverySandboxAndItsSSHFilesUnchanged(t *testi
 					builds++
 				}
 			}
-			if builds != 2 || len(fakes.Calls("ssh-keyscan")) != 0 {
-				t.Fatalf("builds=%d SSH probes=%v", builds, fakes.Calls("ssh-keyscan"))
+			if builds != 2 || len(updateReadinessProbes(fakes)) != 0 {
+				t.Fatalf("builds=%d SSH probes=%v", builds, updateReadinessProbes(fakes))
 			}
 			checkSSH()
 			assertUpdateChangesPreserveData(t, fakes)
@@ -289,7 +291,7 @@ func TestUpdateAllRequiresPreflightBeforeDiscoveringOrChangingSandboxes(t *testi
 					t.Fatalf("failed preflight reached sandbox discovery: %v", args)
 				}
 			}
-			assertNoSSH(t, fakes)
+			assertNoSSHBesidesReadiness(t, fakes)
 		})
 	}
 }
@@ -505,7 +507,7 @@ func TestUpdateRequiresExactlyOneNamedOrAllTargetBeforeCallingPodman(t *testing.
 				if status == 0 || stdout != "" || !strings.Contains(stderr, "Usage:") || len(fakes.Calls("podman")) != 0 {
 					t.Fatalf("status=%d stdout=%q stderr=%q calls=%v", status, stdout, stderr, fakes.Calls("podman"))
 				}
-				assertNoSSH(t, fakes)
+				assertNoSSHBesidesReadiness(t, fakes)
 			})
 		}
 	}

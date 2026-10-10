@@ -46,8 +46,8 @@ func TestUpdateReportsPreflightFailureBeforeUnknownSandboxOrOwnerConflict(t *tes
 				} else if len(calls[0].Args) != 1 || calls[0].Args[0] != "--version" {
 					t.Fatalf("failed preflight inspected sandbox: %v", calls)
 				}
-				assertNoSSH(t, fakes)
-				if len(fakes.Calls("ssh-keyscan")) != 0 {
+				assertNoSSHBesidesReadiness(t, fakes)
+				if len(updateReadinessProbes(fakes)) != 0 {
 					t.Fatal("failed preflight attempted SSH readiness")
 				}
 			})
@@ -173,8 +173,8 @@ func TestUpdateReleasesItsLifecycleLockAfterFailureAndReadsCurrentSandboxState(t
 					t.Fatalf("already-current sandbox mutated: %v", call.Args)
 				}
 			}
-			assertNoSSH(t, fakes)
-			if len(fakes.Calls("ssh-keyscan")) != 0 {
+			assertNoSSHBesidesReadiness(t, fakes)
+			if len(updateReadinessProbes(fakes)) != 0 {
 				t.Fatal("already-current sandbox attempted SSH readiness")
 			}
 		})
@@ -200,8 +200,8 @@ func assertUpdateChecksReadOnly(t *testing.T, fakes *testutil.FakePrograms, wind
 			t.Fatalf("refused update changed or built objects: %v", call.Args)
 		}
 	}
-	assertNoSSH(t, fakes)
-	if len(fakes.Calls("ssh-keyscan")) != 0 {
+	assertNoSSHBesidesReadiness(t, fakes)
+	if len(updateReadinessProbes(fakes)) != 0 {
 		t.Fatal("refused update attempted SSH readiness")
 	}
 }

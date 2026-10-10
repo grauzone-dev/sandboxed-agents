@@ -151,7 +151,7 @@ func TestUpdateWithTheCurrentToolchainSetTouchesNoContainer(t *testing.T) {
 					t.Fatalf("no-op built or probed: %v", call.Args)
 				}
 			}
-			if len(fakes.Calls("ssh-keyscan")) != 0 {
+			if len(updateReadinessProbes(fakes)) != 0 {
 				t.Fatal("no-op probed SSH")
 			}
 		})
@@ -257,7 +257,7 @@ func TestUpdateToolchainBuildFailureKeepsTheOriginalSandbox(t *testing.T) {
 					t.Fatalf("builds=%v", builds)
 				}
 				assertImageBuild(t, builds[0], hash, "localhost/sandboxed-agents:toolchains-native-"+hash, "native", "current-base")
-				if len(fakes.Calls("ssh-keyscan")) != 0 {
+				if len(updateReadinessProbes(fakes)) != 0 {
 					t.Fatal("build failure probed SSH")
 				}
 			})

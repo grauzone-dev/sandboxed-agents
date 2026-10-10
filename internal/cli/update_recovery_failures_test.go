@@ -16,7 +16,7 @@ import (
 )
 
 func TestRecoveryRestoresThePreviousStateAfterCancellationDuringEitherReadinessProbe(t *testing.T) {
-	for _, probe := range []string{"podman", "ssh-keyscan"} {
+	for _, probe := range []string{"podman", "ssh"} {
 		for _, wasRunning := range []string{"true", "false"} {
 			t.Run(probe+"/previous-"+wasRunning, func(t *testing.T) {
 				fakes := testutil.NewFakePrograms(t)
@@ -28,7 +28,7 @@ func TestRecoveryRestoresThePreviousStateAfterCancellationDuringEitherReadinessP
 					want = append(want, []string{"start", "sandboxed-agents.default.agent01"})
 				}
 				fakes.Script("podman", responses...)
-				fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t)})
+				fakes.Script("ssh", updateReadinessReady(t))
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				var stdout, stderr bytes.Buffer
@@ -42,7 +42,7 @@ func TestRecoveryRestoresThePreviousStateAfterCancellationDuringEitherReadinessP
 						}
 					}
 					status, err := platform.Run(requestCtx, request)
-					if request.Name == probe && (probe == "ssh-keyscan" || request.Args[0] == "exec") {
+					if request.Name == probe && (probe == "ssh" || request.Args[0] == "exec") {
 						cancel()
 					}
 					return status, err
@@ -165,7 +165,7 @@ func TestRecoveryRestoresTheSandboxWhenEitherReadinessProbeNeverAnswers(t *testi
 			}
 			scriptUpdate(t, fakes, state.windows, responses)
 			if state.probe == "SSH" {
-				fakes.Script("ssh-keyscan", testutil.Response{ExitCode: 42, RepeatForArgs: []string{"-T", "1", "-t", "ed25519", "-p", "2300", "127.0.0.1"}})
+				fakes.Script("ssh", testutil.Response{ExitCode: 255, RepeatForArgs: updateReadinessArgs("2300")})
 			}
 			stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
 			if status == 0 || !strings.Contains(stderr, "readiness") || !strings.Contains(stderr, "restored") || !strings.Contains(stderr, "deadline exceeded") || strings.Contains(stdout, "completed") {
@@ -196,7 +196,7 @@ func TestUpdateRunsNormallyOnTheNextCallAfterRestoringAnInterruptedUpdate(t *tes
 				second = append(healthyWindowsPodman(), second[1:]...)
 			}
 			fakes.Script("podman", append(responses, second...)...)
-			fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t)})
+			fakes.Script("ssh", updateReadinessReady(t))
 			_, stderr, status := runCLI(t, fixture, "update", "agent01")
 			if status == 0 || !strings.Contains(stderr, "restored") {
 				t.Fatalf("first status=%d stderr=%q", status, stderr)

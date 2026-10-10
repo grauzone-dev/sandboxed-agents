@@ -87,7 +87,7 @@ If `podman` is not on `PATH`, the check does not run `podman --version` and repo
 
 To add subordinate ranges, run `usermod --add-subuids FIRST-LAST USER` and `usermod --add-subgids FIRST-LAST USER` from shadow-utils as an administrator.
 
-`ssh`, `ssh-keygen`, and `ssh-keyscan` are needed by `sandboxed-agents` itself, not by Podman (ADR-0002). All three come with the OpenSSH client. `update` runs `ssh-keyscan` against the new container's SSH port on `127.0.0.1` to check that its SSH server answers; it does not authenticate and reads or writes no file in your SSH directory ([Readiness wait](updates.md#readiness-wait)). The preflight checks the complete prerequisite set of the installed executable, so `check` reports `ssh-keyscan`, and `build`, `up`, and `update` require it, although only `update` runs it (ADR-0007).
+`ssh`, `ssh-keygen`, and `ssh-keyscan` are needed by `sandboxed-agents` itself, not by Podman (ADR-0002). All three come with the OpenSSH client. `update` runs `ssh` against the new container's SSH port on `127.0.0.1` to check that its SSH server completes a key exchange; it does not authenticate and reads or writes no file in your SSH directory ([Readiness wait](updates.md#readiness-wait)). `update` no longer runs `ssh-keyscan` (ADR-0008), but the preflight still checks the complete prerequisite set of the installed executable, so `check` reports `ssh-keyscan`, and `build`, `up`, and `update` require it (ADR-0007).
 
 #### cgroup controller delegation
 

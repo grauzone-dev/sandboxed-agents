@@ -63,7 +63,7 @@ func TestUpdateReusesAnExistingToolchainImageWithTheCurrentBaseID(t *testing.T) 
 	if !slices.Contains(create, "io.github.sandboxed-agents.toolchains=native") {
 		t.Fatalf("replacement lost its toolchain set: %v", create)
 	}
-	assertNoSSH(t, fakes)
+	assertNoSSHBesidesReadiness(t, fakes)
 }
 
 func assertUpdateBuildsBeforeReplacement(t *testing.T, fakes *testutil.FakePrograms, hash string, selections ...string) {
@@ -118,7 +118,7 @@ func TestUpdateRebuildsAStaleToolchainImageEvenWhenItsIDMatchesTheSandbox(t *tes
 	}
 	assertUpdateBuildsBeforeReplacement(t, fakes, hash, "native")
 	assertUpdateCreatedFromImage(t, fakes, "current-native")
-	assertNoSSH(t, fakes)
+	assertNoSSHBesidesReadiness(t, fakes)
 }
 
 func TestUpdateBuildsMissingImagesBeforeReplacingTheSandbox(t *testing.T) {
@@ -171,7 +171,7 @@ func TestUpdateBuildsMissingImagesBeforeReplacingTheSandbox(t *testing.T) {
 			}
 			assertUpdateBuildsBeforeReplacement(t, fakes, hash, scenario.builds...)
 			assertUpdateCreatedFromImage(t, fakes, scenario.image)
-			assertNoSSH(t, fakes)
+			assertNoSSHBesidesReadiness(t, fakes)
 		})
 	}
 }
@@ -218,10 +218,10 @@ func TestUpdateImageBuildFailuresLeaveTheSandboxUnchanged(t *testing.T) {
 			}
 			tag, baseID := updateBuildReferences(hash, selection)
 			assertImageBuild(t, builds[0], hash, tag, selection, baseID)
-			if len(fakes.Calls("ssh-keyscan")) != 0 {
+			if len(updateReadinessProbes(fakes)) != 0 {
 				t.Fatal("build failure probed SSH readiness")
 			}
-			assertNoSSH(t, fakes)
+			assertNoSSHBesidesReadiness(t, fakes)
 		})
 	}
 }
@@ -284,7 +284,7 @@ func TestUpdateKeepsBoundWorkspaceSourcesAndRetainedVolumes(t *testing.T) {
 						}
 					}
 				}
-				assertNoSSH(t, fakes)
+				assertNoSSHBesidesReadiness(t, fakes)
 			})
 		}
 	}

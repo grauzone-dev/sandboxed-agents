@@ -34,7 +34,7 @@ func TestUpdateRefusesRunningAgentSessionsBeforeReplacingTheSandbox(t *testing.T
 			if changes := assertUpdateChangesPreserveData(t, fakes); len(changes) != 0 {
 				t.Fatalf("refused update changed the sandbox: %v", changes)
 			}
-			if len(fakes.Calls("ssh-keyscan")) != 0 {
+			if len(updateReadinessProbes(fakes)) != 0 {
 				t.Fatal("refused update checked readiness")
 			}
 		})

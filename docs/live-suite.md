@@ -267,7 +267,7 @@ Each step is recorded as a check with the prefix of its scenario. A failed step 
 
 1. `data-written`: the part reads the container's configuration and the identity of its three volumes, their names, creation times, and mount points. It requires the expected configuration: three named volumes at `/workspace`, `/home/agent`, and `/etc/ssh` and no other mount, no toolchain, a workspace that is a volume, the limits of the `up` above, and exactly one binding of `22/tcp` on `127.0.0.1` that equals the recorded SSH port. It then writes a file with a random token into `/home/agent`, `/etc/ssh`, and `/workspace` through `podman exec --user=0:0`.
 2. `outdated`: the fixture above.
-3. `fixture-ready`: the part waits at most 60 seconds, with the readiness wait that `update` uses, until the manager in the started fixture container answers its version query and `ssh-keyscan` returns a host key on the recorded SSH port ([Readiness wait](updates.md#readiness-wait)). The fixture is therefore healthy before the scenario relies on it.
+3. `fixture-ready`: the part waits at most 60 seconds, with the readiness wait that `update` uses, until the manager in the started fixture container answers its version query and the host's `ssh` completes a verified key exchange on the recorded SSH port ([Readiness wait](updates.md#readiness-wait)). The fixture is therefore healthy before the scenario relies on it.
 4. `fixture-restored`: only when the fixture has to compensate; otherwise `not-run`.
 
 **Successful update** (`updates/success`):

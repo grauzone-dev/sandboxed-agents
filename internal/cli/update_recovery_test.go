@@ -55,7 +55,7 @@ func TestUpdateCompletesAnInterruptedUpdateWithoutBuildingOrReplacingTheSandbox(
 						t.Fatalf("changes=%v want=%v", changes, want)
 					}
 					assertRecoverySkipsImagePlanning(t, fakes)
-					if len(fakes.Calls("ssh-keyscan")) != 1 {
+					if len(updateReadinessProbes(fakes)) != 1 {
 						t.Fatal("recovery did not check sshd readiness")
 					}
 					checkSSH()
@@ -73,7 +73,7 @@ func assertRecoverySkipsImagePlanning(t *testing.T, fakes *testutil.FakePrograms
 			t.Fatalf("recovery planned another update or queried sessions: %v", args)
 		}
 	}
-	assertNoSSH(t, fakes)
+	assertNoSSHBesidesReadiness(t, fakes)
 }
 
 func TestUpdateRestoresABackupWithoutStartingTwoContainersOnItsVolumes(t *testing.T) {
@@ -122,7 +122,7 @@ func TestUpdateRestoresABackupWithoutStartingTwoContainersOnItsVolumes(t *testin
 					t.Fatalf("changes=%v want=%v", changes, want)
 				}
 				assertRecoverySkipsImagePlanning(t, fakes)
-				if len(fakes.Calls("ssh-keyscan")) != 0 {
+				if len(updateReadinessProbes(fakes)) != 0 {
 					t.Fatal("recovery probed a replacement that must be removed")
 				}
 				checkSSH()

@@ -15,6 +15,7 @@ import (
 
 	"github.com/grauzone-dev/sandboxed-agents/internal/livesuite"
 	"github.com/grauzone-dev/sandboxed-agents/internal/process"
+	"github.com/grauzone-dev/sandboxed-agents/internal/testutil"
 )
 
 type updateFixture struct {
@@ -59,9 +60,15 @@ func (f *updateFixture) run(ctx context.Context, request process.Request) (int, 
 		args = args[2:]
 	}
 	write := func(value any) (int, error) { return 0, json.NewEncoder(request.Streams.Stdout).Encode(value) }
-	if request.Name == "ssh-keyscan" {
-		fmt.Fprintf(request.Streams.Stdout, "[127.0.0.1]:%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea\n", f.port)
-		return 0, nil
+	if request.Name == "ssh" && slices.Contains(args, "StrictHostKeyChecking=accept-new") {
+		// The readiness key exchange as ssh -v completes it: the host key callback records the key, NEWKEYS
+		// follows the verified exchange signature, and authentication then fails.
+		line := fmt.Sprintf("[127.0.0.1]:%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea\n", f.port)
+		if err := testutil.RecordKnownHost(args, line); err != nil {
+			f.t.Fatal(err)
+		}
+		fmt.Fprintln(request.Streams.Stderr, testutil.SSHNewKeysReceived)
+		return 255, nil
 	}
 	if request.Name == "podman" {
 		handled := true

@@ -3,6 +3,7 @@ package testutil_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,5 +76,25 @@ func TestFakeProgramsRepeatedProbesLeaveScriptedResponsesUntouched(t *testing.T)
 	output, err := exec.Command("podman", "rm", "sandbox").Output()
 	if err != nil || string(output) != "removed\n" {
 		t.Fatalf("next operation output=%q error=%v", output, err)
+	}
+}
+
+func TestFakeSSHRecordsTheHostKeyInTheGivenKnownHostsFileAndMatchesWildcardArguments(t *testing.T) {
+	f := testutil.NewFakePrograms(t)
+	f.Script("ssh", testutil.Response{RepeatForArgs: []string{"-o", "*", "127.0.0.1"}, RecordHostKey: "[127.0.0.1]:2300 ssh-ed25519 KEY\n", ExitCode: 255})
+	dir := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		path := filepath.Join(dir, name+" known_hosts")
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		err := exec.Command("ssh", "-o", `UserKnownHostsFile="`+filepath.ToSlash(path)+`"`, "127.0.0.1").Run()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 255 {
+			t.Fatalf("error=%v", err)
+		}
+		if data, err := os.ReadFile(path); err != nil || string(data) != "[127.0.0.1]:2300 ssh-ed25519 KEY\n" {
+			t.Fatalf("recorded=%q error=%v", data, err)
+		}
 	}
 }

@@ -81,7 +81,7 @@ func TestUpdatePreservesStoppedSandboxesAndInstalledSSHFiles(t *testing.T) {
 				t.Fatalf("operations=%v", operations)
 			}
 			checkSSH()
-			assertNoSSH(t, fakes)
+			assertNoSSHBesidesReadiness(t, fakes)
 		})
 	}
 }
@@ -92,7 +92,7 @@ func scriptUpdate(t *testing.T, fakes *testutil.FakePrograms, windows bool, resp
 		responses = append(healthyWindowsPodman(), responses[1:]...)
 	}
 	fakes.Script("podman", responses...)
-	fakes.Script("ssh-keyscan", testutil.Response{Stdout: updateSSHKey(t)})
+	fakes.Script("ssh", updateReadinessReady(t))
 }
 
 func podmanUpdateArgs(args []string) []string {
@@ -125,10 +125,10 @@ func TestUpdateAlreadyCurrentSandboxTouchesNoContainerOrSSHFiles(t *testing.T) {
 					t.Fatalf("no-op mutated or probed sandbox: %v", call)
 				}
 			}
-			if len(fakes.Calls("ssh-keyscan")) != 0 {
+			if len(updateReadinessProbes(fakes)) != 0 {
 				t.Fatal("no-op probed SSH")
 			}
-			assertNoSSH(t, fakes)
+			assertNoSSHBesidesReadiness(t, fakes)
 		})
 	}
 }
@@ -266,10 +266,10 @@ func TestUpdateMovesARunningSandboxToTheCurrentImageWithoutChangingItsConfigurat
 		t.Errorf("created from %q", create[len(create)-1])
 	}
 	assertSSHPublication(t, create, 2300)
-	if scan := fakes.Calls("ssh-keyscan"); len(scan) != 1 || !slices.Contains(scan[0].Args, "2300") || scan[0].Args[len(scan[0].Args)-1] != "127.0.0.1" {
+	if scan := updateReadinessProbes(fakes); len(scan) != 1 || !slices.Contains(scan[0].Args, "2300") || !slices.Contains(scan[0].Args, "127.0.0.1") {
 		t.Fatalf("SSH probes=%v", scan)
 	}
-	assertNoSSH(t, fakes)
+	assertNoSSHBesidesReadiness(t, fakes)
 	for _, call := range fakes.Calls("podman") {
 		args := podmanUpdateArgs(call.Args)
 		if args[0] == "volume" && !slices.Contains([]string{"exists", "inspect"}, args[1]) {
@@ -312,6 +312,44 @@ func updateObjectResponses(t *testing.T, running bool, imageID, selection, works
 	}
 	responses[2] = testutil.Response{Stdout: string(data)}
 	return responses
+}
+
+// updateReadinessArgs are the readiness key exchange arguments; "*" stands for the private known_hosts file.
+func updateReadinessArgs(port string) []string {
+	return []string{"-F", "none", "-v", "-T", "-n",
+		"-o", "BatchMode=yes", "-o", "ConnectTimeout=1", "-o", "ConnectionAttempts=1",
+		"-o", "StrictHostKeyChecking=accept-new", "-o", "*",
+		"-o", "GlobalKnownHostsFile=none", "-o", "HashKnownHosts=no", "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
+		"-o", "HostKeyAlgorithms=ssh-ed25519",
+		"-o", "PubkeyAuthentication=no", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no", "-o", "IdentityAgent=none",
+		"-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
+		"-p", port, "-l", "agent", "--", "127.0.0.1", "true"}
+}
+
+// updateReadinessProbes returns the readiness key exchanges among the ssh calls.
+func updateReadinessProbes(fakes *testutil.FakePrograms) []testutil.Call {
+	var probes []testutil.Call
+	for _, call := range fakes.Calls("ssh") {
+		if len(call.Args) == len(updateReadinessArgs("")) && slices.Equal(call.Args[:2], []string{"-F", "none"}) && slices.Contains(call.Args, "StrictHostKeyChecking=accept-new") {
+			probes = append(probes, call)
+		}
+	}
+	return probes
+}
+
+// assertNoSSHBesidesReadiness checks that update touched no SSH setup: its only ssh calls are readiness key exchanges.
+func assertNoSSHBesidesReadiness(t *testing.T, fakes *testutil.FakePrograms) {
+	t.Helper()
+	if len(fakes.Calls("ssh")) != len(updateReadinessProbes(fakes)) || len(fakes.Calls("ssh-keygen")) != 0 {
+		t.Fatal("update attempted SSH besides the readiness key exchange")
+	}
+}
+
+// updateReadinessReady answers one readiness key exchange the way ssh -v completes it: the sandbox host key
+// is recorded, NEWKEYS is received, and ssh exits 255 because it cannot authenticate.
+func updateReadinessReady(t *testing.T) testutil.Response {
+	t.Helper()
+	return testutil.Response{RecordHostKey: updateSSHKey(t), Stderr: testutil.SSHNewKeysReceived + "\n", ExitCode: 255}
 }
 
 func updateSSHKey(t *testing.T) string {

@@ -48,7 +48,7 @@ func assertUpdateChangesPreserveData(t *testing.T, fakes *testutil.FakePrograms)
 			changes = append(changes, args)
 		}
 	}
-	assertNoSSH(t, fakes)
+	assertNoSSHBesidesReadiness(t, fakes)
 	return changes
 }
 
@@ -251,7 +251,7 @@ func TestUpdateRestoresASandboxWhenEitherReadinessProbeNeverAnswers(t *testing.T
 			}
 			scriptUpdate(t, fakes, scenario.windows, responses)
 			if !scenario.manager {
-				fakes.Script("ssh-keyscan", testutil.Response{ExitCode: 42, RepeatForArgs: []string{"-T", "1", "-t", "ed25519", "-p", "2300", "127.0.0.1"}})
+				fakes.Script("ssh", testutil.Response{ExitCode: 255, RepeatForArgs: updateReadinessArgs("2300")})
 			}
 			stdout, stderr, status := runCLI(t, fixture, "update", "agent01")
 			if status == 0 || !strings.Contains(stderr, "readiness") || !strings.Contains(stderr, "restored") || !strings.Contains(stderr, "deadline exceeded") || strings.Contains(stdout, "updated") {

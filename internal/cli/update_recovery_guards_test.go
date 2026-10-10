@@ -63,7 +63,7 @@ func TestCheckReportsEveryInterruptedUpdateStateWithoutRecovery(t *testing.T) {
 							t.Errorf("interruption state missing: %q", stdout)
 						}
 						assertCheckReadOnly(t, fakes, host.windows, state.running && !conflict)
-						assertNoSSH(t, fakes)
+						assertNoSSHBesidesReadiness(t, fakes)
 					})
 				}
 			}
@@ -209,8 +209,8 @@ func TestUpdateAllRecoveryPassesOverEveryOwnerConflictAndReportsCurrentNeighbors
 						if imageCalls != 4 {
 							t.Fatalf("image checks=%d want two per current neighbor", imageCalls)
 						}
-						assertNoSSH(t, fakes)
-						if len(fakes.Calls("ssh-keyscan")) != 0 {
+						assertNoSSHBesidesReadiness(t, fakes)
+						if len(updateReadinessProbes(fakes)) != 0 {
 							t.Fatal("owner conflict or current sandbox attempted SSH readiness")
 						}
 					})

@@ -8,7 +8,7 @@ chmod 0755 /usr/sbin/policy-rc.d
 apt-get update
 apt-get install -y --no-install-recommends \
     bash ca-certificates coreutils curl findutils gh git gnupg jq less \
-    openssh-client openssh-server procps ripgrep tar tmux unzip util-linux xz-utils
+    openssh-client openssh-server procps ripgrep tar tini tmux unzip util-linux xz-utils
 
 mkdir -p /etc/apt/keyrings
 curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.asc

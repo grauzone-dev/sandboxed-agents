@@ -15,4 +15,5 @@ RUN chmod 0755 /usr/local/bin/sandboxed-agents-entrypoint
 
 WORKDIR /workspace
 USER root
-ENTRYPOINT ["/usr/local/bin/sandboxed-agents-entrypoint"]
+# tini is PID 1 so orphaned processes are reaped; runuser waits only for its own child.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/sandboxed-agents-entrypoint"]

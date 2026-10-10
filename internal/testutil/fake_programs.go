@@ -26,6 +26,11 @@ type Response struct {
 	WantStdin           string
 	GenerateSSHKey      string
 	MakeDirectories     []string
+	// RecordHostKey is appended to the file of ssh's "-o UserKnownHostsFile=PATH" argument, as ssh
+	// does under StrictHostKeyChecking=accept-new in its host key callback, which runs before ssh
+	// verifies the server's exchange signature. Pair it with SSHNewKeysReceived in Stderr to model a
+	// completed key exchange.
+	RecordHostKey string
 }
 
 type Call struct{ Args []string }
@@ -180,7 +185,7 @@ func runFake(state, name string, args []string) int {
 		return 99
 	}
 	responseCount := len(responses)
-	for len(responses) > 0 && responses[0].RepeatForArgs != nil && !slices.Equal(responses[0].RepeatForArgs, args) {
+	for len(responses) > 0 && responses[0].RepeatForArgs != nil && !argumentsMatch(responses[0].RepeatForArgs, args) {
 		responses = responses[1:]
 	}
 	if len(responses) == 0 {
@@ -206,6 +211,12 @@ func runFake(state, name string, args []string) int {
 			return 99
 		}
 		if err := os.WriteFile(args[index+1]+".pub", []byte(response.GenerateSSHKey), 0644); err != nil {
+			return 99
+		}
+	}
+	if response.RecordHostKey != "" {
+		if name != "ssh" || RecordKnownHost(args, response.RecordHostKey) != nil {
+			fmt.Fprintln(os.Stderr, "expected ssh with -o UserKnownHostsFile=PATH to record a host key")
 			return 99
 		}
 	}
@@ -253,4 +264,10 @@ func runFake(state, name string, args []string) int {
 	fmt.Fprint(os.Stdout, response.Stdout)
 	fmt.Fprint(os.Stderr, response.Stderr)
 	return response.ExitCode
+}
+
+// argumentsMatch compares a repeated probe's arguments; "*" matches any single argument, such as a
+// temporary file path.
+func argumentsMatch(pattern, args []string) bool {
+	return slices.EqualFunc(pattern, args, func(want, got string) bool { return want == "*" || want == got })
 }

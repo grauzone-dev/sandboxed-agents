@@ -1,8 +1,10 @@
-# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite of offline.yml, with the original
-# readiness protocol test observed through DEBUG_55_ORIGINAL_OBSERVE. The file keeps its earlier name so
-# that the temporary files stay the same set. Before the branch ships, remove this workflow and
+# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite command of offline.yml, unchanged,
+# run by a driver that stops the whole go process tree once the original readiness protocol test (observed
+# through DEBUG_55_ORIGINAL_OBSERVE) reports its parent result. The step's status is the driver's verdict
+# on that test, not a suite result: the other packages are stopped, not passed. The file keeps its earlier
+# name so that the temporary files stay the same set. Before the branch ships, remove this workflow and
 # internal/sandbox/readiness_ci_debug_test.go, and restore internal/sandbox/readiness_protocol_test.go.
-name: Issue 55 readiness full loop
+name: Issue 55 readiness full loop until protocol
 
 on:
   push:
@@ -18,7 +20,7 @@ permissions:
 
 jobs:
   full:
-    name: 55-full-loop (windows-latest)
+    name: 55-full-until-protocol (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 50
     env:
@@ -43,12 +45,240 @@ jobs:
         run: |
           command -v ssh
           type -a ssh
-      - name: Test and vet
+      - name: Test until the original protocol test reports, then stop the suite
         env:
           DEBUG_55_ORIGINAL_OBSERVE: ${{ runner.temp }}\issue-55-original-observe.txt
         run: |
-          go test -timeout "40m" -json ./... | tee .scratch/offline-tests.jsonl
-          go vet ./...
+          cat > "$RUNNER_TEMP/issue-55-until-protocol.ps1" <<'PS1'
+          # Temporary #55 diagnosis driver (DEBUG-55). It runs the full original `go test -timeout 40m -json ./...`
+          # unchanged, copies its standard output line by line to the JSON file and the console as tee did (standard
+          # error is inherited, not redirected), and stops the whole go process tree once the original readiness
+          # protocol test's parent reports pass or fail. The early stop is deliberate and is not a test result: the
+          # verdict comes only from the protocol test's parent and leaf events and from the observation file.
+          # Exit codes: 0 GREEN, 1 RED, 3 INCOMPLETE, 4 DRIVER-ERROR (any driver failure, including go missing).
+          # Whatever fails, the finally block stops go's process tree; recording failures never block that stop.
+          param(
+            [Parameter(Mandatory = $true)][string]$Jsonl,
+            [Parameter(Mandatory = $true)][string]$Observe,
+            [Parameter(Mandatory = $true)][string]$Summary,
+            [int]$WaitMinutes = 30
+          )
+          $ErrorActionPreference = 'Stop'
+          $parent = 'TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient'
+          $package = 'github.com/grauzone-dev/sandboxed-agents/internal/sandbox'
+          $modes = @('valid-exchange', 'corrupted-exchange-signature', 'host-key-without-signature')
+          $onWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+          $record = New-Object System.Collections.Generic.List[string]
+          $script:process = $null
+          $script:writer = $null
+          $script:goStarted = $null
+          $script:stopDone = $false
+
+          # Recording never throws: a failed write of the summary must not block the stop.
+          function Note([string]$key, [string]$value) {
+            try {
+              $record.Add("$key=$value")
+              [System.IO.File]::WriteAllLines($Summary, $record)
+            } catch { }
+          }
+          function Try-Note([string]$key, [scriptblock]$value) {
+            try { Note $key (& $value) } catch { Note $key "unavailable: $($_.Exception.Message)" }
+          }
+          function Stamp { [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }
+
+          # Process table: Win32_Process on Windows; Get-Process parents elsewhere (local checks only).
+          function Get-ProcessTable {
+            if ($onWindows) {
+              return @(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ Id = [int]$_.ProcessId; Parent = [int]$_.ParentProcessId; Name = $_.Name; Path = $_.ExecutablePath; Started = $_.CreationDate } })
+            }
+            return @(Get-Process | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Parent = $(if ($_.Parent) { $_.Parent.Id } else { 0 }); Name = $_.ProcessName; Path = $_.Path; Started = $(try { $_.StartTime } catch { $null }) } })
+          }
+          function Get-Descendants([int]$root) {
+            $all = Get-ProcessTable
+            $ids = @($root)
+            $found = @()
+            do {
+              $new = @($all | Where-Object { $ids -contains $_.Parent -and $ids -notcontains $_.Id })
+              foreach ($p in $new) { $ids += $p.Id; $found += $p }
+            } while ($new.Count -gt 0)
+            $alive = @($all | Where-Object { $_.Id -eq $root }).Count -gt 0
+            return [pscustomobject]@{ Alive = $alive; Processes = $found }
+          }
+          function Describe-Tree([int]$root) {
+            $tree = Get-Descendants $root
+            return "alive=$($tree.Alive) descendants=" + ((@($tree.Processes | ForEach-Object { $_.Name }) | Sort-Object) -join ',')
+          }
+          # Test binaries started after go from its go-build directory. Other orphans, whose parent chain no longer
+          # leads to go and whose path is not under go-build, are left to the runner's teardown of the job.
+          function Get-GoBuildLeftovers {
+            @(Get-ProcessTable | Where-Object { $_.Path -and $_.Path -like '*go-build*' -and $_.Started -and $_.Started -ge $script:goStarted })
+          }
+
+          # Stops go's process tree once; every step is guarded so that a failing one cannot skip the next.
+          function Stop-GoTree {
+            if ($script:stopDone -or $null -eq $script:process) { return }
+            $script:stopDone = $true
+            $go = $script:process
+            $exited = $true
+            try { $exited = $go.HasExited } catch { }
+            Note 'go-exited-before-stop' $exited
+            if ($exited) { try { Note 'go-exit-code' $go.ExitCode } catch { } }
+            Try-Note 'tree-before-stop' { Describe-Tree $go.Id }
+            if (-not $exited) {
+              try {
+                if ($onWindows) {
+                  # Windows PowerShell 5.1 turns redirected native stderr into errors; 'Stop' would end the script here.
+                  $ErrorActionPreference = 'Continue'
+                  $kill = & taskkill.exe /PID $go.Id /T /F 2>&1
+                  $killExit = $LASTEXITCODE
+                  $ErrorActionPreference = 'Stop'
+                  Note 'taskkill-exit' $killExit
+                  Note 'taskkill-output' (($kill | ForEach-Object { "$_" }) -join ' | ')
+                } else {
+                  foreach ($p in @((Get-Descendants $go.Id).Processes)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+                  Stop-Process -Id $go.Id -Force -ErrorAction SilentlyContinue
+                  Note 'taskkill-exit' 'not-windows'
+                }
+              } catch {
+                $ErrorActionPreference = 'Stop'
+                Note 'stop-error' "tree stop failed: $($_.Exception.Message)"
+              }
+              try { if (-not $go.WaitForExit(15000)) { Note 'stop-error' 'go did not exit within 15 s after the tree stop' } } catch { }
+              try {
+                if (-not $go.HasExited) { $go.Kill(); [void]$go.WaitForExit(5000); Note 'stop-fallback' 'Process.Kill on go' }
+              } catch { Note 'stop-error' "Process.Kill failed: $($_.Exception.Message)" }
+            }
+            if ($script:goStarted) {
+              try {
+                $leftover = Get-GoBuildLeftovers
+                foreach ($p in $leftover) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+                Note 'swept-go-build-processes' ((@($leftover | ForEach-Object { "$($_.Name):$($_.Id)" })) -join ',')
+              } catch { Note 'swept-go-build-processes' "unavailable: $($_.Exception.Message)" }
+              Start-Sleep -Milliseconds 500
+              Try-Note 'go-build-processes-after-sweep' { (@(Get-GoBuildLeftovers | ForEach-Object { "$($_.Name):$($_.Id)" })) -join ',' }
+            }
+            Try-Note 'tree-after-stop' { Describe-Tree $go.Id }
+            Note 'stop-end' (Stamp)
+          }
+
+          # Verdict from the protocol test's own events and the observation file.
+          function Get-Verdict {
+            $events = @{}
+            foreach ($l in [System.IO.File]::ReadAllLines($Jsonl)) {
+              if (-not $l.Contains($parent)) { continue }
+              try { $e = $l | ConvertFrom-Json } catch { continue }
+              if ($e.Package -ne $package -or -not $e.Test) { continue }
+              if (@('pass', 'fail', 'skip') -contains $e.Action) { $events[$e.Test] = $e.Action }
+            }
+            $parentResult = $events[$parent]
+            Note 'parent-result' $(if ($parentResult) { $parentResult } else { 'missing' })
+            $red = @(); $missing = @()
+            if (-not $parentResult) { $missing += 'parent' }
+            foreach ($m in $modes) {
+              $leaf = $events["$parent/$m"]
+              Note "leaf-$m" $(if ($leaf) { $leaf } else { 'missing' })
+              if (-not $leaf) { $missing += $m; continue }
+              if ($leaf -ne 'pass') {
+                if ($m -eq 'valid-exchange') { $red += 'valid exchange not accepted' } else { $red += "invalid exchange accepted ($m)" }
+              }
+            }
+            $observed = @()
+            if (Test-Path -LiteralPath $Observe) { $observed = [System.IO.File]::ReadAllLines($Observe) }
+            foreach ($m in $modes) {
+              $head = @($observed | Where-Object { $_.StartsWith("DEBUG-55-ORIGINAL test=$parent/$m mode=$m ") }).Count
+              $result = @($observed | Where-Object { $_.StartsWith("DEBUG-55-ORIGINAL test=$parent/$m ready=") })
+              $value = if ($head -eq 1 -and $result.Count -eq 1) { ($result[0] -split ' ')[2..3] -join ' ' } else { "incomplete (blocks=$head results=$($result.Count))" }
+              Note "observation-$m" $value
+              if ($head -ne 1 -or $result.Count -ne 1) { $missing += "observation $m" }
+            }
+            if ($red.Count -gt 0) {
+              Note 'verdict' ('RED: ' + ($red -join '; ') + $(if ($missing.Count -gt 0) { '; also incomplete: ' + ($missing -join ', ') } else { '' }))
+              return 1
+            }
+            if ($missing.Count -gt 0) { Note 'verdict' ('INCOMPLETE: missing ' + ($missing -join ', ')); return 3 }
+            $mismatch = @($observed | Where-Object { $_ -match ' ready=\S+ matches-test-expectation=false' })
+            if ($mismatch.Count -gt 0) { Note 'verdict' 'INCOMPLETE: observation disagrees with the test events'; return 3 }
+            Note 'verdict' 'GREEN: parent and all three cases passed, observation complete; other packages were stopped, not passed'
+            return 0
+          }
+
+          $exitCode = 4
+          try {
+            $here = (Get-Location).ProviderPath
+            $Jsonl = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($here, $Jsonl))
+            $Summary = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($here, $Summary))
+            Note 'driver-start' (Stamp)
+            $goCommand = Get-Command go -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $goCommand) { throw 'go not found on PATH' }
+            $info = New-Object System.Diagnostics.ProcessStartInfo
+            $info.FileName = $goCommand.Path
+            $info.Arguments = 'test -timeout 40m -json ./...'
+            $info.WorkingDirectory = $here
+            $info.UseShellExecute = $false
+            $info.RedirectStandardOutput = $true
+            $info.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+            $script:writer = New-Object System.IO.StreamWriter($Jsonl, $false, (New-Object System.Text.UTF8Encoding($false)))
+            $script:writer.NewLine = "`n"
+            $script:writer.AutoFlush = $true
+            $script:goStarted = (Get-Date).AddSeconds(-1)
+            $script:process = [System.Diagnostics.Process]::Start($info)
+            Note 'go-path' $goCommand.Path
+            Note 'go-pid' $script:process.Id
+            Note 'go-start' (Stamp)
+
+            $stopReason = 'timeout'
+            $deadline = [DateTime]::UtcNow.AddMinutes($WaitMinutes)
+            $reader = $script:process.StandardOutput
+            $pending = $reader.ReadLineAsync()
+            while ([DateTime]::UtcNow -lt $deadline) {
+              if (-not $pending.Wait(1000)) { continue }
+              $line = $pending.Result
+              if ($null -eq $line) { $stopReason = 'go-exited-before-parent-result'; break }
+              $script:writer.WriteLine($line)
+              [Console]::Out.WriteLine($line)
+              if ($line.Contains('"Test":"' + $parent + '"') -and $line.Contains('"Package":"' + $package + '"') -and ($line.Contains('"Action":"pass"') -or $line.Contains('"Action":"fail"'))) {
+                $stopReason = 'parent-reported'
+                Note 'stop-reason' $stopReason
+                Note 'stop-start' (Stamp)
+                Try-Note 'parent-event' { $parsed = $line | ConvertFrom-Json; "$($parsed.Action) at $($parsed.Time) elapsed $($parsed.Elapsed)s" }
+                break
+              }
+              $pending = $reader.ReadLineAsync()
+            }
+            if ($stopReason -ne 'parent-reported') { Note 'stop-reason' $stopReason; Note 'stop-start' (Stamp) }
+            Stop-GoTree
+            # Drain what go wrote before it was stopped, so the JSON file holds every line it produced.
+            if ($stopReason -ne 'go-exited-before-parent-result') {
+              try {
+                if ($stopReason -eq 'parent-reported') { $pending = $reader.ReadLineAsync() }
+                while ($pending.Wait(5000) -and $null -ne $pending.Result) {
+                  $script:writer.WriteLine($pending.Result)
+                  $pending = $reader.ReadLineAsync()
+                }
+              } catch { Note 'drain' "stopped: $($_.Exception.Message)" }
+            }
+            $script:writer.Dispose()
+            $script:writer = $null
+            $exitCode = Get-Verdict
+          } catch {
+            Note 'error' $_.Exception.Message
+            Note 'verdict' "DRIVER-ERROR: $($_.Exception.Message)"
+            $exitCode = 4
+          } finally {
+            Stop-GoTree
+            if ($null -ne $script:writer) { try { $script:writer.Dispose() } catch { } }
+          }
+          exit $exitCode
+          PS1
+          set +e
+          MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -ExecutionPolicy Bypass -File "$RUNNER_TEMP/issue-55-until-protocol.ps1" -Jsonl .scratch/offline-tests.jsonl -Observe "$DEBUG_55_ORIGINAL_OBSERVE" -Summary "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" -WaitMinutes 30
+          task_status=$?
+          # A driver that cannot run at all (for example a parse error) also exits 1; only a recorded RED counts as RED.
+          if [ "$task_status" -eq 1 ] && ! grep -q '^verdict=RED' "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" 2>/dev/null; then
+            echo "the driver exited 1 without a RED verdict; reporting DRIVER-ERROR" >&2
+            task_status=4
+          fi
+          exit "$task_status"
       - name: SSH client version, after the suite
         if: always()
         run: ssh -V
@@ -56,13 +286,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: issue-55-full-loop-windows
+          name: issue-55-full-until-protocol-windows
           path: |
             .scratch/offline-tests.jsonl
             ${{ runner.temp }}/issue-55-original-observe.txt
+            ${{ runner.temp }}/issue-55-until-protocol-summary.txt
           include-hidden-files: true
       - name: Verdict
         if: always()
         run: |
           grep -h -E '"Test":"TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient/[^"]*","Elapsed"' .scratch/offline-tests.jsonl || true
           grep -h -E 'DEBUG-55-ORIGINAL .* (mode=|ready=|wait-result=|attempt=[0-9]+ start-ms=)' "$RUNNER_TEMP/issue-55-original-observe.txt" || echo "no observation file"
+          cat "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" || echo "no driver summary"

@@ -1,12 +1,13 @@
-# Temporary #55 diagnosis loop (DEBUG-55): the full Windows offline suite command of offline.yml with three input
-# cuts, internal/manager, internal/platform, and internal/livesuite removed from the package list (every other
-# package of ./... kept, in the same order; the three packages are still compiled as dependencies),
-# run by a driver that stops the whole go process tree once the original readiness protocol test (observed
-# through DEBUG_55_ORIGINAL_OBSERVE) reports its parent result. The step's status is the driver's verdict
-# on that test, not a suite result: the other packages are stopped, not passed. The file keeps its earlier
-# name so that the temporary files stay the same set. Before the branch ships, remove this workflow and
-# internal/sandbox/readiness_ci_debug_test.go, and restore internal/sandbox/readiness_protocol_test.go.
-name: Issue 55 readiness until protocol without internal/manager, internal/platform, and internal/livesuite
+# Temporary #55 diagnosis batch (DEBUG-55): the full Windows offline suite command of offline.yml, unchanged
+# (./..., all 25 packages), run by the reviewed early-stop driver, once per job in a matrix of 100 fresh runner
+# jobs. Each job is one trial: it stops go's process tree once the original readiness protocol test (observed
+# through DEBUG_55_ORIGINAL_OBSERVE) reports its parent result, and its status is the driver's verdict on that
+# test, not a suite result. The aggregate job classifies the batch: RED if any trial reproduced the target failure
+# (the valid exchange not accepted), GREEN only if all 100 trials are GREEN, INCOMPLETE otherwise; an accepted
+# invalid exchange is reported as a separate finding and never makes a batch RED or GREEN. The file keeps its earlier name so that the temporary files stay
+# the same set. Before the branch ships, remove this workflow and internal/sandbox/readiness_ci_debug_test.go,
+# and restore internal/sandbox/readiness_protocol_test.go.
+name: Issue 55 readiness batch, 100 trials of the full suite until protocol
 
 on:
   push:
@@ -21,10 +22,15 @@ permissions:
   contents: read
 
 jobs:
-  full:
-    name: 55-until-protocol-without-manager-platform-livesuite (windows-latest)
+  trial:
+    name: 55-batch-trial-${{ matrix.trial }}
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        trial: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 25
     env:
       GOPROXY: 'off'
       GOSUMDB: 'off'
@@ -47,9 +53,20 @@ jobs:
         run: |
           command -v ssh
           type -a ssh
+      - name: Trial metadata, without starting ssh
+        env:
+          TRIAL: ${{ matrix.trial }}
+        run: |
+          {
+            echo "trial=$TRIAL"
+            echo "run-attempt=$GITHUB_RUN_ATTEMPT"
+            echo "runner=$RUNNER_NAME"
+            echo "image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "trial-step-start=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          } | tee "$RUNNER_TEMP/issue-55-trial.txt"
       - name: Test until the original protocol test reports, then stop the suite
         env:
-          DEBUG_55_ORIGINAL_OBSERVE: ${{ runner.temp }}\issue-55-original-observe.txt
+          DEBUG_55_ORIGINAL_OBSERVE: ${{ runner.temp }}\issue-55-original-observe-trial-${{ matrix.trial }}.txt
         run: |
           cat > "$RUNNER_TEMP/issue-55-until-protocol.ps1" <<'PS1'
           # Temporary #55 diagnosis driver (DEBUG-55). It runs the full original `go test -timeout 40m -json ./...`
@@ -275,11 +292,8 @@ jobs:
           }
           exit $exitCode
           PS1
-          # The input cuts: every package of ./... at this tree, in go list order, except ./internal/manager,
-          # ./internal/platform, and ./internal/livesuite; only their own test binaries are not run.
-          task_packages='./cmd/sandboxed-agents ./cmd/sandboxed-agents-manager ./internal/agentcatalog ./internal/assets ./internal/buildassets ./internal/buildenv ./internal/cli ./internal/controllergroup ./internal/filelock ./internal/images ./internal/integrations ./internal/npmpackage ./internal/preflight ./internal/process ./internal/release ./internal/sandbox ./internal/sshkeys ./internal/testutil ./internal/toolchains ./tools/build ./tools/live ./tools/release'
           set +e
-          MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -ExecutionPolicy Bypass -File "$RUNNER_TEMP/issue-55-until-protocol.ps1" -Jsonl .scratch/offline-tests.jsonl -Observe "$DEBUG_55_ORIGINAL_OBSERVE" -Summary "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" -WaitMinutes 30 -Packages "$task_packages"
+          MSYS2_ARG_CONV_EXCL='*' powershell -NoProfile -ExecutionPolicy Bypass -File "$RUNNER_TEMP/issue-55-until-protocol.ps1" -Jsonl .scratch/offline-tests.jsonl -Observe "$DEBUG_55_ORIGINAL_OBSERVE" -Summary "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" -WaitMinutes 10
           task_status=$?
           # A driver that cannot run at all (for example a parse error) also exits 1; only a recorded RED counts as RED.
           if [ "$task_status" -eq 1 ] && ! grep -q '^verdict=RED' "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" 2>/dev/null; then
@@ -294,15 +308,267 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: issue-55-until-protocol-without-manager-platform-livesuite-windows
+          name: issue-55-batch-a${{ github.run_attempt }}-trial-${{ matrix.trial }}
           path: |
             .scratch/offline-tests.jsonl
-            ${{ runner.temp }}/issue-55-original-observe.txt
+            ${{ runner.temp }}/issue-55-original-observe-trial-${{ matrix.trial }}.txt
             ${{ runner.temp }}/issue-55-until-protocol-summary.txt
+            ${{ runner.temp }}/issue-55-trial.txt
           include-hidden-files: true
+          retention-days: 14
       - name: Verdict
         if: always()
         run: |
           grep -h -E '"Test":"TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient/[^"]*","Elapsed"' .scratch/offline-tests.jsonl || true
-          grep -h -E 'DEBUG-55-ORIGINAL .* (mode=|ready=|wait-result=|attempt=[0-9]+ start-ms=)' "$RUNNER_TEMP/issue-55-original-observe.txt" || echo "no observation file"
+          grep -h -E 'DEBUG-55-ORIGINAL .* (mode=|ready=|wait-result=|attempt=[0-9]+ start-ms=)' "$RUNNER_TEMP/issue-55-original-observe-trial-${{ matrix.trial }}.txt" || echo "no observation file"
           cat "$RUNNER_TEMP/issue-55-until-protocol-summary.txt" || echo "no driver summary"
+
+  aggregate:
+    name: 55-batch-aggregate
+    needs: trial
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: issue-55-batch-a${{ github.run_attempt }}-trial-*
+          path: trials
+      - name: Classify the batch
+        run: |
+          cat > "$RUNNER_TEMP/issue-55-batch-aggregate.py" <<'PY'
+          # Temporary #55 diagnosis (DEBUG-55): aggregates one batch of early-stop trials, one trial per runner job.
+          # Usage: python3 issue-55-batch-aggregate.py TRIALS_DIR EXPECTED_TRIALS OUT_DIR ATTEMPT
+          # Only directories named issue-55-batch-a<ATTEMPT>-trial-<N> in TRIALS_DIR count. A trial counts only from its
+          # own files: the driver summary, the observation file, and the go test JSON.
+          # Per trial:
+          #   TARGET-RED        the valid exchange was not accepted: its leaf failed in the JSON and the driver recorded
+          #                     "valid exchange not accepted". This is the failure under diagnosis.
+          #   INVALID-ACCEPTED  an invalid exchange was accepted while the valid exchange passed: a separate finding,
+          #                     never a target RED and never GREEN.
+          #   GREEN             all three leaves passed, the driver verdict is GREEN, the observation and the JSON are
+          #                     present, and no test result was cached.
+          #   INCOMPLETE        anything else: missing artifact or file, no verdict, DRIVER-ERROR, timeout, cached results,
+          #                     disagreeing evidence, or an unreadable file.
+          # A TARGET-RED trial that also accepted an invalid exchange stays TARGET-RED and lists the invalid case in its
+          # own field. Batch verdict: RED (target reproduced) if any trial is TARGET-RED; GREEN only if every expected
+          # trial is GREEN; INCOMPLETE otherwise. Accepted invalid exchanges are reported separately and never make a
+          # batch RED or GREEN. Exit codes: 0 GREEN, 1 RED (target), 3 INCOMPLETE.
+          import json
+          import os
+          import re
+          import sys
+          from datetime import datetime, timezone
+
+          PARENT = 'TestSandboxReadinessRequiresAVerifiedKeyExchangeFromTheRealSSHClient'
+          PACKAGE = 'github.com/grauzone-dev/sandboxed-agents/internal/sandbox'
+          MODES = ('valid-exchange', 'corrupted-exchange-signature', 'host-key-without-signature')
+          INVALID = MODES[1:]
+
+
+          def stamp(text):
+              text = text.rstrip('Z')
+              head, _, frac = text.partition('.')
+              return datetime.fromisoformat(head + ('.' + frac[:6] if frac else '')).replace(tzinfo=timezone.utc)
+
+
+          def find(root, predicate):
+              for directory, _, files in os.walk(root):
+                  for name in sorted(files):
+                      if predicate(name):
+                          return os.path.join(directory, name)
+              return None
+
+
+          def read_summary(path):
+              values = {}
+              if path:
+                  for line in open(path, encoding='utf-8', errors='replace'):
+                      key, sep, value = line.rstrip('\n').partition('=')
+                      if sep:
+                          values.setdefault(key, value)
+                          if key == 'verdict':
+                              values['verdict'] = value
+              return values
+
+
+          def trial_record(trial, root):
+              record = {'trial': trial, 'class': 'INCOMPLETE', 'reasons': [], 'invalid-accepted': []}
+              if root is None:
+                  record['reasons'].append('artifact missing')
+                  return record
+              summary = read_summary(find(root, lambda n: n == 'issue-55-until-protocol-summary.txt'))
+              observe_path = find(root, lambda n: n.startswith('issue-55-original-observe') and n.endswith('.txt'))
+              jsonl_path = find(root, lambda n: n == 'offline-tests.jsonl')
+              meta_path = find(root, lambda n: n == 'issue-55-trial.txt')
+              if meta_path:
+                  for line in open(meta_path, encoding='utf-8', errors='replace'):
+                      key, sep, value = line.strip().partition('=')
+                      if sep:
+                          record['meta-' + key] = value
+              verdict = summary.get('verdict', '')
+              record['verdict'] = verdict
+              record['stop-reason'] = summary.get('stop-reason', '')
+              leaves = {}
+              if not jsonl_path:
+                  record['reasons'].append('test JSON missing')
+              else:
+                  events = []
+                  cached = 0
+                  for line in open(jsonl_path, encoding='utf-8', errors='replace'):
+                      if not line.startswith('{'):
+                          continue
+                      try:
+                          event = json.loads(line)
+                      except ValueError:
+                          continue
+                      events.append(event)
+                      if event.get('Action') == 'output' and '(cached)' in event.get('Output', ''):
+                          cached += 1
+                  record['cached-output-lines'] = cached
+                  if cached:
+                      record['reasons'].append('cached test results in the JSON')
+                  for event in events:
+                      if event.get('Package') == PACKAGE and event.get('Action') in ('pass', 'fail', 'skip'):
+                          for mode in MODES:
+                              if event.get('Test') == PARENT + '/' + mode:
+                                  leaves[mode] = event['Action']
+                  timed = [e for e in events if e.get('Time')]
+                  if timed:
+                      first = stamp(timed[0]['Time'])
+                      record['first-json-event'] = timed[0]['Time']
+                      for event in timed:
+                          if event.get('Package') == PACKAGE and event.get('Test') == PARENT + '/valid-exchange':
+                              if event['Action'] == 'run':
+                                  record['valid-start-s'] = round((stamp(event['Time']) - first).total_seconds(), 2)
+                              elif event['Action'] in ('pass', 'fail'):
+                                  record['valid-end-s'] = round((stamp(event['Time']) - first).total_seconds(), 2)
+                                  record['valid-elapsed-s'] = event.get('Elapsed')
+                      record['packages-with-events'] = len({e.get('Package') for e in events if e.get('Package')})
+              for mode in MODES:
+                  record['leaf-' + mode] = leaves.get(mode, 'missing')
+                  if summary and summary.get('leaf-' + mode, 'missing') != record['leaf-' + mode]:
+                      record['reasons'].append('leaf %s: JSON %s, driver summary %s' % (mode, record['leaf-' + mode], summary.get('leaf-' + mode, 'missing')))
+              observations = {}
+              if not observe_path:
+                  record['reasons'].append('observation file missing')
+              else:
+                  lines = open(observe_path, encoding='utf-8', errors='replace').read().splitlines()
+                  for mode in MODES:
+                      label = 'DEBUG-55-ORIGINAL test=%s/%s ' % (PARENT, mode)
+                      result = [l[len(label):] for l in lines if l.startswith(label + 'ready=')]
+                      observations[mode] = result[0].split(' wait-error=')[0] if len(result) == 1 else 'missing'
+                      record['observation-' + mode] = observations[mode]
+                  label = 'DEBUG-55-ORIGINAL test=%s/valid-exchange ' % PARENT
+                  valid = [l[len(label):] for l in lines if l.startswith(label)]
+                  attempts = [l for l in valid if re.match(r'attempt=\d+ start-ms=', l)]
+                  record['valid-attempts'] = len(attempts)
+                  if attempts:
+                      first_attempt = attempts[0]
+                      for field in ('start-ms', 'duration-ms', 'exit', 'remaining-ms-at-return', 'observer-us', 'newkeys', 'known-hosts-exists', 'known-hosts-valid-ed25519'):
+                          match = re.search(r'(?:^| )%s=(\S+)' % re.escape(field), first_attempt)
+                          record['valid-attempt1-' + field] = match.group(1) if match else 'not-recorded'
+                      match = re.search(r'run-error=(.*?) ctx-at-return=', first_attempt)
+                      record['valid-attempt1-run-error'] = match.group(1) if match else 'not-recorded'
+                  stderr = [l for l in valid if re.match(r'attempt=1 stderr \+\s*\d+ms', l)]
+                  record['valid-attempt1-stderr-lines'] = len(stderr)
+                  if stderr:
+                      record['valid-attempt1-first-stderr-ms'] = int(re.match(r'attempt=1 stderr \+\s*(\d+)ms', stderr[0]).group(1))
+                  record['valid-server-events'] = len([l for l in valid if l.startswith('event ') and ' server conn=' in l])
+              record['invalid-accepted'] = [m for m in INVALID if leaves.get(m) == 'fail']
+              target_asserted = leaves.get('valid-exchange') == 'fail' and verdict.startswith('RED') and 'valid exchange not accepted' in verdict
+              if leaves.get('valid-exchange') == 'fail' and not target_asserted:
+                  record['reasons'].append('valid leaf failed but the driver did not record "valid exchange not accepted"')
+              if target_asserted and observations.get('valid-exchange', 'missing').startswith('ready=true'):
+                  record['reasons'].append('valid leaf failed but the observation says ready=true')
+                  target_asserted = False
+              disagreement = [r for r in record['reasons'] if r.startswith(('leaf ', 'valid leaf'))]
+              if target_asserted and not disagreement:
+                  record['class'] = 'TARGET-RED'
+                  if record.get('cached-output-lines'):
+                      record['context-deviation'] = 'cached results of other packages'
+              elif record['invalid-accepted'] and leaves.get('valid-exchange') == 'pass' and verdict.startswith('RED') and 'invalid exchange accepted' in verdict and not disagreement:
+                  record['class'] = 'INVALID-ACCEPTED'
+              elif verdict.startswith('GREEN') and not record['reasons'] and all(leaves.get(m) == 'pass' for m in MODES):
+                  record['class'] = 'GREEN'
+              else:
+                  if not verdict:
+                      record['reasons'].append('no verdict in the driver summary')
+                  elif not verdict.startswith(('GREEN', 'RED')):
+                      record['reasons'].append('driver verdict: ' + verdict.split(':')[0])
+              return record
+
+
+          def main():
+              trials_dir, expected, out_dir, attempt = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+              os.makedirs(out_dir, exist_ok=True)
+              found = {}
+              ignored = []
+              if os.path.isdir(trials_dir):
+                  for name in sorted(os.listdir(trials_dir)):
+                      match = re.fullmatch(r'issue-55-batch-a(\d+)-trial-(\d+)', name)
+                      if match and match.group(1) == attempt:
+                          found[int(match.group(2))] = os.path.join(trials_dir, name)
+                      else:
+                          ignored.append(name)
+              unexpected = sorted(t for t in found if not 1 <= t <= expected)
+              records = []
+              for t in range(1, expected + 1):
+                  try:
+                      records.append(trial_record(t, found.get(t)))
+                  except Exception as error:  # one unreadable trial must not hide the others; it counts as INCOMPLETE
+                      records.append({'trial': t, 'class': 'INCOMPLETE', 'reasons': ['aggregation error: %s' % error], 'invalid-accepted': []})
+              counts = {c: sum(1 for r in records if r['class'] == c) for c in ('TARGET-RED', 'INVALID-ACCEPTED', 'GREEN', 'INCOMPLETE')}
+              invalid_trials = [r['trial'] for r in records if r.get('invalid-accepted')]
+              if counts['TARGET-RED']:
+                  verdict, code = 'RED', 1
+              elif counts['GREEN'] == expected and not unexpected:
+                  verdict, code = 'GREEN', 0
+              else:
+                  verdict, code = 'INCOMPLETE', 3
+              with open(os.path.join(out_dir, 'batch-trials.jsonl'), 'w', encoding='utf-8') as handle:
+                  for record in records:
+                      handle.write(json.dumps(record, sort_keys=True) + '\n')
+              lines = [
+                  'batch-verdict=%s' % verdict,
+                  'target=valid exchange not accepted; target-red-trials=%d' % counts['TARGET-RED'],
+                  'attempt=%s expected-trials=%d' % (attempt, expected),
+                  'target-red=%d invalid-accepted-only=%d green=%d incomplete=%d' % (counts['TARGET-RED'], counts['INVALID-ACCEPTED'], counts['GREEN'], counts['INCOMPLETE']),
+                  'target-red-trial-list=%s' % (','.join(str(r['trial']) for r in records if r['class'] == 'TARGET-RED') or 'none'),
+                  'invalid-acceptance-finding=%s' % (('trials ' + ','.join(map(str, invalid_trials))) if invalid_trials else 'none'),
+                  'incomplete-trials=%s' % ('; '.join('%d (%s)' % (r['trial'], ', '.join(r['reasons']) or 'driver verdict') for r in records if r['class'] == 'INCOMPLETE') or 'none'),
+                  'unexpected-trial-artifacts=%s' % (','.join(map(str, unexpected)) or 'none'),
+                  'ignored-directories=%s' % (','.join(ignored) or 'none'),
+              ]
+              for cls in ('TARGET-RED', 'GREEN'):
+                  durations = sorted(float(r['valid-attempt1-duration-ms']) for r in records if r['class'] == cls and r.get('valid-attempt1-duration-ms', 'not-recorded') not in ('not-recorded', None))
+                  if durations:
+                      lines.append('%s valid attempt-1 duration-ms min/median/max=%g/%g/%g (n=%d)' % (cls.lower(), durations[0], durations[len(durations) // 2], durations[-1], len(durations)))
+              lines.append('trial lines: trial class invalid-accepted valid-start-s valid-elapsed-s attempt1(duration-ms exit run-error remaining-ms first-stderr-ms server-events newkeys) runner')
+              for r in records:
+                  lines.append('trial=%d class=%s invalid-accepted=%s valid-start-s=%s valid-elapsed-s=%s attempt1=(%s %s %s %s %s %s %s) runner=%s' % (
+                      r['trial'], r['class'], ','.join(r.get('invalid-accepted') or []) or 'none', r.get('valid-start-s', '-'), r.get('valid-elapsed-s', '-'),
+                      r.get('valid-attempt1-duration-ms', '-'), r.get('valid-attempt1-exit', '-'), r.get('valid-attempt1-run-error', '-'),
+                      r.get('valid-attempt1-remaining-ms-at-return', '-'), r.get('valid-attempt1-first-stderr-ms', '-'),
+                      r.get('valid-server-events', '-'), r.get('valid-attempt1-newkeys', '-'), r.get('meta-runner', '-')))
+              with open(os.path.join(out_dir, 'batch-summary.txt'), 'w', encoding='utf-8') as handle:
+                  handle.write('\n'.join(lines) + '\n')
+              print('\n'.join(lines[:9]))
+              return code
+
+
+          if __name__ == '__main__':
+              sys.exit(main())
+          PY
+          set +e
+          python3 "$RUNNER_TEMP/issue-55-batch-aggregate.py" trials 100 batch "$GITHUB_RUN_ATTEMPT"
+          task_status=$?
+          cat batch/batch-summary.txt >> "$GITHUB_STEP_SUMMARY"
+          exit "$task_status"
+      - name: Upload the batch classification
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: issue-55-batch-a${{ github.run_attempt }}-aggregate
+          path: batch/
+          retention-days: 14

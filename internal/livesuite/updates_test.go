@@ -64,7 +64,7 @@ func (f *updateFixture) run(ctx context.Context, request process.Request) (int, 
 		// The readiness key exchange as ssh -v completes it: the host key callback records the key, NEWKEYS
 		// follows the verified exchange signature, and authentication then fails.
 		line := fmt.Sprintf("[127.0.0.1]:%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINdamAGCsQq31Uv+08lkBzoO4XLz2qYjJa8CGmj3B1Ea\n", f.port)
-		if err := testutil.RecordKnownHost(args, line); err != nil {
+		if err := testutil.RecordKnownHost(request.Dir, args, line); err != nil {
 			f.t.Fatal(err)
 		}
 		fmt.Fprintln(request.Streams.Stderr, testutil.SSHNewKeysReceived)

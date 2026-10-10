@@ -83,12 +83,12 @@ func readinessSSHProbe(ctx context.Context, port int, run process.Runner) error 
 		return err
 	}
 	defer os.RemoveAll(dir)
-	knownHosts := filepath.Join(dir, "known_hosts")
+	knownHosts := filepath.Join(dir, readinessKnownHostsFile)
 	if err := os.WriteFile(knownHosts, nil, 0600); err != nil {
 		return err
 	}
 	diagnostics := &cappedBuffer{limit: 64 << 10}
-	if _, err := run(ctx, process.Request{Name: "ssh", Args: readinessSSHArgs(port, knownHosts), Streams: process.Streams{Stdout: io.Discard, Stderr: diagnostics}}); err != nil {
+	if _, err := run(ctx, process.Request{Name: "ssh", Args: readinessSSHArgs(port), Dir: dir, Streams: process.Streams{Stdout: io.Discard, Stderr: diagnostics}}); err != nil {
 		return err
 	}
 	if ctx.Err() != nil {
@@ -118,10 +118,18 @@ func readinessSSHProbe(ctx context.Context, port int, run process.Runner) error 
 	return errors.New(readinessSSHError)
 }
 
-func readinessSSHArgs(port int, knownHosts string) []string {
+// readinessKnownHostsFile is the probe's known_hosts file, named relative to ssh's working directory.
+const readinessKnownHostsFile = "known_hosts"
+
+// readinessSSHArgs names the known_hosts file relative to ssh's working directory, the probe's private
+// temporary directory, so the command line holds no path. A path in an ssh option would need quoting for
+// ssh's option parser, and Windows clients split a quoted argument differently: the MSYS2 runtime of Git
+// for Windows' ssh does not end the quoted text at an escaped closing quote, so the argument takes in the
+// rest of the command line and ssh stops with "invalid quotes".
+func readinessSSHArgs(port int) []string {
 	return []string{"-F", "none", "-v", "-T", "-n",
 		"-o", "BatchMode=yes", "-o", "ConnectTimeout=1", "-o", "ConnectionAttempts=1",
-		"-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + sshConfigPath(strings.ReplaceAll(knownHosts, "%", "%%")),
+		"-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + readinessKnownHostsFile,
 		"-o", "GlobalKnownHostsFile=none", "-o", "HashKnownHosts=no", "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
 		"-o", "HostKeyAlgorithms=ssh-ed25519",
 		"-o", "PubkeyAuthentication=no", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no", "-o", "IdentityAgent=none",

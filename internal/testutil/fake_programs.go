@@ -215,7 +215,7 @@ func runFake(state, name string, args []string) int {
 		}
 	}
 	if response.RecordHostKey != "" {
-		if name != "ssh" || RecordKnownHost(args, response.RecordHostKey) != nil {
+		if name != "ssh" || RecordKnownHost("", args, response.RecordHostKey) != nil {
 			fmt.Fprintln(os.Stderr, "expected ssh with -o UserKnownHostsFile=PATH to record a host key")
 			return 99
 		}

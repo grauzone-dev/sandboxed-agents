@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestSandboxReadinessRequiresManagerAndSSHKeyExchange(t *testing.T) {
 		if !ok || time.Until(deadline) > 3*time.Second || time.Until(deadline) <= 0 {
 			t.Fatalf("probe deadline=%v present=%v", deadline, ok)
 		}
-		if request.Streams.Stdin != nil || request.User != nil || request.Dir != "" || request.Env != nil {
+		if request.Streams.Stdin != nil || request.User != nil || request.Env != nil || (request.Name == "podman") != (request.Dir == "") {
 			t.Fatalf("unexpected probe settings: %+v", request)
 		}
 		switch request.Name {
@@ -250,7 +251,7 @@ func windowsInboxOpenSSH(t *testing.T, port string, sshCalls *[][]string) proces
 		case "ssh":
 			*sshCalls = append(*sshCalls, slices.Clone(request.Args))
 			if slices.Contains(request.Args, "StrictHostKeyChecking=accept-new") {
-				if err := testutil.RecordKnownHost(request.Args, fmt.Sprintf("[127.0.0.1]:%s %s\n", port, readinessPublicKey)); err != nil {
+				if err := testutil.RecordKnownHost(request.Dir, request.Args, fmt.Sprintf("[127.0.0.1]:%s %s\n", port, readinessPublicKey)); err != nil {
 					t.Fatalf("known hosts file not prepared: %v", err)
 				}
 				fmt.Fprintln(request.Streams.Stderr, testutil.SSHNewKeysReceived)
@@ -277,7 +278,7 @@ func TestSandboxReadinessCompletesTheKeyExchangeWithTheInboxWindowsClient(t *tes
 
 func knownHostsPath(t *testing.T, request process.Request) string {
 	t.Helper()
-	path, ok := testutil.KnownHostsFile(request.Args)
+	path, ok := testutil.KnownHostsFile(request.Dir, request.Args)
 	if !ok {
 		t.Fatalf("no UserKnownHostsFile in %v", request.Args)
 	}
@@ -296,7 +297,7 @@ func recordKnownHost(t *testing.T, request process.Request, content string) {
 // recordHostKeyOnly models an exchange that stops after the host key callback, before the signature.
 func recordHostKeyOnly(t *testing.T, request process.Request, content string) {
 	t.Helper()
-	if err := testutil.RecordKnownHost(request.Args, content); err != nil {
+	if err := testutil.RecordKnownHost(request.Dir, request.Args, content); err != nil {
 		t.Fatalf("known hosts file not prepared: %v", err)
 	}
 }
@@ -311,7 +312,7 @@ func TestSandboxReadinessKeyExchangeUsesNoUserSSHFilesOrCredentials(t *testing.T
 		path = knownHostsPath(t, request)
 		want := []string{"-F", "none", "-v", "-T", "-n",
 			"-o", "BatchMode=yes", "-o", "ConnectTimeout=1", "-o", "ConnectionAttempts=1",
-			"-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + `"` + filepath.ToSlash(path) + `"`,
+			"-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=known_hosts",
 			"-o", "GlobalKnownHostsFile=none", "-o", "HashKnownHosts=no", "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
 			"-o", "HostKeyAlgorithms=ssh-ed25519",
 			"-o", "PubkeyAuthentication=no", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no", "-o", "IdentityAgent=none",
@@ -352,5 +353,53 @@ func TestSandboxReadinessRejectsAHostKeyWithoutACompletedKeyExchange(t *testing.
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+// Git for Windows' ssh (MSYS2 runtime) splits a Windows command line differently from the inbox client, so
+// a path in an ssh option can turn into several arguments or an unterminated quote ("invalid quotes").
+// The probe therefore runs ssh in its private temporary directory and names the file relatively: the
+// command line holds no path, whatever characters the temporary directory's path contains.
+func TestSandboxReadinessKeepsTheKnownHostsPathOutOfTheSSHCommandLine(t *testing.T) {
+	for _, dir := range []string{"plain", "100%", "with space", "50% done", "o'brien", `a"b`, `back\slash`, "tab\there"} {
+		t.Run(dir, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.ContainsAny(dir, "\"\\\t") {
+				t.Skip("not a valid Windows file name")
+			}
+			root := filepath.Join(t.TempDir(), dir)
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+				t.Setenv(key, root)
+			}
+			var argument, workDir string
+			err := sandbox.WaitReady(context.Background(), "sandboxed-agents.default.agent01", 2222, func(_ context.Context, request process.Request) (int, error) {
+				if request.Name == "podman" {
+					fmt.Fprintln(request.Streams.Stdout, "sandboxed-agents-manager 0.1.0")
+					return 0, nil
+				}
+				for i, arg := range request.Args {
+					if i > 0 && request.Args[i-1] == "-o" && strings.HasPrefix(arg, "UserKnownHostsFile=") {
+						argument = arg
+					}
+					if strings.Contains(arg, dir) {
+						t.Errorf("argument %q holds the temporary path", arg)
+					}
+				}
+				workDir = request.Dir
+				recordKnownHost(t, request, "[127.0.0.1]:2222 "+readinessPublicKey+"\n")
+				return 255, nil
+			})
+			if err != nil {
+				t.Fatalf("the recorded host key was not read back: %v", err)
+			}
+			if argument != "UserKnownHostsFile=known_hosts" {
+				t.Fatalf("argument=%q", argument)
+			}
+			if filepath.Dir(workDir) != root || !strings.HasPrefix(filepath.Base(workDir), "sandboxed-agents-readiness-") {
+				t.Fatalf("working directory %q is not a private directory under %q", workDir, root)
+			}
+		})
 	}
 }

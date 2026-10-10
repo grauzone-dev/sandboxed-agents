@@ -314,11 +314,11 @@ func updateObjectResponses(t *testing.T, running bool, imageID, selection, works
 	return responses
 }
 
-// updateReadinessArgs are the readiness key exchange arguments; "*" stands for the private known_hosts file.
+// updateReadinessArgs are the readiness key exchange arguments; ssh runs in the private temporary directory.
 func updateReadinessArgs(port string) []string {
 	return []string{"-F", "none", "-v", "-T", "-n",
 		"-o", "BatchMode=yes", "-o", "ConnectTimeout=1", "-o", "ConnectionAttempts=1",
-		"-o", "StrictHostKeyChecking=accept-new", "-o", "*",
+		"-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=known_hosts",
 		"-o", "GlobalKnownHostsFile=none", "-o", "HashKnownHosts=no", "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
 		"-o", "HostKeyAlgorithms=ssh-ed25519",
 		"-o", "PubkeyAuthentication=no", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no", "-o", "IdentityAgent=none",
